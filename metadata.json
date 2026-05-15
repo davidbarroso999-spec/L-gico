@@ -1,0 +1,6 @@
+{
+  "name": "Logix Route",
+  "description": "Smart route planner with real-time weather, traffic, and elevation analysis for deliveries.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": []
+}
