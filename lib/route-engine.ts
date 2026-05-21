@@ -1,5 +1,8 @@
-import { geocode, getMatrix, getWeather, getElevation, getTrafficIncidents, getDirections, getInmetForecast } from './api-services';
-import { getKimiAnalysis } from './ai-engine';
+import { getMatrix, getWeather, getElevation, getTrafficIncidents, getDirections, getInmetForecast } from './api-services';
+import { preciseGeocode } from './geocode-engine';
+import { getGeminiAnalysis } from './ai-engine';
+import { OfflineManager } from './offline-manager';
+import { db } from './db';
 
 export interface RouteStop {
   id: string;
@@ -12,6 +15,8 @@ export interface RouteStop {
   incidents?: any[];
   riskScore: number;
   estimatedArrival?: string;
+  timeWindow?: { start: string; end: string };
+  activeOccurrences?: any[];
 }
 
 export interface RouteOptions {
@@ -20,24 +25,89 @@ export interface RouteOptions {
   avoidDirt: boolean;
   avoidFloods: boolean;
   avoidHills: boolean;
+  customPrompt?: string;
 }
 
 const WEIGHTS = {
-  speed: { w1: 0.2, w2: 0.5, w3: 0.2, w4: 0.1 },
-  distance: { w1: 0.5, w2: 0.3, w3: 0.1, w4: 0.1 },
-  economy: { w1: 0.2, w2: 0.2, w3: 0.5, w4: 0.1 },
-  safety: { w1: 0.1, w2: 0.1, w3: 0.1, w4: 0.7 },
-  balanced: { w1: 0.25, w2: 0.25, w3: 0.25, w4: 0.25 },
+  speed: { w1: 0.1, w2: 0.9, w3: 0.0, w4: 0.0 },     // 90% Time priority
+  distance: { w1: 1.0, w2: 0.0, w3: 0.0, w4: 0.0 },  // 100% Distance priority
+  economy: { w1: 0.4, w2: 0.4, w3: 0.2, w4: 0.0 },   // Balance + Eco consideration
+  safety: { w1: 0.2, w2: 0.2, w3: 0.0, w4: 0.6 },    // 60% Safety weight
+  balanced: { w1: 0.35, w2: 0.35, w3: 0.15, w4: 0.15 }, // Even distribution
 };
 
-export async function optimizeRoute(addresses: string[], options: RouteOptions) {
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function formatMinutes(mins: number): string {
+  const h = Math.floor(mins / 60) % 24;
+  const m = Math.floor(mins % 60);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function timeToMinutes(timeStr?: string): number | null {
+  if (!timeStr) return null;
+  const parts = timeStr.split(':');
+  if (parts.length < 2) return null;
+  const h = parseInt(parts[0]);
+  const m = parseInt(parts[1]);
+  if (isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+export async function optimizeRoute(
+  addresses: string[], 
+  options: RouteOptions, 
+  knownCoords?: Record<string, { lat: number, lon: number }>,
+  timeWindows?: Record<number, { start: string; end: string }>
+) {
+  const routeHash = btoa(encodeURIComponent(addresses.join('|') + JSON.stringify(options) + JSON.stringify(timeWindows || {})));
+
+  if (typeof window !== 'undefined' && !navigator.onLine) {
+    console.warn("OFFLINE MODE: Attempting to load cached route...");
+    const cached = await OfflineManager.getOfflineRoute(routeHash);
+    if (cached) return cached;
+    console.warn("No cached route found, returning naive approximation.");
+  }
+
   // 1. Geocode
   const locations = await Promise.all(addresses.map(async (addr, i) => {
-    const geo = await geocode(addr);
-    return { ...geo, id: i.toString(), address: addr };
+    try {
+      if (knownCoords && knownCoords[addr]) {
+        return {
+          lat: knownCoords[addr].lat,
+          lon: knownCoords[addr].lon,
+          id: i.toString(),
+          address: addr,
+          label: addr,
+          confidenceScore: 100,
+          source: 'cache' as const,
+          type: 'address' as const
+        };
+      }
+      const geo = await preciseGeocode(addr);
+      return { ...geo, id: i.toString(), address: addr };
+    } catch (error) {
+      console.warn('Geocoding failed, falling back to approximation.', error);
+      // Rough emergency approximation for fallback (Manaus center)
+      return {
+        lat: -3.119 + (Math.random() - 0.5) * 0.02,
+        lon: -60.021 + (Math.random() - 0.5) * 0.02,
+        id: i.toString(),
+        address: addr
+      };
+    }
   }));
 
-  // 2. Intelligence Layer: Kimi 2.6 "Observations"
+  // 2. Intelligence Layer: Gemini Strategic Observations
   let envReport = { weather: "Desconhecida", elevation: "Analizando...", traffic: "Normal" };
   try {
     const [originWeather, trafficIncidents] = await Promise.all([
@@ -52,17 +122,18 @@ export async function optimizeRoute(addresses: string[], options: RouteOptions) 
       envReport.traffic = "Pontos de Lentidão detectados na região";
     }
   } catch (e) {
-    console.error("Kimi pre-scan failed:", e);
+    console.error("AI pre-scan failed:", e);
   }
 
-  // Get Kimi Strategic Directive
-  const aiStrategy = await getKimiAnalysis({
+  // Get Gemini Strategic Directive
+  const aiStrategy = await getGeminiAnalysis({
     task: "STRATEGY_ONLY",
     locations: locations.map(l => l.address),
     weather: envReport.weather,
     traffic: envReport.traffic,
     priority: options.priority,
-    constraints: options
+    constraints: options,
+    customPrompt: options.customPrompt
   });
 
   // 3. Matrix & Profile Calculation
@@ -72,20 +143,31 @@ export async function optimizeRoute(addresses: string[], options: RouteOptions) 
   if (options.vehicle === 'moto') profile = 'cycling-regular';
   if (options.vehicle === 'truck' || options.vehicle === 'van') profile = 'driving-hgv';
 
+  // Explicitly map priorities to ORS preferences based on user request
   let preference = 'fastest';
-  if (options.priority === 'distance') preference = 'shortest';
-  if (options.priority === 'economy' || options.priority === 'safety' || options.priority === 'balanced') preference = 'recommended';
+  if (options.priority === 'speed') preference = 'fastest'; // Velocidade
+  if (options.priority === 'distance') preference = 'shortest'; // Distância
+  if (options.priority === 'economy' || options.priority === 'safety' || options.priority === 'balanced') {
+    preference = 'recommended'; // Best balance for others
+  }
 
   const matrix = await getMatrix(coords, profile);
 
-  // 4. Routing logic: Mantém o primeiro como origem e o último como destino
-  // As paradas intermediárias podem ser otimizadas pela IA ou pelo algoritmo
+  // 4. Routing logic: Mantém o primeiro como origem e o último como destino com simulação de tempo realista (iniciando às 08:00)
   const sequence: RouteStop[] = [];
-  const start = { ...locations[0], sequence: 0, riskScore: 0 };
+  const start = { 
+    ...locations[0], 
+    sequence: 0, 
+    riskScore: 0, 
+    estimatedArrival: "08:00", 
+    timeWindow: timeWindows?.[0]
+  };
   const end = locations.length > 1 ? { ...locations[locations.length - 1] } : null;
   const intermediates = locations.slice(1, -1);
 
   sequence.push(start);
+
+  let currentTime = 480; // Entrada na rota: 08:00 AM em minutos acumulados
 
   if (intermediates.length > 0) {
     const unvisited = [...intermediates];
@@ -95,34 +177,97 @@ export async function optimizeRoute(addresses: string[], options: RouteOptions) 
     while (unvisited.length > 0) {
       let bestIdx = -1;
       let minCost = Infinity;
+      let chosenArrival = currentTime;
+      let chosenDeparture = currentTime;
       const currentLocIdx = locations.findIndex(l => l.id === current.id);
 
       for (let i = 0; i < unvisited.length; i++) {
         const target = unvisited[i];
         const targetLocIdx = locations.findIndex(l => l.id === target.id);
         
-        const d = matrix?.distances?.[currentLocIdx]?.[targetLocIdx] || 1000;
-        const t = (matrix?.durations?.[currentLocIdx]?.[targetLocIdx] || 600) / 60;
+        const d = (matrix?.distances?.[currentLocIdx]?.[targetLocIdx] || 1000) / 1000; // km
+        const t = (matrix?.durations?.[currentLocIdx]?.[targetLocIdx] || 600) / 60; // min
         
-        const cost = weights.w1 * (d/1000) + weights.w2 * t;
+        // Custo com base em pesos da prioridade de rota
+        const baseCost = (weights.w1 * d) + (weights.w2 * t);
+        
+        // Avaliação de janelas de entrega temporais (Time Windows)
+        const originalIdx = parseInt(target.id);
+        const window = timeWindows?.[originalIdx];
+        
+        let waitTime = 0;
+        let lateness = 0;
+        const arrivalTime = currentTime + t;
+        let departureTime = arrivalTime + 15; // padrão: 15 minutos de tempo de descarga/serviço
+        
+        if (window) {
+          const windowStart = timeToMinutes(window.start);
+          const windowEnd = timeToMinutes(window.end);
+          
+          if (windowStart !== null && arrivalTime < windowStart) {
+            waitTime = windowStart - arrivalTime;
+            departureTime = windowStart + 15; // Inicia serviço apenas quando a janela abre
+          }
+          if (windowEnd !== null && arrivalTime > windowEnd) {
+            lateness = arrivalTime - windowEnd;
+          }
+        }
+        
+        // Penalizar atraso de forma rígida, e espera de forma moderada
+        const penalty = (waitTime * 0.15) + (lateness * 10.0);
+        const cost = baseCost + penalty;
+        
         if (cost < minCost) {
-            minCost = cost;
-            bestIdx = i;
+          minCost = cost;
+          bestIdx = i;
+          chosenArrival = arrivalTime;
+          chosenDeparture = departureTime;
         }
       }
+      
       const nextStop = unvisited.splice(bestIdx, 1)[0];
-      current = { ...nextStop, sequence: sequence.length, riskScore: 0 };
+      const arrivalStr = formatMinutes(chosenArrival);
+      
+      current = { 
+        ...nextStop, 
+        sequence: sequence.length, 
+        riskScore: 0,
+        estimatedArrival: arrivalStr,
+        timeWindow: timeWindows?.[parseInt(nextStop.id)]
+      };
       sequence.push(current as RouteStop);
+      currentTime = chosenDeparture;
     }
   }
 
   if (end) {
-    sequence.push({ ...end, sequence: sequence.length, riskScore: 0 } as RouteStop);
+    const lastStop = sequence[sequence.length - 1];
+    const lastLocIdx = locations.findIndex(l => l.id === lastStop.id);
+    const endLocIdx = locations.findIndex(l => l.id === end.id);
+    const lastT = (matrix?.durations?.[lastLocIdx]?.[endLocIdx] || 600) / 60; // min
+    
+    const endArrivalMins = currentTime + lastT;
+    const endArrivalStr = formatMinutes(endArrivalMins);
+    
+    sequence.push({ 
+      ...end, 
+      sequence: sequence.length, 
+      riskScore: 0, 
+      estimatedArrival: endArrivalStr,
+      timeWindow: timeWindows?.[parseInt(end.id)]
+    } as RouteStop);
   }
 
-  // 4. Enrich with Environmental Data
+  // 4. Enrich with Environmental Data & Local Occurrences
   const trafficData = await getTrafficIncidents(coords);
   const inmetData = await getInmetForecast();
+
+  let localOccurrences: any[] = [];
+  try {
+    localOccurrences = await db.occurrences.toArray();
+  } catch (err) {
+    console.warn("Could not retrieve local occurrences from database:", err);
+  }
 
   const enrichedSequence = await Promise.all(sequence.map(async (stop, idx) => {
     const weather = await getWeather(stop.lat, stop.lon);
@@ -156,7 +301,27 @@ export async function optimizeRoute(addresses: string[], options: RouteOptions) 
         if (elevDiff > 50 && dist < 1000) risk += 10;
     }
 
-    return { ...stop, weather, elevation, riskScore: Math.min(100, risk) };
+    // Local Occurrences integration
+    const activeOccurrences = localOccurrences.filter((occ: any) => {
+      const dist = calculateDistance(stop.lat, stop.lon, occ.lat, occ.lon);
+      return dist <= 1.5; // Within 1.5km
+    });
+
+    if (activeOccurrences.length > 0) {
+      activeOccurrences.forEach((o: any) => {
+        if (o.type === 'flood' || o.type === 'road_closed') risk += 35;
+        else if (o.type === 'accident' || o.type === 'congestion') risk += 25;
+        else risk += 15;
+      });
+    }
+
+    return { 
+      ...stop, 
+      weather, 
+      elevation, 
+      riskScore: Math.min(100, risk),
+      activeOccurrences 
+    };
   }));
 
   // 5. Final geometry
@@ -192,11 +357,79 @@ export async function optimizeRoute(addresses: string[], options: RouteOptions) 
     geometry: directions?.features?.[0]?.geometry,
     summary: directions?.features?.[0]?.properties?.summary || { distance: 0, duration: 0 },
     segments: directions?.features?.[0]?.properties?.segments || [],
-    score: 100 - (enrichedSequence.reduce((acc, s) => acc + s.riskScore, 0) / enrichedSequence.length)
+    score: 100 - (enrichedSequence.reduce((acc, s) => acc + s.riskScore, 0) / enrichedSequence.length),
+    customPrompt: options.customPrompt
   };
 
-  // 6. Get AI Analysis from Kimi 2.6
-  const aiAnalysis = await getKimiAnalysis({ ...baseResult, strategy: aiStrategy });
+  // 6. Get AI Analysis - Tentar Supabase Edge Function prioritariamente se estiver configurada
+  let aiAnalysis = "";
+  let supabaseActive = false;
 
-  return { ...baseResult, aiAnalysis };
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (supabaseUrl && supabaseAnonKey) {
+    try {
+      console.log("Supabase Encontrado! Tentando otimização via Edge Function...");
+      const response = await fetch(`${supabaseUrl}/functions/v1/optimize-route`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseAnonKey}`,
+          "apikey": supabaseAnonKey
+        },
+        body: JSON.stringify({
+          stops: enrichedSequence.map(s => ({ lat: s.lat, lon: s.lon, address: s.address })),
+          occurrences: localOccurrences,
+          preference: options.priority,
+          customPrompt: options.customPrompt
+        }),
+        // Timeout curto de segurança para mobile para evitar tela travada se a rede estiver lenta
+        signal: AbortSignal.timeout(6000)
+      } as any);
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.analysis) {
+          aiAnalysis = data.analysis;
+          supabaseActive = true;
+          console.log("Otimização cognitiva respondida pelo Supabase com sucesso!");
+          
+          // Se o Supabase alterou ou enriqueceu os scores de risco das paradas, refletimos no frontend
+          if (Array.isArray(data.stops)) {
+            data.stops.forEach((supStop: any, supIdx: number) => {
+              if (enrichedSequence[supIdx]) {
+                if (typeof supStop.riskScore === 'number') {
+                  enrichedSequence[supIdx].riskScore = supStop.riskScore;
+                }
+              }
+            });
+          }
+        }
+      } else {
+        console.warn(`Edge Function retornou status ${response.status}. Iniciando contingência local...`);
+      }
+    } catch (err) {
+      console.warn("Erro ao comunicar com a Edge Function do Supabase. Iniciando contingência local...", err);
+    }
+  }
+
+  // Fallback se o Supabase não estiver ativado ou se ocorreu um erro de conexão
+  if (!supabaseActive) {
+    aiAnalysis = await getGeminiAnalysis({ ...baseResult, strategy: aiStrategy });
+  }
+
+  const finalResult = { 
+    ...baseResult, 
+    sequence: enrichedSequence,
+    aiAnalysis,
+    supabaseUsed: supabaseActive
+  };
+  
+  // Cache the route for offline mode
+  if (typeof window !== 'undefined') {
+    OfflineManager.cacheRoute(routeHash, finalResult);
+  }
+
+  return finalResult;
 }

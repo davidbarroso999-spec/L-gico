@@ -1,61 +1,55 @@
 import { NextResponse } from 'next/server';
+import { GoogleGenAI } from '@google/genai';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const report: any = {
-    kimi: { status: 'unknown', detail: '' },
     gemini: { status: 'unknown', detail: '' },
     ors: { status: 'unknown', detail: '' },
     weather: { status: 'unknown', detail: '' },
     osrm: { status: 'unknown', detail: '' },
+    mapbox: { status: 'unknown', detail: '' }
   };
 
-  // 1. Test Kimi (NVIDIA)
+  // 1. Test Gemini (The 100% Free AI Engine)
   try {
-    const KIMI_KEY = (process.env.NEXT_PUBLIC_KIMI_API_KEY && process.env.NEXT_PUBLIC_KIMI_API_KEY.trim() !== "") 
-      ? process.env.NEXT_PUBLIC_KIMI_API_KEY 
-      : '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';
-      
-    const kimiRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${KIMI_KEY.trim()}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "moonshotai/kimi-k2.6",
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 5
-      }),
-      signal: AbortSignal.timeout(5000)
-    });
-    const kimiData = await kimiRes.json();
-    if (kimiRes.ok) {
-      report.kimi.status = 'SUCCESS';
-    } else {
-      report.kimi.status = 'FAILED';
-      report.kimi.detail = kimiData.detail || kimiData.error?.message || JSON.stringify(kimiData);
-    }
-  } catch (e: any) {
-    report.kimi.status = 'ERROR';
-    report.kimi.detail = e.message;
-  }
-
-  // 1b. Test Gemini (The 100% Free Fallback)
-  try {
-    const GEMINI_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    const GEMINI_KEY = process.env.GEMINI_API_KEY;
     if (!GEMINI_KEY) {
       report.gemini.status = 'MISSING_KEY';
+      report.gemini.detail = 'GEMINI_API_KEY não foi encontrada.';
     } else {
-      const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: "hi" }] }] })
+      const ai = new GoogleGenAI({
+        apiKey: GEMINI_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
       });
-      if (geminiRes.ok) {
-        report.gemini.status = 'SUCCESS';
-      } else {
+      let result;
+      const modelSequence = ["gemini-2.5-flash"];
+      let lastReportErr = "";
+
+      for (const mName of modelSequence) {
+        try {
+          result = await ai.models.generateContent({
+            model: mName,
+            contents: [{ parts: [{ text: "Olá, teste rápido." }] }],
+          });
+          if (result && result.text) {
+            report.gemini.status = 'SUCCESS';
+            report.gemini.detail = `Funcionando via ${mName}`;
+            break;
+          }
+        } catch (err: any) {
+          lastReportErr = err.message || String(err);
+        }
+      }
+      
+      if (report.gemini.status !== 'SUCCESS') {
         report.gemini.status = 'FAILED';
-        report.gemini.detail = await geminiRes.text();
+        report.gemini.detail = `Todos os modelos falharam. Último erro: ${lastReportErr.substring(0, 150)}`;
       }
     }
   } catch (e: any) {
@@ -103,6 +97,49 @@ export async function GET() {
   } catch (e: any) {
     report.weather.status = 'ERROR';
     report.weather.detail = e.message;
+  }
+
+  // 4. Test Mapbox
+  try {
+    const MAPBOX_KEY = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!MAPBOX_KEY) {
+      report.mapbox.status = 'MISSING_KEY';
+      report.mapbox.detail = 'NEXT_PUBLIC_MAPBOX_TOKEN não encontrada.';
+    } else {
+      const mapboxRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/manaus.json?access_token=${MAPBOX_KEY}&limit=1`);
+      const mapboxData = await mapboxRes.json();
+      if (mapboxRes.ok) {
+        report.mapbox.status = 'SUCCESS';
+      } else {
+        report.mapbox.status = 'FAILED';
+        report.mapbox.detail = mapboxData.message || JSON.stringify(mapboxData);
+      }
+    }
+  } catch (e: any) {
+    report.mapbox.status = 'ERROR';
+    report.mapbox.detail = e.message;
+  }
+
+  // 5. Test Google Maps Platform
+  try {
+    const GOOGLE_KEY = process.env.GOOGLE_MAPS_PLATFORM_KEY;
+    if (!GOOGLE_KEY) {
+      report.googleMaps = { status: 'MISSING_KEY', detail: 'Chave GOOGLE_MAPS_PLATFORM_KEY não encontrada.' };
+    } else {
+      const googleRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=manaus&key=${GOOGLE_KEY}`);
+      if (googleRes.ok) {
+        const googleData = await googleRes.json();
+        if (googleData.status === 'OK') {
+          report.googleMaps = { status: 'SUCCESS', detail: 'Google Maps Autocomplete & Geocoding ativo e operacional!' };
+        } else {
+          report.googleMaps = { status: 'FAILED', detail: googleData.error_message || googleData.status || 'Falha de resposta da API do Google' };
+        }
+      } else {
+        report.googleMaps = { status: 'FAILED', detail: `Google API retornou status HTTP ${googleRes.status}` };
+      }
+    }
+  } catch (e: any) {
+    report.googleMaps = { status: 'ERROR', detail: e.message };
   }
 
   return NextResponse.json(report);

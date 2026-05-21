@@ -21,10 +21,10 @@ export async function autocomplete(text: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        endpoint: 'geocode/autocomplete',
+        endpoint: 'geocode/search',
         params: {
           text,
-          size: '5',
+          size: '6',
           'boundary.country': 'BRA',
           'focus.point.lat': MANAUS_COORDS.lat.toString(),
           'focus.point.lon': MANAUS_COORDS.lon.toString()
@@ -32,11 +32,7 @@ export async function autocomplete(text: string) {
       })
     });
     
-    // Check if response is ok and if it's JSON
-    const contentType = res.headers.get('content-type');
-    if (!res.ok || !contentType?.includes('application/json')) {
-      throw new Error('ORS Autocomplete failed, shifting to fallback');
-    }
+    if (!res.ok) throw new Error('ORS Search API Failed');
 
     const data = await res.json();
     if (data.features) {
@@ -44,41 +40,28 @@ export async function autocomplete(text: string) {
         const props = f.properties;
         const details = [props.neighbourhood, props.locality, props.county, props.region].filter(Boolean).join(' - ');
         return {
-          label: props.name + (details ? `, ${details}` : ''),
-          name: props.name,
-          context: details
+           label: props.name + (details ? `, ${details}` : ''),
+           name: props.name,
+           context: details,
+           lat: f.geometry.coordinates[1],
+           lon: f.geometry.coordinates[0]
         };
       });
     }
+
     return [];
   } catch (error) {
-    console.warn('ORS Autocomplete failing, using Photon fallback...');
-    try {
-      const fallbackRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&lat=${MANAUS_COORDS.lat}&lon=${MANAUS_COORDS.lon}&limit=5`);
-      const fallbackData = await fallbackRes.json();
-      return fallbackData.features.map((f: any) => {
-        const props = f.properties;
-        const details = [props.city || props.town, props.state].filter(Boolean).join(' - ');
-        return {
-          label: props.name + (details ? `, ${details}` : ''),
-          name: props.name,
-          context: details
-        };
-      });
-    } catch (fallbackError) {
-      console.error('All autocomplete providers failed:', fallbackError);
-      return [];
-    }
+    console.error('ORS autocomplete failed:', error);
+    return [];
   }
 }
 
 export async function geocode(address: string) {
-  // Regex for Brazilian CEP (00000-000 or 00000000)
   const isCEP = /^\d{5}-?\d{3}$/.test(address.trim());
   
   const params: any = {
     text: address,
-    size: '3',
+    size: '1',
     'focus.point.lat': MANAUS_COORDS.lat.toString(),
     'focus.point.lon': MANAUS_COORDS.lon.toString()
   };
@@ -97,10 +80,7 @@ export async function geocode(address: string) {
       })
     });
     
-    const contentType = res.headers.get('content-type');
-    if (!res.ok || !contentType?.includes('application/json')) {
-      throw new Error('ORS Geocode failed');
-    }
+    if (!res.ok) throw new Error('ORS Geocode failed');
 
     const data = await res.json();
     if (data.features && data.features.length > 0) {
@@ -115,22 +95,7 @@ export async function geocode(address: string) {
     }
     throw new Error('No results from ORS');
   } catch (error) {
-    console.warn('ORS Geocode failing, using Photon fallback for:', address);
-    try {
-      const fallbackRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(address)}&lat=${MANAUS_COORDS.lat}&lon=${MANAUS_COORDS.lon}&limit=1`);
-      const fallbackData = await fallbackRes.json();
-      if (fallbackData && fallbackData.features && fallbackData.features.length > 0) {
-        const f = fallbackData.features[0];
-        return {
-          lat: f.geometry.coordinates[1],
-          lon: f.geometry.coordinates[0],
-          label: `${f.properties.name || address}, ${f.properties.city || ''}`
-        };
-      }
-    } catch (e) {
-       console.error('Fallback geocoding also failed');
-    }
-    
+    console.error('ORS Geocode failing:', error);
     // Final emergency fallback (Manaus semi-random)
     return { lat: MANAUS_COORDS.lat + (Math.random() - 0.5) * 0.1, lon: MANAUS_COORDS.lon + (Math.random() - 0.5) * 0.1, label: address };
   }
@@ -138,50 +103,34 @@ export async function geocode(address: string) {
 
 export async function getWeather(lat: number, lon: number) {
   try {
-    const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${KEYS.OPENWEATHER}&units=metric&lang=pt_br`);
-    if (!res.ok) throw new Error('OpenWeather failing');
+    const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
+    if (!res.ok) throw new Error('Weather API returned error response');
     return await res.json();
   } catch (error) {
-    console.warn('OpenWeather failing, using Open-Meteo fallback...');
-    try {
-      // Open-Meteo is 100% free and requires no API Key
-      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
-      const data = await res.json();
-      const current = data.current_weather;
-      
-      // Map Open-Meteo structure to OpenWeather structure for compatibility
-      return {
-        main: { temp: current.temperature },
-        weather: [{ 
-          main: 'Cloudy', 
-          description: 'condição local',
-          icon: '03d' // Approximation
-        }],
-        wind: { speed: current.windspeed },
-        name: 'Localização'
-      };
-    } catch (fallbackError) {
-      return { main: { temp: 28 }, weather: [{ main: 'Clear', description: 'céu limpo', icon: '01d' }], wind: { speed: 5 } };
-    }
+    console.error('getWeather proxy error:', error);
+    return { main: { temp: 28 }, weather: [{ main: 'Clear', description: 'céu limpo', icon: '01d' }], wind: { speed: 5 } };
   }
 }
 
 export async function getElevation(lat: number, lon: number) {
   try {
-    const res = await fetch(`https://api.opentopodata.org/v1/srtm30m?locations=${lat},${lon}`);
+    const res = await fetch(`/api/elevation?lat=${lat}&lon=${lon}`);
+    if (!res.ok) throw new Error('Elevation API returned error response');
     const data = await res.json();
-    return data.results?.[0]?.elevation || 0;
+    return data.elevation || 25;
   } catch (error) {
+    console.error('getElevation proxy error:', error);
     return 20 + Math.random() * 30; // Manaus elevation average approx
   }
 }
 
 export async function getInmetForecast(cityCode: string = '1302603') {
   try {
-    const res = await fetch(`https://apiprevmet3.inmet.gov.br/previsao/${cityCode}`);
+    const res = await fetch(`/api/inmet?cityCode=${cityCode}`);
+    if (!res.ok) throw new Error('INMET API returned error response');
     return await res.json();
   } catch (error) {
-    console.warn('INMET fallback');
+    console.warn('INMET proxy error:', error);
     return null;
   }
 }
@@ -193,9 +142,11 @@ export async function getTrafficIncidents(points: [number, number][]) {
   const bbox = `${Math.min(...lons)},${Math.min(...lats)},${Math.max(...lons)},${Math.max(...lats)}`;
   
   try {
-    const res = await fetch(`https://api.tomtom.com/traffic/services/4/incidentDetails/s3/${bbox}/10/pt-BR.json?key=${KEYS.TOMTOM}`);
+    const res = await fetch(`/api/traffic?bbox=${encodeURIComponent(bbox)}`);
+    if (!res.ok) throw new Error('Traffic API returned error response');
     return await res.json();
   } catch (error) {
+    console.error('getTrafficIncidents proxy error:', error);
     return { tm: { poi: [] } };
   }
 }
@@ -224,10 +175,10 @@ export async function getMatrix(locations: [number, number][], profile: string =
     console.warn('ORS Matrix failed, trying OSRM fallback...', error);
     try {
       const coords = locations.map(l => `${l[1]},${l[0]}`).join(';');
-      const osrmRes = await fetch(`https://router.project-osrm.org/table/v1/driving/${coords}?annotations=distance,duration`);
+      const osrmRes = await fetch(`/api/osrm?type=table&coords=${encodeURIComponent(coords)}`);
       const osrmData = await osrmRes.json();
       
-      if (osrmData.code === 'Ok') {
+      if (osrmData && osrmData.code === 'Ok') {
         return {
           durations: osrmData.durations,
           distances: osrmData.distances
@@ -238,6 +189,31 @@ export async function getMatrix(locations: [number, number][], profile: string =
     }
     return null;
   }
+}
+
+export async function snapToRoad(points: [number, number][]): Promise<[number, number][]> {
+  // Use OSRM Map Matching API to snap raw GPS coordinates to the road network
+  try {
+    const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
+    const radiuses = points.map(() => '50').join(';'); // 50 meter search radius
+    const res = await fetch(`/api/osrm?type=match&coords=${encodeURIComponent(coords)}&extra=radiuses=${encodeURIComponent(radiuses)}`);
+    
+    if (!res.ok) throw new Error('OSRM Match API failed');
+    const data = await res.json();
+
+    if (data && data.code === 'Ok' && data.matchings && data.matchings.length > 0) {
+      // The matched points are in tracepoints
+      return data.tracepoints.map((tp: any, i: number) => {
+        if (tp && tp.location) {
+          return [tp.location[1], tp.location[0]]; // Return as [lat, lon]
+        }
+        return points[i]; // Fallback to original if not matched
+      });
+    }
+  } catch (error) {
+    console.warn('Snap to road failed, using raw coordinates:', error);
+  }
+  return points;
 }
 
 export async function getDirections(points: [number, number][], profile: string = 'driving-car', preference: string = 'fastest') {
@@ -267,10 +243,10 @@ export async function getDirections(points: [number, number][], profile: string 
     console.warn('ORS Directions failed, trying OSRM fallback...', error);
     try {
       const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
-      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+      const osrmRes = await fetch(`/api/osrm?type=route&coords=${encodeURIComponent(coords)}`);
       const osrmData = await osrmRes.json();
       
-      if (osrmData.code === 'Ok' && osrmData.routes.length > 0) {
+      if (osrmData && osrmData.code === 'Ok' && osrmData.routes.length > 0) {
         // Map OSRM structure to match ORS expected structure
         const route = osrmData.routes[0];
         const segments = route.legs?.map((leg: any) => ({

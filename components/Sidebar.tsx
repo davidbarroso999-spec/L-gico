@@ -17,6 +17,7 @@ interface SidebarProps {
 
 export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate, isLoading }: SidebarProps) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -30,8 +31,160 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
     return 'text-alert';
   };
 
+  if (isMobile) {
+    return (
+      <div 
+        className={`fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-slate-950/95 border-t border-slate-800/80 rounded-t-[32px] backdrop-blur-xl shadow-[0_-15px_30px_rgba(0,0,0,0.6)] transition-all duration-300 ${
+          isMobileExpanded ? 'h-[75vh]' : 'h-[170px]'
+        }`}
+      >
+        {/* Mobile Header indicator & touch drag handle */}
+        <div 
+          onClick={() => setIsMobileExpanded(!isMobileExpanded)}
+          className="flex flex-col items-center py-3 cursor-pointer select-none"
+        >
+          <div className="w-12 h-1 rounded-full bg-slate-700/80 mb-2" />
+          <div className="flex justify-between items-center w-full px-6">
+            <h2 className="text-sm font-bold flex items-center gap-1.5">
+              Resumo da Rota 
+              <span className={`text-[9px] px-1.5 py-0.5 rounded bg-tech/15 text-tech font-bold font-mono`}>
+                Score: {Math.round(score)}
+              </span>
+            </h2>
+            <span className="text-xs text-tech font-bold font-mono">
+              {(summary.distance / 1000).toFixed(1)} km · {formatTime(summary.duration)}
+            </span>
+          </div>
+        </div>
+
+        {/* Floating Start Navigation button when collapsed */}
+        {!isMobileExpanded && (
+          <div className="px-6 pb-6 pt-1 shrink-0">
+            <button 
+              onClick={onNavigate}
+              className="w-full bg-tech hover:bg-tech/80 active:scale-95 transition-all text-slate-950 font-black py-3 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(0,212,170,0.2)]"
+              disabled={stops.length === 0}
+            >
+              <Navigation className="w-4 h-4 fill-current" />
+              Iniciar Navegação
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Content list when expanded */}
+        {isMobileExpanded && (
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0 relative">
+            {/* AI analysis inside */}
+            {aiAnalysis && (
+              <div className="px-6 pb-2 shrink-0">
+                <div className="p-3 bg-tech/5 border border-tech/10 rounded-xl relative overflow-hidden">
+                  <p className="text-[9px] uppercase tracking-widest font-bold text-tech mb-1 flex items-center gap-1">
+                    <span className="w-1 h-1 rounded-full bg-tech animate-pulse" />
+                    Análise Logix (IA)
+                  </p>
+                  <p className="text-[10px] text-slate-300 leading-relaxed italic">
+                    &quot;{aiAnalysis}&quot;
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Stops list on mobile */}
+            <div className="flex-1 overflow-y-auto px-6 pb-24 custom-scrollbar">
+              <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest">Mapeamento das Paradas</p>
+              <AnimatePresence mode="popLayout">
+                {stops.map((stop, idx) => (
+                  <motion.div
+                    key={stop.id}
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-3 bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl"
+                  >
+                    <div className="flex gap-3">
+                      <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-xs font-black border border-slate-700 text-slate-300 shrink-0 mt-0.5">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-start mb-0.5 gap-2">
+                          <p className="font-bold text-slate-100 text-xs truncate leading-tight">{stop.address}</p>
+                          {stop.riskScore > 20 && (
+                            <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap mt-1">
+                          <span className="flex items-center gap-0.5">Alt: {Math.round(stop.elevation || 0)}m</span>
+                          <span>·</span>
+                          <span className="flex items-center gap-0.5 text-amber-500 font-medium">Risco: {Math.round(stop.riskScore)}%</span>
+                          {stop.estimatedArrival && (
+                            <>
+                              <span>·</span>
+                              <span className="text-tech font-bold font-mono">ETA: {stop.estimatedArrival}</span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Event / Occurrences warning */}
+                        {stop.activeOccurrences && stop.activeOccurrences.length > 0 && (
+                          <div className="mt-2 py-1.5 px-2 bg-red-950/20 border border-red-500/20 rounded-lg text-[9px] text-red-400">
+                            <strong>{stop.activeOccurrences.length} Incidentes no entorno:</strong>
+                            <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                              {stop.activeOccurrences.map((occ: any, oIdx: number) => (
+                                <li key={oIdx} className="capitalize">
+                                  {occ.type === 'flood' ? 'Alagamento' : occ.type === 'accident' ? 'Acidente' : occ.type}: {occ.description}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Weather inside stops info for mobile */}
+                        <div className="mt-2 py-1 px-2.5 bg-slate-950/40 rounded-lg flex items-center justify-between border border-white/5">
+                          <div className="flex items-center gap-1.5">
+                            {stop.weather && (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img 
+                                src={`https://openweathermap.org/img/wn/${stop.weather.weather[0].icon}.png`}
+                                alt={stop.weather.weather[0].description}
+                                className="w-5 h-5"
+                              />
+                            )}
+                            <span className="capitalize font-medium text-[9px] text-slate-400">
+                              {stop.weather?.weather[0].description || 'N/A'}
+                            </span>
+                          </div>
+                          <span className="text-[9px] font-black text-white bg-tech/5 px-1.5 py-0.2 rounded border border-tech/10">
+                            {Math.round(stop.weather?.main.temp || 0)}°C
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {/* Start Navigation Floating Trigger at bottom of scrollable area */}
+            <div className="px-6 py-4 border-t border-slate-900 bg-slate-950 shrink-0 absolute bottom-0 left-0 right-0 z-10">
+              <button 
+                onClick={onNavigate}
+                className="w-full bg-tech hover:bg-tech/85 active:scale-[0.98] transition-all text-slate-950 font-black py-3 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(0,212,170,0.3)]"
+              >
+                <Navigation className="w-4 h-4 fill-current" />
+                Iniciar Rota ({stops.length} Paradas)
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex flex-col glass overflow-hidden ${isMobile ? 'h-auto max-h-[80vh]' : 'h-full'}`}>
+    <div className="flex flex-col glass overflow-hidden h-full">
       {/* Header Summary */}
       <div className="p-6 border-b border-slate-800 bg-slate-900/30 shrink-0">
         <div className="flex justify-between items-start mb-4">
@@ -66,7 +219,7 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
             </div>
             <p className="text-[10px] uppercase tracking-widest font-bold text-tech mb-2 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
-              Brain Logix (Kimi 2.6)
+              Brain Logix (IA)
             </p>
             <p className="text-xs text-slate-300 leading-relaxed italic">
               &quot;{aiAnalysis}&quot;
@@ -115,40 +268,66 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                     )}
                   </div>
                   
-                  <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
+                  <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 flex-wrap">
                     <span className="flex items-center gap-1">
                       <MapPin className="w-3 h-3" />
                       Alt: {Math.round(stop.elevation || 0)}m
                     </span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
+                    <span className="flex items-center gap-1 text-amber-500">
+                      <AlertTriangle className="w-3 h-3" />
                       Risco: {Math.round(stop.riskScore)}%
                     </span>
+                    {stop.estimatedArrival && (
+                      <span className="flex items-center gap-1 text-tech font-bold font-mono">
+                        <Clock className="w-3" />
+                        ETA: {stop.estimatedArrival}
+                      </span>
+                    )}
+                    {stop.timeWindow && (
+                      <span className="font-mono text-[9px] text-amber-500 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded border-dashed">
+                        Janela: {stop.timeWindow.start} - {stop.timeWindow.end}
+                      </span>
+                    )}
                   </div>
 
-                    <div className="mt-3 py-3 px-4 bg-slate-950/50 rounded-2xl text-xs flex items-center justify-between border border-white/5 group-hover:border-tech/20 transition-colors">
-                      <div className="flex items-center gap-3">
-                        {stop.weather && (
-                            <img 
-                              src={`https://openweathermap.org/img/wn/${stop.weather.weather[0].icon}@2x.png`}
-                              alt={stop.weather.weather[0].description}
-                              className="w-10 h-10 -ml-2 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]"
-                            />
-                        )}
-                        <div className="flex flex-col">
-                          <span className="text-[10px] text-slate-500 uppercase font-black letter tracking-tighter">Condição</span>
-                          <span className="capitalize font-bold text-slate-300">
-                            {stop.weather?.weather[0].description || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-slate-500 uppercase font-black tracking-tighter">Temp</span>
-                        <span className="text-sm font-black text-white bg-tech/10 px-2 py-0.5 rounded-lg border border-tech/20">
-                          {Math.round(stop.weather?.main.temp || 0)}°C
+                  {/* Near Incident Occurrences warning for desktop */}
+                  {stop.activeOccurrences && stop.activeOccurrences.length > 0 && (
+                    <div className="mt-3 py-2 px-3 bg-red-950/20 border border-red-500/20 rounded-xl text-xs text-red-300">
+                      <strong>Incidentes mapeados no entorno:</strong>
+                      <ul className="list-disc pl-4 mt-1 space-y-1">
+                        {stop.activeOccurrences.map((occ: any, oIdx: number) => (
+                          <li key={oIdx} className="capitalize">
+                            {occ.type === 'flood' ? 'Alagamento' : occ.type === 'accident' ? 'Acidente' : occ.type}: {occ.description}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="mt-3 py-3 px-4 bg-slate-950/50 rounded-2xl text-xs flex items-center justify-between border border-white/5 group-hover:border-tech/20 transition-colors">
+                    <div className="flex items-center gap-3">
+                      {stop.weather && (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img 
+                          src={`https://openweathermap.org/img/wn/${stop.weather.weather[0].icon}@2x.png`}
+                          alt={stop.weather.weather[0].description}
+                          className="w-10 h-10 -ml-2 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]"
+                        />
+                      )}
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-slate-500 uppercase font-black letter tracking-tighter">Condição</span>
+                        <span className="capitalize font-bold text-slate-300">
+                          {stop.weather?.weather[0].description || 'N/A'}
                         </span>
                       </div>
                     </div>
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] text-slate-500 uppercase font-black tracking-tighter">Temp</span>
+                      <span className="text-sm font-black text-white bg-tech/10 px-2 py-0.5 rounded-lg border border-tech/20">
+                        {Math.round(stop.weather?.main.temp || 0)}°C
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </motion.div>

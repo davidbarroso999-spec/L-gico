@@ -1,57 +1,41 @@
 'use client';
 
-import React from 'react';
-import { motion } from 'motion/react';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { TrendingUp, Package, Clock, ShieldAlert, Navigation } from 'lucide-react';
-import { Line } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-} from 'chart.js';
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-);
 
 export default function KpiDashboard() {
-  const data = {
-    labels: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'],
-    datasets: [
-      {
-        label: 'Eficiência',
-        data: [85, 92, 78, 90, 95, 88, 91],
-        borderColor: '#00D4AA',
-        backgroundColor: 'rgba(0, 212, 170, 0.1)',
-        fill: true,
-        tension: 0.4,
-      }
-    ],
-  };
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
-  const options = {
-    responsive: true,
-    plugins: {
-      legend: { display: false },
-    },
-    scales: {
-      y: { display: false },
-      x: { grid: { display: false }, ticks: { color: '#64748b' } },
+  const weekdays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
+  const dataValues = [85, 92, 78, 90, 95, 88, 91];
+
+  const width = 600;
+  const height = 220;
+  const paddingX = 40;
+  const paddingY = 30;
+
+  const points = dataValues.map((val, idx) => {
+    const x = paddingX + idx * ((width - 2 * paddingX) / (dataValues.length - 1));
+    const y = height - paddingY - (val / 100) * (height - 2 * paddingY);
+    return { x, y, val, label: weekdays[idx] };
+  });
+
+  let linePath = '';
+  if (points.length > 0) {
+    linePath = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i];
+      const p1 = points[i + 1];
+      const cpX1 = p0.x + (p1.x - p0.x) / 3;
+      const cpY1 = p0.y;
+      const cpX2 = p0.x + 2 * (p1.x - p0.x) / 3;
+      const cpY2 = p1.y;
+      linePath += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${p1.x} ${p1.y}`;
     }
-  };
+  }
+
+  const areaPath = linePath ? `${linePath} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z` : '';
 
   const kpis = [
     { label: 'KM Total', value: '1,248', icon: TrendingUp, color: 'text-tech' },
@@ -100,8 +84,160 @@ export default function KpiDashboard() {
               <option>Mês Passado</option>
             </select>
           </div>
-          <div className="h-[300px]">
-             <Line data={data} options={options} />
+          <div className="h-[280px] w-full flex items-center justify-center relative">
+            <svg 
+              viewBox={`0 0 ${width} ${height}`} 
+              className="w-full h-full overflow-visible"
+              preserveAspectRatio="none"
+            >
+              <defs>
+                <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#00D4AA" stopOpacity="0.25" />
+                  <stop offset="100%" stopColor="#00D4AA" stopOpacity="0.0" />
+                </linearGradient>
+                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+
+              {/* Grid Lines */}
+              {[25, 50, 75, 100].map((level) => {
+                const yLevel = height - paddingY - (level / 100) * (height - 2 * paddingY);
+                return (
+                  <g key={level} className="opacity-20">
+                    <line 
+                      x1={paddingX} 
+                      y1={yLevel} 
+                      x2={width - paddingX} 
+                      y2={yLevel} 
+                      stroke="#475569" 
+                      strokeWidth="1" 
+                      strokeDasharray="4 4" 
+                    />
+                    <text 
+                      x={paddingX - 10} 
+                      y={yLevel + 4} 
+                      textAnchor="end" 
+                      fill="#94a3b8" 
+                      className="text-[10px] font-mono"
+                    >
+                      {level}%
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* Area Under the Line */}
+              {areaPath && (
+                <path 
+                  d={areaPath} 
+                  fill="url(#chartGradient)" 
+                />
+              )}
+
+              {/* Glow Behind the Line */}
+              {linePath && (
+                <path 
+                  d={linePath} 
+                  fill="none" 
+                  stroke="#00D4AA" 
+                  strokeWidth="3" 
+                  opacity="0.5"
+                  filter="url(#glow)"
+                />
+              )}
+
+              {/* Main Line */}
+              {linePath && (
+                <path 
+                  d={linePath} 
+                  fill="none" 
+                  stroke="#00D4AA" 
+                  strokeWidth="2.5" 
+                  strokeLinecap="round"
+                />
+              )}
+
+              {/* Interactive Points / Hover Triggers */}
+              {points.map((p, idx) => (
+                <g key={idx}>
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r="24"
+                    fill="transparent"
+                    className="cursor-pointer"
+                    onMouseEnter={() => setHoveredIdx(idx)}
+                    onMouseLeave={() => setHoveredIdx(null)}
+                  />
+
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={hoveredIdx === idx ? 6 : 4}
+                    fill="#0b241e"
+                    stroke="#00D4AA"
+                    strokeWidth={hoveredIdx === idx ? 3 : 2}
+                    className="transition-all duration-200 pointer-events-none"
+                    style={{ filter: hoveredIdx === idx ? 'drop-shadow(0 0 6px #00D4AA)' : 'none' }}
+                  />
+
+                  {hoveredIdx === idx && (
+                    <line
+                      x1={p.x}
+                      y1={p.y}
+                      x2={p.x}
+                      y2={height - paddingY}
+                      stroke="#00D4AA"
+                      strokeWidth="1"
+                      strokeDasharray="2 2"
+                      opacity="0.5"
+                      className="pointer-events-none"
+                    />
+                  )}
+                </g>
+              ))}
+
+              {/* Bottom Labels (Weekdays) */}
+              {points.map((p, idx) => (
+                <text
+                  key={idx}
+                  x={p.x}
+                  y={height - 10}
+                  textAnchor="middle"
+                  fill={hoveredIdx === idx ? "#00D4AA" : "#64748b"}
+                  className="text-[11px] font-medium transition-colors duration-200"
+                >
+                  {p.label}
+                </text>
+              ))}
+            </svg>
+
+            {/* Float Tooltip Overlay */}
+            <AnimatePresence>
+              {hoveredIdx !== null && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute p-3 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl flex flex-col items-center pointer-events-none z-50 text-center"
+                  style={{
+                    left: `${(points[hoveredIdx].x / width) * 100}%`,
+                    top: `${(points[hoveredIdx].y / height) * 100 - 18}%`,
+                    transform: 'translate(-50%, -100%)'
+                  }}
+                >
+                  <p className="text-[10px] text-slate-500 font-mono tracking-wider uppercase mb-0.5">
+                    {points[hoveredIdx].label}
+                  </p>
+                  <p className="text-sm font-bold text-tech">
+                    {points[hoveredIdx].val}% <span className="text-[10px] text-slate-400 font-normal">Eficiência</span>
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 

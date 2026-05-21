@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@700&display=swap');
+
 @import "tailwindcss";
 
 @theme {
@@ -7,8 +9,8 @@
   --color-alert: #E63946;
   --color-warning: #F4A261;
   
-  --font-sans: var(--font-sans);
-  --font-display: var(--font-display);
+  --font-sans: 'Inter', sans-serif;
+  --font-display: 'Space Grotesk', sans-serif;
 }
 
 @layer base {
@@ -42,6 +44,22 @@
 .route-line {
   stroke-dasharray: 10;
   animation: dash 20s linear infinite;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-slate-800 rounded-full;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  @apply bg-tech/50;
 }
 
 @keyframes dash {

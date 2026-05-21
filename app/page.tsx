@@ -12,6 +12,7 @@ import {
   Play, 
   Trash2, 
   Search,
+  MapPin,
   Route as RouteIcon,
   Zap,
   Shield,
@@ -23,13 +24,15 @@ import {
   XCircle,
   Camera,
   CheckCircle2,
-  ChevronRight
+  ChevronRight,
+  Clock,
+  Sparkles
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
-import { autocomplete } from '@/lib/api-services';
+import { enhancedAutocomplete } from '@/lib/geocode-engine';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -45,6 +48,30 @@ const DEFAULT_ADDRESSES = [
   'Flores, Manaus, AM',
   'Compensa, Manaus, AM'
 ];
+
+// Resolves category icons & color codes like Google Maps autocomplete
+const getSuggestionIconObj = (name: string, type?: string) => {
+  const lower = name.toLowerCase();
+  if (lower.includes('hospital') || lower.includes('clinica') || lower.includes('pronto socorro') || lower.includes('médico') || lower.includes('saúde') || lower.includes('upa') || lower.includes('ps ')) {
+    return { icon: Shield, bg: 'bg-rose-500/10 text-rose-400 border border-rose-500/20' };
+  }
+  if (lower.includes('shopping') || lower.includes('loja') || lower.includes('supermercado') || lower.includes('mercado') || lower.includes('comércio') || lower.includes('mall') || lower.includes('atacado') || lower.includes('magazine')) {
+    return { icon: Package, bg: 'bg-amber-500/10 text-amber-400 border border-amber-500/20' };
+  }
+  if (lower.includes('parque') || lower.includes('praça') || lower.includes('bosque') || lower.includes('floresta') || lower.includes('verde') || lower.includes('jardim')) {
+    return { icon: Leaf, bg: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' };
+  }
+  if (lower.includes('posto') || lower.includes('combustível') || lower.includes('gasolina') || lower.includes('br ') || lower.includes('shell') || lower.includes('ipiranga') || lower.includes('reabastecer')) {
+    return { icon: Zap, bg: 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' };
+  }
+  if (lower.includes('aeroporto') || lower.includes('terminal') || lower.includes('porto') || lower.includes('rodoviária') || lower.includes('estação') || lower.includes('itapecuru')) {
+    return { icon: ChevronRight, bg: 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' };
+  }
+  if (type === 'poi') {
+    return { icon: Zap, bg: 'bg-tech/10 text-tech border border-tech/20' };
+  }
+  return { icon: MapPin, bg: 'bg-slate-800 text-slate-400 border border-slate-700/50' };
+};
 
 const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile }: any) => (
     <button
@@ -68,6 +95,7 @@ export default function LogixApp() {
   const isMobile = useIsMobile();
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
   const [addresses, setAddresses] = useState<string[]>(['']);
+  const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
   const [options, setOptions] = useState<RouteOptions>({
     priority: 'balanced',
     vehicle: 'van',
@@ -75,6 +103,25 @@ export default function LogixApp() {
     avoidFloods: true,
     avoidHills: false
   });
+  const [aiCustomPrompt, setAiCustomPrompt] = useState<string>('');
+
+  const updateTimeWindow = (idx: number, type: 'start' | 'end', val: string) => {
+    setTimeWindows(prev => ({
+      ...prev,
+      [idx]: {
+        ...prev[idx],
+        [type]: val
+      }
+    }));
+  };
+
+  const removeTimeWindow = (idx: number) => {
+    setTimeWindows(prev => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+  };
 
   const [routeResult, setRouteResult] = useState<any>(null);
   const [navIndex, setNavIndex] = useState(0);
@@ -85,28 +132,65 @@ export default function LogixApp() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<number | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [resolvedCoords, setResolvedCoords] = useState<Record<string, { lat: number, lon: number }>>({
+    'Centro, Manaus, AM': { lat: -3.1311, lon: -60.0242 },
+    'Adrianópolis, Manaus, AM': { lat: -3.1116, lon: -60.0121 },
+    'Aleixo, Manaus, AM': { lat: -3.0963, lon: -59.9892 },
+    'Cidade Nova, Manaus, AM': { lat: -3.0298, lon: -59.9723 },
+    'Flores, Manaus, AM': { lat: -3.0801, lon: -60.0163 },
+    'Compensa, Manaus, AM': { lat: -3.1102, lon: -60.0468 }
+  });
+  const [apiWarning, setApiWarning] = useState<string | null>(null);
+  const [diagnostic, setDiagnostic] = useState<any>(null);
+  const [userLocation, setUserLocation] = useState<{lat: number, lon: number} | null>(null);
+  const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        (err) => console.warn("Geolocation failed:", err),
+        { enableHighAccuracy: true }
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/diagnostic').then(r => r.json()).then(data => {
+      setDiagnostic(data);
+      const failedKeys = [];
+      if (data.gemini?.status === 'FAILED' || data.gemini?.status === 'ERROR' || data.gemini?.status === 'MISSING_KEY') failedKeys.push('Google Gemini (IA Principal)');
+      if (data.ors?.status === 'FAILED') failedKeys.push('OpenRouteService (Motor de Rotas)');
+      if (data.weather?.status === 'FAILED') failedKeys.push('OpenWeather (Clima)');
+      if (failedKeys.length > 0) {
+        setApiWarning(`Aviso Diagnóstico: Falha de conexão com ${failedKeys.join(', ')}.`);
+      }
+    }).catch(e => console.error(e));
+  }, []);
 
   useEffect(() => {
     const activeText = activeSuggestionIdx !== null ? addresses[activeSuggestionIdx] : '';
     
     // Condição estrita para evitar cascading renders e loops infinitos
-    if (activeText.length < 3) {
-      setSuggestions(prev => prev.length > 0 ? [] : prev);
+    if (activeText.length < 2) {
+      setTimeout(() => {
+        setSuggestions(prev => prev.length > 0 ? [] : prev);
+      }, 0);
       return;
     }
 
     const timer = setTimeout(async () => {
       try {
-        const res = await autocomplete(activeText);
+        const res = await enhancedAutocomplete(activeText, userLocation || undefined);
         setSuggestions(res);
         setShowSuggestions(true);
       } catch (error) {
         console.error("Autocomplete error:", error);
       }
-    }, 500);
+    }, 400);
 
     return () => clearTimeout(timer);
-  }, [addresses, activeSuggestionIdx, suggestions.length]);
+  }, [addresses, activeSuggestionIdx, userLocation]);
 
   const addAddress = () => setAddresses([...addresses, '']);
   const updateAddress = (idx: number, val: string) => {
@@ -117,13 +201,30 @@ export default function LogixApp() {
   const removeAddress = (idx: number) => setAddresses(addresses.filter((_, i) => i !== idx));
 
   const runOptimization = async () => {
-    const validAddresses = addresses.filter(a => a.trim().length > 3);
+    // Map timeWindows correctly to validAddresses indices to prevent offset bugs
+    const validWithWindows: Record<number, { start: string; end: string }> = {};
+    let validCount = 0;
+    const validAddresses = addresses.filter((a, i) => {
+      const isValid = a.trim().length > 3;
+      if (isValid) {
+        const win = timeWindows[i];
+        if (win && (win.start || win.end)) {
+          validWithWindows[validCount] = {
+            start: win.start || "00:00",
+            end: win.end || "23:59"
+          };
+        }
+        validCount++;
+      }
+      return isValid;
+    });
+
     if (validAddresses.length < 2) return;
 
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
     try {
-      const result = await optimizeRoute(validAddresses, options);
+      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows);
       setRouteResult(result);
       
       // Save to IndexedDB
@@ -143,7 +244,18 @@ export default function LogixApp() {
   };
 
   return (
-    <div className={`flex flex-col md:flex-row h-full w-full bg-slate-950 overflow-hidden font-sans`}>
+    <div className={`flex flex-col md:flex-row h-full w-full bg-slate-950 overflow-hidden font-sans relative`}>
+      {/* API Key Warning Banner */}
+      {apiWarning && (
+        <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center justify-center gap-2">
+          <AlertOctagon className="w-4 h-4" />
+          {apiWarning}
+          <button onClick={() => setApiWarning(null)} className="ml-auto w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/20">
+            <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Desktop Sidebar Nav */}
       {!isMobile && (
         <nav className="w-20 border-r border-slate-800 flex flex-col items-center py-8 gap-8 z-50 bg-slate-950">
@@ -227,7 +339,7 @@ export default function LogixApp() {
               </div>
 
               <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 mb-12">
-                <div className="glass p-8 rounded-[40px] shadow-2xl relative overflow-hidden h-fit">
+                <div className="glass p-8 rounded-[40px] shadow-2xl relative h-fit">
                   <div className="absolute top-0 right-0 p-4 opacity-5">
                     <MapIcon className="w-32 h-32" />
                   </div>
@@ -244,19 +356,20 @@ export default function LogixApp() {
                         Ponto de Partida (Origem)
                       </label>
                       <div className="flex gap-2 relative">
-                        <div className="flex-1 relative">
-                          <input
-                            value={addresses[0] || ''}
-                            onChange={(e) => updateAddress(0, e.target.value)}
-                            onFocus={() => setActiveSuggestionIdx(0)}
-                            onBlur={() => setTimeout(() => {
-                              if (activeSuggestionIdx === 0) setShowSuggestions(false);
-                            }, 200)}
-                            placeholder="De onde você está saindo?"
-                            className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10"
-                          />
-                          <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
-                        </div>
+                          <div className="flex-1 relative">
+                            <input
+                              ref={el => { inputRefs.current[0] = el; }}
+                              value={addresses[0] || ''}
+                              onChange={(e) => updateAddress(0, e.target.value)}
+                              onFocus={() => setActiveSuggestionIdx(0)}
+                              onBlur={() => setTimeout(() => {
+                                if (activeSuggestionIdx === 0) setShowSuggestions(false);
+                              }, 200)}
+                              placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
+                              className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10"
+                            />
+                            <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
+                          </div>
                       </div>
                     </div>
 
@@ -273,13 +386,14 @@ export default function LogixApp() {
                               <div className="flex gap-2 relative">
                                 <div className="flex-1 relative">
                                   <input
+                                    ref={el => { inputRefs.current[realIdx] = el; }}
                                     value={addr}
                                     onChange={(e) => updateAddress(realIdx, e.target.value)}
                                     onFocus={() => setActiveSuggestionIdx(realIdx)}
                                     onBlur={() => setTimeout(() => {
                                       if (activeSuggestionIdx === realIdx) setShowSuggestions(false);
                                     }, 200)}
-                                    placeholder="Endereço da parada..."
+                                    placeholder="Empresa, hospital, praça ou rua..."
                                     className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10"
                                   />
                                   <Search className="absolute right-3 top-3.5 w-4 h-4 text-slate-600" />
@@ -290,6 +404,34 @@ export default function LogixApp() {
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
+                              </div>
+                              {/* Janela de Entrega de Parada */}
+                              <div className="flex items-center gap-2 mt-1.5 px-1 pb-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-600 transition-colors" />
+                                <span className="text-[9.5px] uppercase font-black text-slate-500 tracking-wider">Janela de Entrega:</span>
+                                <div className="flex items-center gap-1.5 ml-1">
+                                  <input 
+                                    type="time"
+                                    value={timeWindows[realIdx]?.start || ''}
+                                    onChange={(e) => updateTimeWindow(realIdx, 'start', e.target.value)}
+                                    className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
+                                  />
+                                  <span className="text-[10px] text-slate-600">até</span>
+                                  <input 
+                                    type="time"
+                                    value={timeWindows[realIdx]?.end || ''}
+                                    onChange={(e) => updateTimeWindow(realIdx, 'end', e.target.value)}
+                                    className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
+                                  />
+                                  {(timeWindows[realIdx]?.start || timeWindows[realIdx]?.end) && (
+                                    <button 
+                                      onClick={() => removeTimeWindow(realIdx)}
+                                      className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                                    >
+                                      Limpar
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -307,16 +449,45 @@ export default function LogixApp() {
                         <div className="flex gap-2 relative">
                           <div className="flex-1 relative">
                             <input
+                              ref={el => { inputRefs.current[addresses.length - 1] = el; }}
                               value={addresses[addresses.length - 1] || ''}
                               onChange={(e) => updateAddress(addresses.length - 1, e.target.value)}
                               onFocus={() => setActiveSuggestionIdx(addresses.length - 1)}
                               onBlur={() => setTimeout(() => {
                                 if (activeSuggestionIdx === addresses.length - 1) setShowSuggestions(false);
                               }, 200)}
-                              placeholder="Onde a viagem termina?"
+                              placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
                               className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10"
                             />
                             <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
+                          </div>
+                        </div>
+                        {/* Janela de Entrega do Destino */}
+                        <div className="flex items-center gap-2 mt-1.5 px-1 pb-1">
+                          <Clock className="w-3.5 h-3.5 text-slate-600 hover:text-amber-500 transition-colors" />
+                          <span className="text-[9.5px] uppercase font-black text-slate-500 tracking-wider">Janela de Entrega:</span>
+                          <div className="flex items-center gap-1.5 ml-1">
+                            <input 
+                              type="time"
+                              value={timeWindows[addresses.length - 1]?.start || ''}
+                              onChange={(e) => updateTimeWindow(addresses.length - 1, 'start', e.target.value)}
+                              className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
+                            />
+                            <span className="text-[10px] text-slate-600">até</span>
+                            <input 
+                              type="time"
+                              value={timeWindows[addresses.length - 1]?.end || ''}
+                              onChange={(e) => updateTimeWindow(addresses.length - 1, 'end', e.target.value)}
+                              className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
+                            />
+                            {(timeWindows[addresses.length - 1]?.start || timeWindows[addresses.length - 1]?.end) && (
+                              <button 
+                                onClick={() => removeTimeWindow(addresses.length - 1)}
+                                className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                              >
+                                Limpar
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -324,65 +495,142 @@ export default function LogixApp() {
 
                     {/* Suggestions Content Overlay */}
                     <AnimatePresence>
-                      {showSuggestions && activeSuggestionIdx !== null && suggestions.length > 0 && (
+                      {showSuggestions && activeSuggestionIdx !== null && (
                         <motion.div 
-                          className="absolute left-12 right-12 z-[5000] bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] overflow-hidden"
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
+                          className="absolute left-0 right-0 z-[5000] mt-2 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[400px] flex flex-col"
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
                         >
-                          {suggestions.map((s, sIdx) => (
-                            <button
-                              key={sIdx}
-                              onClick={() => {
-                                updateAddress(activeSuggestionIdx!, s.label);
-                                setShowSuggestions(false);
-                              }}
-                              className="w-full px-5 py-4 text-left hover:bg-slate-800 border-b border-slate-800 last:border-0"
-                            >
-                              <p className="text-sm font-bold text-slate-100">{s.name}</p>
-                              <p className="text-[10px] text-slate-500 truncate">{s.context || s.label}</p>
-                            </button>
-                          ))}
+                          <div className="overflow-y-auto custom-scrollbar flex-1">
+                            {suggestions.length > 0 ? (
+                              suggestions.map((s, sIdx) => (
+                                <button
+                                  key={sIdx}
+                                  onMouseDown={(e) => {
+                                    // Evita o fechamento prematuro no onBlur do input (Causa de race conditions)
+                                    e.preventDefault();
+                                  }}
+                                  onClick={() => {
+                                    const currentIdx = activeSuggestionIdx!;
+                                    updateAddress(currentIdx, s.label);
+                                    if (s.lat && s.lon) {
+                                      setResolvedCoords(prev => ({
+                                        ...prev,
+                                        [s.label]: { lat: s.lat, lon: s.lon }
+                                      }));
+                                    }
+                                    setShowSuggestions(false);
+                                    setSuggestions([]);
+                                    setActiveSuggestionIdx(null);
+                                    
+                                    // Jump to next field or create one
+                                    const nextIdx = currentIdx + 1;
+                                    
+                                    if (currentIdx === 0 && addresses.length === 1) {
+                                      setAddresses([...addresses, '']);
+                                    }
+
+                                    setTimeout(() => inputRefs.current[nextIdx]?.focus(), 150);
+                                  }}
+                                  className="w-full px-6 py-4 text-left hover:bg-slate-800 border-b border-slate-800 last:border-0 group transition-colors flex items-center justify-between"
+                                >
+                                  <div className="flex-1 min-w-0 pr-4 flex items-start gap-3">
+                                    <div className="mt-1 shrink-0">
+                                      {(() => {
+                                        const iconObj = getSuggestionIconObj(s.name, s.type);
+                                        const IconComp = iconObj.icon;
+                                        return (
+                                          <div className={`p-2 rounded-xl ${iconObj.bg}`}>
+                                            <IconComp className="w-4 h-4" />
+                                          </div>
+                                        );
+                                      })()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-bold text-slate-100 group-hover:text-tech transition-colors truncate">{s.name}</p>
+                                      <p className="text-[11px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.context || s.label}</p>
+                                      {s.cep && (
+                                        <div className="mt-1 flex items-center">
+                                          <span className="font-mono text-[9px] text-slate-500 bg-slate-950/40 border border-slate-800/40 px-1.5 py-0.5 rounded tracking-widest flex items-center gap-1.5 group-hover:text-slate-400 group-hover:border-slate-700/40 transition-colors">
+                                            <span className="text-[7px] uppercase font-black tracking-widest text-slate-600">CEP</span>
+                                            {s.cep}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {s.confidenceScore && (
+                                    <div className="flex flex-col items-end shrink-0 gap-1">
+                                      <div className={`text-[10px] font-black px-2 py-1 rounded-md shadow-sm ${s.confidenceScore >= 80 ? 'bg-tech text-slate-900' : s.confidenceScore >= 50 ? 'bg-warning text-slate-900' : 'bg-red-500 text-white'}`}>
+                                        {Math.max(0, Math.round(s.confidenceScore))}% de Precisão
+                                      </div>
+                                      {s.source && (
+                                        <span className="text-[8px] uppercase font-bold text-slate-500 tracking-wider">
+                                          FONTE: {s.source}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </button>
+                              ))
+                            ) : (
+                              <div className="p-8 text-center bg-slate-900/50">
+                                <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                                  <Search className="w-5 h-5 text-slate-600" />
+                                </div>
+                                <p className="text-sm font-bold text-slate-400 mb-2">Local não encontrado</p>
+                                <p className="text-[10px] text-slate-500 leading-relaxed max-w-[200px] mx-auto">
+                                  Busque por nomes de empresas, comércios, praças ou o endereço completo com número.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                          {suggestions.length > 0 && (
+                            <div className="px-4 py-2 bg-slate-950/50 border-t border-slate-800 text-center">
+                              <p className="text-[9px] text-slate-600 uppercase tracking-widest font-bold">Use Scroll para ver mais resultados</p>
+                            </div>
+                          )}
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
 
-                  <div className="flex gap-3">
+                  <div className="flex flex-col gap-3">
                     <button 
                       onClick={() => {
                         const next = [...addresses];
                         // Insert a new empty address BEFORE the last one
-                        next.splice(addresses.length - 1, 0, '');
+                        if (next.length > 1) {
+                          next.splice(addresses.length - 1, 0, '');
+                        } else {
+                          next.push('');
+                        }
                         setAddresses(next);
+                        setTimeout(() => {
+                           const focusIdx = next.length - 1;
+                           inputRefs.current[focusIdx]?.focus();
+                        }, 100);
                       }}
-                      className="flex-1 py-4 border-2 border-dashed border-slate-800 hover:border-tech hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all"
+                      className="w-full py-4 border-2 border-dashed border-slate-800 hover:border-tech hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all"
                     >
                       + Adicionar Parada
                     </button>
-                    {addresses.length < 2 && (
-                       <button 
-                        onClick={() => setAddresses([...addresses, ''])}
-                        className="flex-1 py-4 bg-slate-800 rounded-2xl text-xs font-bold"
-                       >
-                         Definir Destino
-                       </button>
-                    )}
-                  </div>
-                  <div className="mt-4">
-                    <button 
-                      onClick={() => setAddresses(DEFAULT_ADDRESSES)}
-                      className="w-full py-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
-                    >
-                      Usar Rota Demo (Manaus)
-                    </button>
+                    <div className="mt-2">
+                      <button 
+                        onClick={() => setAddresses(DEFAULT_ADDRESSES)}
+                        className="w-full py-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
+                      >
+                        Usar Rota Demo (Manaus)
+                      </button>
+                    </div>
                   </div>
                 </div>
 
                 <div className="flex flex-col gap-6">
-                  <div className="glass p-8 rounded-[40px]">
-                    <h3 className="text-xl font-bold mb-6">Prioridade da Rota</h3>
-                    <div className="grid grid-cols-5 gap-2">
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px]">
+                    <h3 className="text-lg md:text-xl font-bold mb-5 font-display flex items-center gap-2">Prioridade da Rota</h3>
+                    <div className="grid grid-cols-5 gap-1 md:gap-2">
                       {[
                         { id: 'speed', icon: Zap, label: 'Rápido' },
                         { id: 'distance', icon: MapIcon, label: 'Curto' },
@@ -393,55 +641,73 @@ export default function LogixApp() {
                         <button
                           key={p.id}
                           onClick={() => setOptions({ ...options, priority: p.id })}
-                          className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all ${
+                          className={`flex flex-col items-center justify-center p-2.5 rounded-xl border transition-all ${
                             options.priority === p.id 
                             ? 'bg-tech/10 border-tech text-tech' 
                             : 'bg-slate-900/50 border-slate-800 text-slate-500 hover:border-slate-700'
                           }`}
                         >
-                          <p.icon className="w-5 h-5 mb-2" />
-                          <span className="text-[10px] font-bold uppercase">{p.label}</span>
+                          <p.icon className="w-4 h-4 md:w-5 md:h-5 mb-1.5 shrink-0" />
+                          <span className="text-[9px] md:text-[10px] font-black uppercase tracking-tight leading-none">{p.label}</span>
                         </button>
                       ))}
                     </div>
 
-                    <div className="mt-6 p-4 rounded-2xl bg-slate-900/50 border border-slate-800/50 text-sm text-slate-400">
-                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> A IA buscará caminhos que economizam tempo. Considera horários de pico, fugindo de engarrafamentos clássicos para te entregar a alternativa mais fluida, mesmo que seja um pouco mais longa na quilometragem.</p>}
-                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima (Curto):</strong> Privilegia a rota matematicamente mais curta. Não se importa com a quantidade de sinais, trânsito ou qualidade da via, apenas o menor trajeto de A a B.</p>}
-                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Busca o equilíbrio entre evitar frenagens bruscas, vias que exigem muita aceleração e caminhos que gastam menos combustível, mantendo velocidade constante.</p>}
-                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Sugere a rota mais segura considerando as variáveis do dia (condições de chuva no momento, alagamentos, cruzamentos de alto índice de acidentes e vias perigosas). Ideal para dias tensos.</p>}
-                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> A IA analisa todas as métricas em tempo real e calcula o melhor "custo-benefício" da viagem geral, combinando tempo razoável com segurança e economia.</p>}
+                    <div className="mt-5 p-4 rounded-xl bg-slate-900/40 border border-slate-800/40 text-xs md:text-sm text-slate-400 leading-relaxed">
+                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Rota que prioriza fluidez e velocidade média elevada, contornando gargalos clássicos mesmo que resulte em um trajeto ligeiramente mais longo.</p>}
+                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima (Curto):</strong> Traçado matematicamente ideal de menor metragem física secundarizando tráfego ou semáforos.</p>}
+                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Otimização mestre visando estabilidade, evitando arranques e aclives severos sob carga logística.</p>}
+                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Análise preventiva de integridade física. Desvia ativamente de incidências climáticas críticas e trechos de risco grave.</p>}
+                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Otimização unificada ponderando distâncias, tempos previstos de viagem, integridade das cargas e consumo médio.</p>}
                     </div>
                   </div>
 
-                  <div className="glass p-8 rounded-[40px] flex-1">
-                    <h3 className="text-xl font-bold mb-4">Restrições</h3>
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px] flex-1">
+                    <h3 className="text-lg md:text-xl font-bold mb-4 font-display">Restrições</h3>
                     <div className="space-y-3">
                       {[
                         { id: 'avoidDirt', label: 'Evitar ruas de terra' },
                         { id: 'avoidFloods', label: 'Evitar alagamentos' },
                         { id: 'avoidHills', label: 'Evitar ladeiras íngremes' },
                       ].map(check => (
-                        <label key={check.id} className="flex items-center gap-3 cursor-pointer group">
+                        <label key={check.id} className="flex items-center gap-3 cursor-pointer group select-none">
                           <div 
                             onClick={() => setOptions({ ...options, [check.id]: !((options as any)[check.id]) })}
                             className={`w-5 h-5 rounded border transition-all flex items-center justify-center ${
-                              (options as any)[check.id] ? 'bg-tech border-tech' : 'border-slate-700 group-hover:border-slate-600'
+                              (options as any)[check.id] ? 'bg-tech border-tech' : 'border-slate-800 group-hover:border-slate-700'
                             }`}
                           >
                             {(options as any)[check.id] && <div className="w-2.5 h-2.5 bg-slate-950 rounded-sm" />}
                           </div>
-                          <span className="text-sm text-slate-300">{check.label}</span>
+                          <span className="text-xs md:text-sm text-slate-300">{check.label}</span>
                         </label>
                       ))}
                     </div>
                   </div>
 
+                  {/* IA Customized Instructions Prompt */}
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px]">
+                    <h3 className="text-lg md:text-xl font-bold mb-3 flex items-center gap-2 font-display">
+                      <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-tech animate-pulse shrink-0" />
+                      Instruções da IA (Opcional)
+                    </h3>
+                    <p className="text-slate-400 text-xs mb-3 leading-relaxed">
+                      Indique parâmetros específicos para que a inteligência artificial avalie o entorno e as paradas da sua rota na triagem estratégica.
+                    </p>
+                    <textarea
+                      value={aiCustomPrompt}
+                      onChange={(e) => setAiCustomPrompt(e.target.value)}
+                      placeholder="Ex: 'priorizar vias bem iluminadas', 'evitar asfalto danificado', 'buscar zonas com boa sinalização de rede'..."
+                      rows={2}
+                      className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-xs md:text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all resize-none text-slate-100 placeholder-slate-600 font-sans"
+                    />
+                  </div>
+
                   <button 
                     onClick={runOptimization}
-                    className="w-full bg-tech text-slate-950 font-black py-5 rounded-[24px] text-xl shadow-[0_20px_40px_rgba(0,212,170,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3"
+                    className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(0,212,170,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                   >
-                    <Play className="w-6 h-6 fill-current" />
+                    <Play className="w-5 h-5 fill-current" />
                     CALCULAR MELHOR ROTA
                   </button>
                 </div>
@@ -481,9 +747,12 @@ export default function LogixApp() {
               key="result"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className={`h-full flex ${isMobile ? 'flex-col overflow-y-auto' : ''}`}
+              className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
-              <div className={`${isMobile ? 'order-2 h-auto' : 'w-[400px] h-full'} z-10 shadow-2xl`}>
+              <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
+                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} />
+              </div>
+              <div className={`${isMobile ? 'z-50' : 'w-[400px] h-full z-10 shadow-2xl shrink-0'}`}>
                 <Sidebar 
                   stops={routeResult.sequence} 
                   summary={routeResult.summary}
@@ -492,9 +761,6 @@ export default function LogixApp() {
                   onNavigate={() => setCurrentScreen('navigation')}
                   isLoading={false}
                 />
-              </div>
-              <div className={`relative ${isMobile ? 'order-1 h-[300px] shrink-0' : 'flex-1'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} />
               </div>
             </motion.div>
           )}
@@ -507,7 +773,7 @@ export default function LogixApp() {
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
-                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} />
+                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} isNavigationScreen={true} />
                  
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
@@ -686,19 +952,46 @@ export default function LogixApp() {
                   <div className="glass p-8 rounded-[32px] border-tech/10">
                     <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
                       <Zap className="w-5 h-5 text-tech" />
-                      Motor de Inteligência
+                      Motores de Inteligência e Mapas
                     </h3>
-                    <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-2xl border border-white/5">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-tech/20 flex items-center justify-center">
-                          <Zap className="w-5 h-5 text-tech" />
+                    <div className="space-y-4">
+                      {/* Google Gemini */}
+                      <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-2xl border border-white/5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-tech/20 flex items-center justify-center">
+                            <Zap className="w-5 h-5 text-tech" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-sm">Google Gemini</p>
+                            <p className="text-xs text-slate-500">Status: Conectado e Ativo</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-bold text-sm">Kimi 2.6 (NVIDIA)</p>
-                          <p className="text-xs text-slate-500">Status: Conectado e Ativo</p>
+                        <div className="px-3 py-1 bg-tech/10 text-tech text-[10px] font-black rounded-full uppercase">Online</div>
+                      </div>
+
+                      {/* Google Maps Platform */}
+                      <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-2xl border border-white/5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+                            <MapIcon className="w-5 h-5 text-blue-400" />
+                          </div>
+                          <div className="flex-1 min-w-0 pr-4">
+                            <p className="font-bold text-sm">Google Maps Platform</p>
+                            <p className="text-[11px] text-slate-400 break-words leading-tight mt-1">
+                              {diagnostic?.googleMaps?.status === 'SUCCESS' 
+                                ? 'Busca por Endereço (Autocomplete e Geocoding) ativa com qualidade máxima (idêntica ao Google Maps).'
+                                : 'Busca usando fallbacks premium (Mapbox, ORS, Nominatim, Photon) para geocodificação.'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className={`px-3 py-1 text-[10px] font-black rounded-full uppercase shrink-0 ${
+                          diagnostic?.googleMaps?.status === 'SUCCESS'
+                            ? 'bg-blue-500/15 text-blue-400 border border-blue-500/20'
+                            : 'bg-slate-800 text-slate-500'
+                        }`}>
+                          {diagnostic?.googleMaps?.status === 'SUCCESS' ? 'Google Ativo' : 'Parceiros'}
                         </div>
                       </div>
-                      <div className="px-3 py-1 bg-tech/10 text-tech text-[10px] font-black rounded-full uppercase">Online</div>
                     </div>
                   </div>
 
