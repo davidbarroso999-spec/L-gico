@@ -2,9 +2,10 @@
 
 import React from 'react';
 import Image from 'next/image';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation } from 'lucide-react';
 import { RouteStop } from '@/lib/route-engine';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 interface SidebarProps {
   stops: RouteStop[];
@@ -16,7 +17,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate, isLoading }: SidebarProps) {
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const isMobile = useIsMobile();
   const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
 
   const formatTime = (seconds: number) => {
@@ -31,19 +32,32 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
     return 'text-alert';
   };
 
+  const dragControls = useDragControls();
+
   if (isMobile) {
     return (
-      <div 
-        className={`fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-slate-950/95 border-t border-slate-800/80 rounded-t-[32px] backdrop-blur-xl shadow-[0_-15px_30px_rgba(0,0,0,0.6)] transition-all duration-300 ${
-          isMobileExpanded ? 'h-[75vh]' : 'h-[170px]'
-        }`}
+      <motion.div 
+        drag="y"
+        dragControls={dragControls}
+        dragListener={false}
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={0.2}
+        onDragEnd={(e, info) => {
+          if (info.offset.y < -30) setIsMobileExpanded(true);
+          if (info.offset.y > 30) setIsMobileExpanded(false);
+        }}
+        initial={false}
+        animate={{ y: isMobileExpanded ? 0 : 'calc(100% - 170px)' }}
+        transition={{ type: "spring", damping: 25, stiffness: 200 }}
+        className="fixed bottom-0 left-0 right-0 z-[2000] flex flex-col bg-slate-950/95 border-t border-slate-800/80 rounded-t-[32px] backdrop-blur-xl shadow-[0_-15px_30px_rgba(0,0,0,0.6)] h-[75vh] md:h-[80vh]"
       >
         {/* Mobile Header indicator & touch drag handle */}
         <div 
+          onPointerDown={(e) => dragControls.start(e)}
           onClick={() => setIsMobileExpanded(!isMobileExpanded)}
-          className="flex flex-col items-center py-3 cursor-pointer select-none"
+          className="flex flex-col items-center py-3 cursor-grab active:cursor-grabbing select-none touch-none shrink-0"
         >
-          <div className="w-12 h-1 rounded-full bg-slate-700/80 mb-2" />
+          <div className="w-12 h-1.5 rounded-full bg-slate-700/80 mb-3" />
           <div className="flex justify-between items-center w-full px-6">
             <h2 className="text-sm font-bold flex items-center gap-1.5">
               Resumo da Rota 
@@ -57,24 +71,34 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
           </div>
         </div>
 
+        {/* Content list when expanded OR collapsed. We will keep it rendered but conditionally visible or scrollable. */}
         {/* Floating Start Navigation button when collapsed */}
-        {!isMobileExpanded && (
-          <div className="px-6 pb-6 pt-1 shrink-0">
-            <button 
-              onClick={onNavigate}
-              className="w-full bg-tech hover:bg-tech/80 active:scale-95 transition-all text-slate-950 font-black py-3 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(0,212,170,0.2)]"
-              disabled={stops.length === 0}
-            >
-              <Navigation className="w-4 h-4 fill-current" />
-              Iniciar Navegação
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        )}
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0 relative">
+          <AnimatePresence>
+            {!isMobileExpanded && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="px-6 pb-6 pt-1 shrink-0 absolute top-0 left-0 w-full z-10"
+              >
+                <button 
+                  onClick={onNavigate}
+                  className="w-full bg-tech hover:bg-tech/80 active:scale-95 transition-all text-slate-950 font-black py-3 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(0,212,170,0.2)]"
+                  disabled={stops.length === 0}
+                >
+                  <Navigation className="w-4 h-4 fill-current" />
+                  Iniciar Navegação
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {/* Content list when expanded */}
-        {isMobileExpanded && (
-          <div className="flex-1 overflow-hidden flex flex-col min-h-0 relative">
+          <motion.div 
+            className="flex-1 overflow-hidden flex flex-col min-h-0 relative h-full bg-slate-950/50"
+            animate={{ opacity: isMobileExpanded ? 1 : 0, pointerEvents: isMobileExpanded ? 'auto' : 'none' }}
+          >
             {/* AI analysis inside */}
             {aiAnalysis && (
               <div className="px-6 pb-2 shrink-0">
@@ -92,7 +116,7 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
 
             {/* Stops list on mobile */}
             <div className="flex-1 overflow-y-auto px-6 pb-24 custom-scrollbar">
-              <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest">Mapeamento das Paradas</p>
+              <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest mt-1">Mapeamento das Paradas</p>
               <AnimatePresence mode="popLayout">
                 {stops.map((stop, idx) => (
                   <motion.div
@@ -177,9 +201,9 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
-          </div>
-        )}
-      </div>
+          </motion.div>
+        </div>
+      </motion.div>
     );
   }
 

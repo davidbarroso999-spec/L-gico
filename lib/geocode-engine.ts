@@ -21,9 +21,6 @@ function formatCep(cep: any): string | undefined {
 
 const geoCache = new Map<string, GeocodeResult[]>();
 
-let googleAutocompleteDisabled = false;
-let googleGeocodeDisabled = false;
-
 // High-precision offline registry for famous Manaus neighborhoods & locations (demoroute)
 const OFFLINE_REGISTRY: Record<string, { lat: number, lon: number, name: string, context: string }> = {
   'centro, manaus, am': { lat: -3.1311, lon: -60.0242, name: 'Centro', context: 'Manaus, AM, Brasil' },
@@ -206,16 +203,8 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
 
     // Parallelize search requests to all geocoding services
     const providers = [
-      // 0. Google Places Autocomplete API (bypass if key is missing or already failed)
-      (!googleAutocompleteDisabled)
-        ? fetch(`/api/places/google-autocomplete?${googleQs.toString()}`).then(r => {
-            if (r.status === 401) {
-              googleAutocompleteDisabled = true;
-              return null;
-            }
-            return r.ok ? r.json() : null;
-          }).catch(() => null)
-        : Promise.resolve(null),
+      // 0. Google Places Autocomplete API
+      fetch(`/api/places/google-autocomplete?${googleQs.toString()}`).then(r => r.ok ? r.json() : null).catch(() => null),
 
       // 1. Mapbox API 
       fetch(`/api/places/search?${mapboxQs.toString()}`).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -243,18 +232,18 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
 
     const [googleRes, mapboxRes, orsRes, nomRes, phoRes] = await Promise.all(providers);
 
-    // Parse Google Places Autocomplete
-    if (googleRes?.status === 'OK' && Array.isArray(googleRes.predictions)) {
-      googleRes.predictions.forEach((p: any) => {
-        const isPOI = p.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'colloquial_area'].includes(t));
-        const name = p.structured_formatting?.main_text || p.description.split(',')[0];
-        const context = p.structured_formatting?.secondary_text || p.description;
+    // Parse Google Places API (New) Text Search
+    if (googleRes && Array.isArray(googleRes.places)) {
+      googleRes.places.forEach((p: any) => {
+        const isPOI = p.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'shopping_mall', 'food', 'store'].includes(t));
+        const name = p.displayName?.text || '';
+        const context = p.formattedAddress || '';
         addResult({
-          lat: 0, // Placeholder as autocomplete does not return coordinates
-          lon: 0, // Placeholder
+          lat: p.location?.latitude || 0,
+          lon: p.location?.longitude || 0,
           name: name,
           context: context,
-          label: p.description,
+          label: `${name}${context ? `, ${context}` : ''}`,
           confidenceScore: 100, // Highest priority
           source: 'google',
           type: isPOI ? 'poi' : 'address'
@@ -538,34 +527,31 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
 }
 
 export async function preciseGeocode(address: string): Promise<GeocodeResult> {
-  // First, if Google Maps key is active and not disabled, try Google Geocoding API!
-  if (!googleGeocodeDisabled) {
-    try {
-      const res = await fetch(`/api/places/google-geocode?address=${encodeURIComponent(address)}`);
-      if (res.status === 401) {
-        googleGeocodeDisabled = true;
-      } else if (res.ok) {
-        const data = await res.json();
-        if (data.status === 'OK' && data.results?.[0]) {
-          const item = data.results[0];
-          const location = item.geometry.location;
-          const isPOI = item.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital'].includes(t));
-          return {
-            lat: location.lat,
-            lon: location.lng,
-            name: address.split(',')[0],
-            context: item.formatted_address,
-            label: address,
-            confidenceScore: 100,
-            source: 'google',
-            type: isPOI ? 'poi' : 'address'
-          };
-        }
+  // Try Google Geocoding API (using Places new Text Search under the hood for stability)
+  try {
+    const res = await fetch(`/api/places/google-geocode?address=${encodeURIComponent(address)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.places && data.places.length > 0) {
+        const item = data.places[0];
+        const location = item.location;
+        const isPOI = item.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital'].includes(t));
+        return {
+          lat: location.latitude,
+          lon: location.longitude,
+          name: item.displayName?.text || address.split(',')[0],
+          context: item.formattedAddress || address,
+          label: address,
+          confidenceScore: 100,
+          source: 'google',
+          type: isPOI ? 'poi' : 'address'
+        };
       }
-    } catch (error) {
-      console.warn("Google Geocoding failed, falling back to other providers...", error);
     }
+  } catch (error) {
+    console.warn("Google Geocoding failed, falling back to other providers...", error);
   }
+
 
   // Fallback to active geocoding providers - Filtra resultados placeholder sem coordenadas reais (0, 0)
   const results = await enhancedAutocomplete(address);

@@ -12,7 +12,7 @@ export function useIsMobile() {
     }
     mql.addEventListener("change", onChange)
     
-    // Use timeout to avoid synchronous setState warning in effect
+    // Initial evaluation
     const timer = setTimeout(() => {
       setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
     }, 0)
@@ -23,5 +23,5 @@ export function useIsMobile() {
     }
   }, [])
 
-  return !!isMobile
+  return isMobile
 }

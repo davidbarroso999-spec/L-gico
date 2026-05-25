@@ -102,24 +102,66 @@ export async function geocode(address: string) {
 }
 
 export async function getWeather(lat: number, lon: number) {
+  if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
+    return { main: { temp: 28 }, weather: [{ main: 'Clear', description: 'céu limpo', icon: '01d' }], wind: { speed: 5 } };
+  }
+
   try {
     const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
-    if (!res.ok) throw new Error('Weather API returned error response');
-    return await res.json();
-  } catch (error) {
-    console.error('getWeather proxy error:', error);
+    if (res.ok) {
+      return await res.json();
+    }
+    throw new Error(`Proxy status: ${res.status}`);
+  } catch (error: any) {
+    console.warn('[Client Weather] Proxy falhou, tentando Open-Meteo diretamente:', error.message);
+    try {
+      const directUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+      const directRes = await fetch(directUrl);
+      if (directRes.ok) {
+        const data = await directRes.json();
+        const current = data.current_weather;
+        return {
+          main: { temp: current?.temperature ?? 28 },
+          weather: [{ main: 'Cloudy', description: 'condição local', icon: '03d' }],
+          wind: { speed: current?.windspeed ?? 5 }
+        };
+      }
+    } catch (directErr: any) {
+      console.warn('[Client Weather] Falha no Open-Meteo direto:', directErr.message);
+    }
+    // Final safety fallback
     return { main: { temp: 28 }, weather: [{ main: 'Clear', description: 'céu limpo', icon: '01d' }], wind: { speed: 5 } };
   }
 }
 
 export async function getElevation(lat: number, lon: number) {
+  if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) {
+    return 25;
+  }
+
   try {
     const res = await fetch(`/api/elevation?lat=${lat}&lon=${lon}`);
-    if (!res.ok) throw new Error('Elevation API returned error response');
-    const data = await res.json();
-    return data.elevation || 25;
-  } catch (error) {
-    console.error('getElevation proxy error:', error);
+    if (res.ok) {
+      const data = await res.json();
+      if (typeof data.elevation === 'number') {
+        return data.elevation;
+      }
+    }
+    throw new Error(`Proxy response not valid`);
+  } catch (error: any) {
+    console.warn('[Client Elevation] Proxy falhou, tentando Open-Meteo diretamente:', error.message);
+    try {
+      const directUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+      const directRes = await fetch(directUrl);
+      if (directRes.ok) {
+        const data = await directRes.json();
+        if (typeof data.elevation === 'number') {
+          return data.elevation;
+        }
+      }
+    } catch (directErr: any) {
+      console.warn('[Client Elevation] Falha no Open-Meteo direto:', directErr.message);
+    }
     return 20 + Math.random() * 30; // Manaus elevation average approx
   }
 }
@@ -127,65 +169,65 @@ export async function getElevation(lat: number, lon: number) {
 export async function getInmetForecast(cityCode: string = '1302603') {
   try {
     const res = await fetch(`/api/inmet?cityCode=${cityCode}`);
-    if (!res.ok) throw new Error('INMET API returned error response');
+    if (!res.ok) return null;
     return await res.json();
-  } catch (error) {
-    console.warn('INMET proxy error:', error);
+  } catch (error: any) {
+    console.warn('[Client INMET] Proxy falhou ou offline:', error.message);
     return null;
   }
 }
 
 export async function getTrafficIncidents(points: [number, number][]) {
-  // Rough bounding box from route points
-  const lats = points.map(p => p[0]);
-  const lons = points.map(p => p[1]);
-  const bbox = `${Math.min(...lons)},${Math.min(...lats)},${Math.max(...lons)},${Math.max(...lats)}`;
+  if (!points || points.length === 0) return { tm: { poi: [] } };
   
   try {
+    const lats = points.map(p => p[0]);
+    const lons = points.map(p => p[1]);
+    if (lats.some(isNaN) || lons.some(isNaN)) {
+      return { tm: { poi: [] } };
+    }
+    const bbox = `${Math.min(...lons)},${Math.min(...lats)},${Math.max(...lons)},${Math.max(...lats)}`;
+    
     const res = await fetch(`/api/traffic?bbox=${encodeURIComponent(bbox)}`);
-    if (!res.ok) throw new Error('Traffic API returned error response');
+    if (!res.ok) return { tm: { poi: [] } };
     return await res.json();
-  } catch (error) {
-    console.error('getTrafficIncidents proxy error:', error);
+  } catch (error: any) {
+    console.warn('[Client Traffic] Proxy falhou ou offline:', error.message);
     return { tm: { poi: [] } };
   }
 }
 
 export async function getMatrix(locations: [number, number][], profile: string = 'driving-car') {
   try {
-    const res = await fetch('/api/ors', {
+    const res = await fetch('/api/gmaps', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        endpoint: `v2/matrix/${profile}`,
-        method: 'POST',
-        body: { 
-          locations: locations.map(l => [l[1], l[0]]),
-          metrics: ['distance', 'duration']
-        }
+        action: 'matrix',
+        payload: { locations }
       })
     });
     
-    if (!res.ok) throw new Error('ORS Matrix HTTP error');
-    const contentType = res.headers.get('content-type');
-    if (!contentType?.includes('application/json')) throw new Error('ORS Matrix non-JSON response');
-
+    if (!res.ok) throw new Error('Google Maps Matrix HTTP error');
     return await res.json();
   } catch (error) {
-    console.warn('ORS Matrix failed, trying OSRM fallback...', error);
+    console.warn('Google Maps Matrix failed, trying ORS fallback...', error);
     try {
-      const coords = locations.map(l => `${l[1]},${l[0]}`).join(';');
-      const osrmRes = await fetch(`/api/osrm?type=table&coords=${encodeURIComponent(coords)}`);
-      const osrmData = await osrmRes.json();
-      
-      if (osrmData && osrmData.code === 'Ok') {
-        return {
-          durations: osrmData.durations,
-          distances: osrmData.distances
-        };
-      }
-    } catch (osrmError) {
-      console.error('All matrix providers failed:', osrmError);
+      const res = await fetch('/api/ors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: `v2/matrix/${profile}`,
+          method: 'POST',
+          body: { 
+            locations: locations.map(l => [l[1], l[0]]),
+            metrics: ['distance', 'duration']
+          }
+        })
+      });
+      return await res.json();
+    } catch (orsError) {
+      console.error('All matrix providers failed:', orsError);
     }
     return null;
   }
@@ -218,64 +260,37 @@ export async function snapToRoad(points: [number, number][]): Promise<[number, n
 
 export async function getDirections(points: [number, number][], profile: string = 'driving-car', preference: string = 'fastest') {
   try {
-    const res = await fetch('/api/ors', {
+    const res = await fetch('/api/gmaps', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        endpoint: `v2/directions/${profile}/geojson`,
-        method: 'POST',
-        body: { 
-          coordinates: points.map(p => [p[1], p[0]]),
-          preference: preference,
-          instructions: true
-        }
+        action: 'directions',
+        payload: { points }
       })
     });
     
-    if (!res.ok) throw new Error('ORS Directions HTTP error');
-    const contentType = res.headers.get('content-type');
-    if (!contentType?.includes('application/json') && !contentType?.includes('application/geo+json')) {
-      throw new Error('ORS Directions non-JSON response');
-    }
-
+    if (!res.ok) throw new Error('Google Maps Directions HTTP error');
     return await res.json();
   } catch (error) {
-    console.warn('ORS Directions failed, trying OSRM fallback...', error);
+    console.warn('Google Maps Directions failed, trying ORS fallback...', error);
     try {
-      const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
-      const osrmRes = await fetch(`/api/osrm?type=route&coords=${encodeURIComponent(coords)}`);
-      const osrmData = await osrmRes.json();
-      
-      if (osrmData && osrmData.code === 'Ok' && osrmData.routes.length > 0) {
-        // Map OSRM structure to match ORS expected structure
-        const route = osrmData.routes[0];
-        const segments = route.legs?.map((leg: any) => ({
-          distance: leg.distance,
-          duration: leg.duration,
-          steps: leg.steps ? leg.steps.map((s: any) => ({
-            distance: s.distance,
-            duration: s.duration,
-            instruction: s.maneuver?.type + ' ' + (s.name || ''),
-          })) : []
-        })) || [];
-
-        return {
-          type: 'FeatureCollection',
-          features: [{
-            type: 'Feature',
-            geometry: osrmData.routes[0].geometry,
-            properties: {
-              summary: {
-                distance: osrmData.routes[0].distance,
-                duration: osrmData.routes[0].duration
-              },
-              segments
-            }
-          }]
-        };
-      }
-    } catch (osrmError) {
-      console.error('All directions providers failed:', osrmError);
+      const res = await fetch('/api/ors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: `v2/directions/${profile}/geojson`,
+          method: 'POST',
+          body: { 
+            coordinates: points.map(p => [p[1], p[0]]),
+            preference: preference,
+            instructions: true,
+            language: "pt-BR"
+          }
+        })
+      });
+      return await res.json();
+    } catch (orsError) {
+      console.error('All directions providers failed:', orsError);
     }
     return null;
   }

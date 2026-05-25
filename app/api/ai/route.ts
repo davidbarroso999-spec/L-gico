@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 
+export const dynamic = 'force-dynamic';
+
 // Memória temporária de modelos com cota esgotada (evita requisições lentas adicionais)
 const modelExhaustedCache: Record<string, number> = {};
 

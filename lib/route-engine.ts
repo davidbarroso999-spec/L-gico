@@ -283,11 +283,16 @@ export async function optimizeRoute(
     if (weather.weather?.[0]?.main === 'Thunderstorm') risk += 30;
     if (isRainySeason && weather.weather?.[0]?.main === 'Rain') risk += 10;
     
-    // TomTom Traffic Integration
-    const nearbyIncidents = trafficData.tm?.poi?.filter((p: any) => {
-        const dist = Math.sqrt(Math.pow(p.p.y - stop.lat, 2) + Math.pow(p.p.x - stop.lon, 2));
+    let poiList = [];
+    if (trafficData && trafficData.tm && Array.isArray(trafficData.tm.poi)) {
+      poiList = trafficData.tm.poi;
+    }
+    const nearbyIncidents = poiList.filter((p: any) => {
+        const py = p?.p?.y || 0;
+        const px = p?.p?.x || 0;
+        const dist = Math.sqrt(Math.pow(py - stop.lat, 2) + Math.pow(px - stop.lon, 2));
         return dist < 0.01; // Approx 1km
-    }) || [];
+    });
     if (nearbyIncidents.length > 0) risk += 20;
 
     // Elevation risk (simplified: check incline from previous stop if exists)
@@ -361,69 +366,14 @@ export async function optimizeRoute(
     customPrompt: options.customPrompt
   };
 
-  // 6. Get AI Analysis - Tentar Supabase Edge Function prioritariamente se estiver configurada
-  let aiAnalysis = "";
-  let supabaseActive = false;
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (supabaseUrl && supabaseAnonKey) {
-    try {
-      console.log("Supabase Encontrado! Tentando otimização via Edge Function...");
-      const response = await fetch(`${supabaseUrl}/functions/v1/optimize-route`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseAnonKey}`,
-          "apikey": supabaseAnonKey
-        },
-        body: JSON.stringify({
-          stops: enrichedSequence.map(s => ({ lat: s.lat, lon: s.lon, address: s.address })),
-          occurrences: localOccurrences,
-          preference: options.priority,
-          customPrompt: options.customPrompt
-        }),
-        // Timeout curto de segurança para mobile para evitar tela travada se a rede estiver lenta
-        signal: AbortSignal.timeout(6000)
-      } as any);
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.analysis) {
-          aiAnalysis = data.analysis;
-          supabaseActive = true;
-          console.log("Otimização cognitiva respondida pelo Supabase com sucesso!");
-          
-          // Se o Supabase alterou ou enriqueceu os scores de risco das paradas, refletimos no frontend
-          if (Array.isArray(data.stops)) {
-            data.stops.forEach((supStop: any, supIdx: number) => {
-              if (enrichedSequence[supIdx]) {
-                if (typeof supStop.riskScore === 'number') {
-                  enrichedSequence[supIdx].riskScore = supStop.riskScore;
-                }
-              }
-            });
-          }
-        }
-      } else {
-        console.warn(`Edge Function retornou status ${response.status}. Iniciando contingência local...`);
-      }
-    } catch (err) {
-      console.warn("Erro ao comunicar com a Edge Function do Supabase. Iniciando contingência local...", err);
-    }
-  }
-
-  // Fallback se o Supabase não estiver ativado ou se ocorreu um erro de conexão
-  if (!supabaseActive) {
-    aiAnalysis = await getGeminiAnalysis({ ...baseResult, strategy: aiStrategy });
-  }
+  // 6. Get AI Analysis - Call our reliable local/server AI engine directly
+  const aiAnalysis = await getGeminiAnalysis({ ...baseResult, strategy: aiStrategy });
 
   const finalResult = { 
     ...baseResult, 
     sequence: enrichedSequence,
     aiAnalysis,
-    supabaseUsed: supabaseActive
+    supabaseUsed: false
   };
   
   // Cache the route for offline mode

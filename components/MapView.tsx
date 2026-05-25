@@ -40,7 +40,8 @@ function calculateSmoothAngle(currentSmooth: number, target: number) {
     diff -= 360;
   }
   // Low-pass filter damping coefficient (0.12) to create smooth, cinematic rotation over time
-  return currentSmooth + diff * 0.12;
+  const nextAngle = currentSmooth + diff * 0.12;
+  return (nextAngle + 360) % 360;
 }
 
 // Recenter mechanism that adapts to general view or simulation view with enhanced elite-level zoom zoom
@@ -71,19 +72,21 @@ function MapController({
       // Normal bounds fitting
       if (geometry?.coordinates?.length > 0) {
         const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
-        map.fitBounds(bounds, { padding: [55, 55] });
+        map.fitBounds(bounds, { padding: [55, 55], animate: false });
       } else if (stops.length > 0) {
         const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
-        map.fitBounds(bounds, { padding: [55, 55] });
+        map.fitBounds(bounds, { padding: [55, 55], animate: false });
       }
     }
+  }, [stops, map, geometry, carCoords, isDriving, is3DMode]);
 
-    // Force recalculate map size to prevent gray box issues
+  useEffect(() => {
+    // Force recalculate map size to prevent gray box issues when 3D mode toggles or mounts
     const timer = setTimeout(() => {
       map.invalidateSize();
     }, 400);
     return () => clearTimeout(timer);
-  }, [stops, map, geometry, carCoords, isDriving, is3DMode]);
+  }, [map, is3DMode]);
 
   // Dynamically enable/disable interface dragging under active tracking rotation to solve Leaflet coordinate offsets
   useEffect(() => {
@@ -136,7 +139,7 @@ const createNumberedIcon = (
       <div class="custom-marker-wrapper" style="
         transform: ${rotationAdjustment};
         transform-origin: bottom center;
-        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: ${isDriving ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)'};
         background-color: ${color};
         color: #0F172A;
         width: 32px;
@@ -184,7 +187,7 @@ const createCarIcon = (
     html: `
       <div style="
         transform: ${rotationAdjustment};
-        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: ${isDriving ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)'};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -252,81 +255,83 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
   if (is3DMode !== prevIs3DMode) {
     setPrevIs3DMode(is3DMode);
     if (!is3DMode) {
-      setSmoothHeading(prev => calculateSmoothAngle(prev, 0));
+      setSmoothHeading(0);
       setHeading(0);
     }
   }
 
-  // Driver agent simulation loop
+  // Real Geolocation Tracking
   useEffect(() => {
-    let timer: any;
-    if (isDriving && polyline.length >= 2) {
-      const stepSim = () => {
-        setSimulatedIndex(prevIdx => {
-          const nextIdx = prevIdx + 1;
-          if (nextIdx >= polyline.length) {
-            setIsDriving(false);
-            setInstructionHUD("Sua rota foi simulada com sucesso! Bem-vindo ao destino!");
-            setSpeedHUD(0);
-            return 0; // Reset index for subsequent run
+    let watchId: number | undefined;
+
+    if (isDriving) {
+      if ('geolocation' in navigator) {
+        setTimeout(() => setInstructionHUD("Aguardando sinal de GPS para iniciar..."), 0);
+        
+        watchId = navigator.geolocation.watchPosition(
+          (position) => {
+            const { latitude, longitude, heading: geoHeading, speed } = position.coords;
+            const newCoords: [number, number] = [latitude, longitude];
+            
+            setCarCoords((prevCarCoords) => {
+              if (prevCarCoords) {
+                // If the device doesn't provide heading (frequent on web), calculate it
+                const calculatedHeading = geoHeading !== null && !isNaN(geoHeading) 
+                  ? geoHeading 
+                  : getBearing(prevCarCoords[0], prevCarCoords[1], latitude, longitude);
+                  
+                setHeading(calculatedHeading);
+                setSmoothHeading(prev => calculateSmoothAngle(prev, calculatedHeading));
+              }
+              return newCoords;
+            });
+
+            if (speed !== null) {
+              setSpeedHUD(Math.round(speed * 3.6));
+            } else {
+              setSpeedHUD(0);
+            }
+
+            setInstructionHUD("Navegação ativa. Siga a rota sugerida.");
+            
+            // Evaluate proxemics of critical security or terrain risks
+            const dangerousStopIdx = stops.findIndex(s => {
+              const distance = Math.sqrt(Math.pow(s.lat - latitude, 2) + Math.pow(s.lon - longitude, 2));
+              return distance < 0.005; // ~500 meters roughly depending on latitude
+            });
+            if (dangerousStopIdx !== -1 && stops[dangerousStopIdx].riskScore > 35) {
+              setInstructionHUD(`Alerta de Risco: Zona crítica próxima com ${Math.round(stops[dangerousStopIdx].riskScore)}% de risco.`);
+            }
+          },
+          (error) => {
+            console.error("Erro na geolocalização:", error);
+            setInstructionHUD("Erro de GPS. Verifique a permissão de localização do navegador.");
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 10000
           }
-
-          const currentPoint = polyline[prevIdx];
-          
-          // Look-ahead 5 steps (~30-80 meters) to calculate a highly stable, non-jittery road bearing vector
-          const lookAheadIdx = Math.min(prevIdx + 5, polyline.length - 1);
-          const nextPoint = polyline[lookAheadIdx] || polyline[nextIdx];
-          
-          setCarCoords(currentPoint);
-
-          // Calculate direct bearing/heading direction
-          const currentBearing = getBearing(currentPoint[0], currentPoint[1], nextPoint[0], nextPoint[1]);
-          setHeading(currentBearing);
-          setSmoothHeading(prev => calculateSmoothAngle(prev, currentBearing));
-
-          // Simulate organic speed behavior
-          const randSpeed = Math.floor(40 + Math.random() * 25);
-          setSpeedHUD(randSpeed);
-
-          // Update navigation step instructions based on route progress
-          if (nextIdx === 1) {
-            setInstructionHUD("Inicie a navegação. Siga em frente.");
-          } else if (nextIdx === Math.floor(polyline.length * 0.2)) {
-            setInstructionHUD("A 300 metros, vire à direita.");
-          } else if (nextIdx === Math.floor(polyline.length * 0.25)) {
-            setInstructionHUD("Vire à direita na próxima via e siga pelas faixas exclusivas.");
-          } else if (nextIdx === Math.floor(polyline.length * 0.5)) {
-            setInstructionHUD("Tudo livre. Prossiga sem desvios na via rápida por 1.5 km.");
-          } else if (nextIdx === Math.floor(polyline.length * 0.75)) {
-            setInstructionHUD("Prepare-se para fazer o contorno à esquerda logo adiante.");
-          } else if (nextIdx === Math.floor(polyline.length * 0.82)) {
-            setInstructionHUD("Faça o retorno à esquerda e entre com cuidado.");
-          } else if (nextIdx === polyline.length - 2) {
-            setInstructionHUD("Seu ponto de parada está se aproximando. Reduza a velocidade.");
-          }
-
-          // Evaluate proxemics of critical security or terrain risks
-          const dangerousStopIdx = stops.findIndex(s => {
-            const distance = Math.sqrt(Math.pow(s.lat - currentPoint[0], 2) + Math.pow(s.lon - currentPoint[1], 2));
-            return distance < 0.005; // ~500 meters
-          });
-          if (dangerousStopIdx !== -1 && stops[dangerousStopIdx].riskScore > 35) {
-            setInstructionHUD(`Alerta de Risco: Zona crítica à frente com ${Math.round(stops[dangerousStopIdx].riskScore)}% de risco.`);
-          }
-
-          timer = setTimeout(stepSim, 300); // 300ms step updates for butter smooth animations
-          return nextIdx;
-        });
-      };
-      timer = setTimeout(stepSim, 300);
+        );
+      } else {
+        setTimeout(() => setInstructionHUD("Geolocalização não suportada neste dispositivo."), 0);
+      }
     } else {
-      timer = setTimeout(() => {
+      setTimeout(() => {
+        if (polyline.length > 0) {
+          setCarCoords(polyline[0]);
+        }
         setSpeedHUD(0);
+        setInstructionHUD("Pronto para iniciar a jornada");
       }, 0);
     }
 
-    return () => clearTimeout(timer);
-  }, [isDriving, polyline, stops]);
+    return () => {
+      if (watchId !== undefined) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [isDriving, stops, polyline]);
 
   // Handle segment analysis colored visual lines
   const segments: { coords: [number, number][], color: string }[] = [];
@@ -344,7 +349,7 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
   const mapTransformStyles = is3DMode ? {
     transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${isDriving && mapOrientation === 'track' ? -smoothHeading : 0}deg)`,
     transformOrigin: '50% 50%',
-    transition: isDriving ? 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)' : 'transform 1s cubic-bezier(0.16, 1, 0.3, 1)',
+    transition: isDriving ? 'none' : 'transform 1s cubic-bezier(0.16, 1, 0.3, 1)',
     height: '100%',
     width: '100%',
     background: '#020617'

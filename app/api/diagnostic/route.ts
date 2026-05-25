@@ -122,20 +122,29 @@ export async function GET() {
 
   // 5. Test Google Maps Platform
   try {
-    const GOOGLE_KEY = process.env.GOOGLE_MAPS_PLATFORM_KEY;
+    const GOOGLE_KEY = process.env.GOOGLE_MAPS_PLATFORM_KEY || process.env.GOOGLE_MAPS_API_KEY;
     if (!GOOGLE_KEY) {
       report.googleMaps = { status: 'MISSING_KEY', detail: 'Chave GOOGLE_MAPS_PLATFORM_KEY não encontrada.' };
     } else {
-      const googleRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=manaus&key=${GOOGLE_KEY}`);
+      const googleRes = await fetch(`https://places.googleapis.com/v1/places:searchText`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask': 'places.displayName'
+        },
+        body: JSON.stringify({ textQuery: 'manaus', languageCode: 'pt-BR' })
+      });
       if (googleRes.ok) {
         const googleData = await googleRes.json();
-        if (googleData.status === 'OK') {
-          report.googleMaps = { status: 'SUCCESS', detail: 'Google Maps Autocomplete & Geocoding ativo e operacional!' };
+        if (googleData.places) {
+          report.googleMaps = { status: 'SUCCESS', detail: 'Google Maps Autocomplete & Geocoding ativo (Places API New) e operacional!' };
         } else {
-          report.googleMaps = { status: 'FAILED', detail: googleData.error_message || googleData.status || 'Falha de resposta da API do Google' };
+          report.googleMaps = { status: 'FAILED', detail: 'Google Places API retornou OK mas sem lugares.' };
         }
       } else {
-        report.googleMaps = { status: 'FAILED', detail: `Google API retornou status HTTP ${googleRes.status}` };
+        const text = await googleRes.text();
+        report.googleMaps = { status: 'FAILED', detail: `Google API Error: ${text.substring(0, 100)}` };
       }
     }
   } catch (e: any) {

@@ -26,13 +26,17 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
-  Sparkles
+  Sparkles,
+  Database,
+  Server,
+  Terminal,
+  HelpCircle
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
-import { enhancedAutocomplete } from '@/lib/geocode-engine';
+import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -165,7 +169,7 @@ export default function LogixApp() {
       if (failedKeys.length > 0) {
         setApiWarning(`Aviso Diagnóstico: Falha de conexão com ${failedKeys.join(', ')}.`);
       }
-    }).catch(e => console.error(e));
+    }).catch(e => console.warn('Diagnostic fetch error:', e.message));
   }, []);
 
   useEffect(() => {
@@ -227,30 +231,47 @@ export default function LogixApp() {
       const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows);
       setRouteResult(result);
       
-      // Save to IndexedDB
-      await db.routes.add({
-        date: new Date(),
-        addresses: validAddresses,
-        sequence: result.sequence,
-        score: result.score,
-        status: 'pending'
-      });
+      // Save to IndexedDB (safe catch)
+      try {
+        await db.routes.add({
+          date: new Date(),
+          addresses: validAddresses,
+          sequence: result.sequence,
+          score: result.score,
+          status: 'pending'
+        });
+      } catch (dbErr) {
+        console.warn("Could not save to IndexedDB, continuing...", dbErr);
+      }
 
       setTimeout(() => setCurrentScreen('result'), 1500);
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.error("Optimization failed:", error);
+      const errMsg = error?.message || String(error);
+      const errStack = error?.stack ? ` | Detalhe Técnico: ${error.stack.split('\\n')[1]}` : "";
+      setApiWarning(`Falha na rota: ${errMsg}${errStack}`);
       setCurrentScreen('home');
     }
   };
 
+  if (isMobile === undefined) {
+    return (
+      <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center font-sans">
+        <div className="w-12 h-12 border-4 border-slate-800 border-t-tech rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex flex-col md:flex-row h-full w-full bg-slate-950 overflow-hidden font-sans relative`}>
+    <div className={`fixed inset-0 w-full max-w-[100vw] h-full flex flex-col md:flex-row bg-slate-950 overflow-hidden font-sans`}>
       {/* API Key Warning Banner */}
       {apiWarning && (
-        <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center justify-center gap-2">
-          <AlertOctagon className="w-4 h-4" />
-          {apiWarning}
-          <button onClick={() => setApiWarning(null)} className="ml-auto w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/20">
+        <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center gap-2">
+          <AlertOctagon className="w-4 h-4 shrink-0" />
+          <div className="flex-1 min-w-0 break-words">
+            {apiWarning}
+          </div>
+          <button onClick={() => setApiWarning(null)} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/20">
             <XCircle className="w-4 h-4" />
           </button>
         </div>
@@ -317,7 +338,7 @@ export default function LogixApp() {
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 relative h-full overflow-hidden ${(isMobile && currentScreen !== 'navigation') ? 'pb-20' : ''}`}>
+      <main className={`flex-1 relative h-full w-full max-w-[100vw] overflow-hidden ${(isMobile && currentScreen !== 'navigation') ? 'pb-20' : ''}`}>
         <AnimatePresence mode="wait">
           {currentScreen === 'home' && (
             <motion.div
@@ -325,7 +346,7 @@ export default function LogixApp() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className={`h-full w-full flex flex-col items-center max-w-4xl mx-auto p-6 overflow-y-auto custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
+              className={`h-full w-full flex flex-col items-center max-w-4xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
             >
               <div className="w-full flex-shrink-0 flex flex-col items-center mb-12">
                 <motion.h1 
@@ -511,18 +532,30 @@ export default function LogixApp() {
                                     // Evita o fechamento prematuro no onBlur do input (Causa de race conditions)
                                     e.preventDefault();
                                   }}
-                                  onClick={() => {
+                                  onClick={async () => {
                                     const currentIdx = activeSuggestionIdx!;
                                     updateAddress(currentIdx, s.label);
+                                    setShowSuggestions(false);
+                                    setSuggestions([]);
+                                    setActiveSuggestionIdx(null);
+                                    
                                     if (s.lat && s.lon) {
                                       setResolvedCoords(prev => ({
                                         ...prev,
                                         [s.label]: { lat: s.lat, lon: s.lon }
                                       }));
+                                    } else {
+                                      // Search precise geo immediately if coordinates are placeholders
+                                      try {
+                                        const geo = await preciseGeocode(s.label);
+                                        if (geo && geo.lat && geo.lon) {
+                                          setResolvedCoords(prev => ({
+                                            ...prev,
+                                            [s.label]: { lat: geo.lat, lon: geo.lon }
+                                          }));
+                                        }
+                                      } catch(e) {}
                                     }
-                                    setShowSuggestions(false);
-                                    setSuggestions([]);
-                                    setActiveSuggestionIdx(null);
                                     
                                     // Jump to next field or create one
                                     const nextIdx = currentIdx + 1;
@@ -630,7 +663,7 @@ export default function LogixApp() {
                 <div className="flex flex-col gap-6">
                   <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px]">
                     <h3 className="text-lg md:text-xl font-bold mb-5 font-display flex items-center gap-2">Prioridade da Rota</h3>
-                    <div className="grid grid-cols-5 gap-1 md:gap-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 md:gap-3">
                       {[
                         { id: 'speed', icon: Zap, label: 'Rápido' },
                         { id: 'distance', icon: MapIcon, label: 'Curto' },
@@ -659,29 +692,6 @@ export default function LogixApp() {
                       {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Otimização mestre visando estabilidade, evitando arranques e aclives severos sob carga logística.</p>}
                       {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Análise preventiva de integridade física. Desvia ativamente de incidências climáticas críticas e trechos de risco grave.</p>}
                       {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Otimização unificada ponderando distâncias, tempos previstos de viagem, integridade das cargas e consumo médio.</p>}
-                    </div>
-                  </div>
-
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px] flex-1">
-                    <h3 className="text-lg md:text-xl font-bold mb-4 font-display">Restrições</h3>
-                    <div className="space-y-3">
-                      {[
-                        { id: 'avoidDirt', label: 'Evitar ruas de terra' },
-                        { id: 'avoidFloods', label: 'Evitar alagamentos' },
-                        { id: 'avoidHills', label: 'Evitar ladeiras íngremes' },
-                      ].map(check => (
-                        <label key={check.id} className="flex items-center gap-3 cursor-pointer group select-none">
-                          <div 
-                            onClick={() => setOptions({ ...options, [check.id]: !((options as any)[check.id]) })}
-                            className={`w-5 h-5 rounded border transition-all flex items-center justify-center ${
-                              (options as any)[check.id] ? 'bg-tech border-tech' : 'border-slate-800 group-hover:border-slate-700'
-                            }`}
-                          >
-                            {(options as any)[check.id] && <div className="w-2.5 h-2.5 bg-slate-950 rounded-sm" />}
-                          </div>
-                          <span className="text-xs md:text-sm text-slate-300">{check.label}</span>
-                        </label>
-                      ))}
                     </div>
                   </div>
 
@@ -944,8 +954,8 @@ export default function LogixApp() {
           )}
 
           {currentScreen === 'settings' && (
-            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`h-full overflow-y-auto custom-scrollbar ${isMobile ? 'p-6 pb-32' : 'p-12'}`}>
-              <div className="max-w-2xl mx-auto">
+            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 py-6 pb-32' : 'p-12'}`}>
+              <div className="max-w-2xl mx-auto w-full">
                 <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
                 
                 <div className="space-y-8">
@@ -995,9 +1005,9 @@ export default function LogixApp() {
                     </div>
                   </div>
 
-                  <div className="glass p-8 rounded-[32px]">
+                  <div className="glass p-4 sm:p-8 rounded-[32px]">
                     <h3 className="text-xl font-bold mb-6">Unidades e Medidas</h3>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <button className="p-4 rounded-xl bg-tech text-slate-950 font-bold text-sm">Métrico (km, m, °C)</button>
                       <button className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 font-bold text-sm">Imperial (mi, ft, °F)</button>
                     </div>

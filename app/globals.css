@@ -15,10 +15,10 @@
 
 @layer base {
   html, body {
-    @apply h-full overflow-hidden overscroll-none;
+    @apply h-full overflow-hidden overscroll-none max-w-[100vw] overflow-x-hidden;
   }
   body {
-    @apply font-sans bg-slate-950 text-slate-100;
+    @apply font-sans bg-slate-950 text-slate-100 max-w-[100vw] overflow-x-hidden;
     height: 100dvh;
   }
   h1, h2, h3, h4 {

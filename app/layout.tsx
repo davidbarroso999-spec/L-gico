@@ -6,6 +6,13 @@ export const metadata: Metadata = {
   description: 'Intelligent route optimization with real-time weather and traffic analysis.',
 };
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="pt-BR">
@@ -17,7 +24,7 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
           crossOrigin=""
         />
       </head>
-      <body suppressHydrationWarning className="bg-slate-950 text-slate-100 antialiased">
+      <body suppressHydrationWarning className="bg-slate-950 text-slate-100 antialiased h-dvh overflow-hidden w-full">
         {children}
       </body>
     </html>
