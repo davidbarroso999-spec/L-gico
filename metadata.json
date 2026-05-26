@@ -1,6 +1,6 @@
 {
   "name": "Logix Route",
   "description": "Planejador de rotas inteligente com análise em tempo real de clima, tráfego e elevação para entregas.",
-  "requestFramePermissions": ["geolocation"],
+  "requestFramePermissions": ["geolocation", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

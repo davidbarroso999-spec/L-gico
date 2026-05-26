@@ -164,6 +164,17 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                           </div>
                         )}
 
+                        {/* Amazonas Hydrology Warning (Mobile) */}
+                        {stop.amazonasHydrology && (
+                          <div className="mt-2 text-[9px] py-1.5 px-2.5 rounded-xl border flex flex-col gap-0.5 bg-sky-950/25 border-sky-500/20 text-sky-300">
+                            <span className="font-bold flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" />
+                              Climatologia AM: {stop.amazonasHydrology.seasonLabel}
+                            </span>
+                            <p className="text-[9px] text-slate-350 leading-relaxed font-sans">{stop.amazonasHydrology.warning}</p>
+                          </div>
+                        )}
+
                         {/* Weather inside stops info for mobile */}
                         <div className="mt-2 py-1 px-2.5 bg-slate-950/40 rounded-lg flex items-center justify-between border border-white/5">
                           <div className="flex items-center gap-1.5">
@@ -325,6 +336,20 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                           </li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+
+                  {/* Amazonas Hydrology Warning (Desktop) */}
+                  {stop.amazonasHydrology && (
+                    <div className="mt-3 py-2.5 px-3.5 rounded-2xl border flex flex-col gap-1 bg-sky-950/25 border-sky-500/20 text-sky-300 text-xs">
+                      <div className="flex items-center gap-1.5 font-bold text-[11px] text-sky-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" />
+                        Hidrologia AM: {stop.amazonasHydrology.seasonLabel}
+                      </div>
+                      <p className="text-[11px] text-slate-350 leading-normal font-sans">{stop.amazonasHydrology.warning}</p>
+                      <p className="text-[10px] text-slate-450 italic leading-normal font-sans mt-0.5 border-t border-sky-500/10 pt-1">
+                        <strong>Histórico:</strong> {stop.amazonasHydrology.historicalContext}
+                      </p>
                     </div>
                   )}
 

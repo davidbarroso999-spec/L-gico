@@ -17,6 +17,13 @@ export interface RouteStop {
   estimatedArrival?: string;
   timeWindow?: { start: string; end: string };
   activeOccurrences?: any[];
+  amazonasHydrology?: {
+    season: 'cheia' | 'vazante';
+    seasonLabel: string;
+    warning: string;
+    historicalContext: string;
+    riskPenalty: number;
+  };
 }
 
 export interface RouteOptions {
@@ -61,6 +68,71 @@ function timeToMinutes(timeStr?: string): number | null {
   const m = parseInt(parts[1]);
   if (isNaN(h) || isNaN(m)) return null;
   return h * 60 + m;
+}
+
+export function getAmazonasHydrology(address: string, lat: number, lon: number) {
+  const isAmazonas = 
+    address.toLowerCase().includes('manaus') || 
+    address.toLowerCase().includes('am') || 
+    address.toLowerCase().includes('amazonas') || 
+    (lat < -1.0 && lat > -4.5 && lon < -57.0 && lon > -63.5);
+
+  if (!isAmazonas) return undefined;
+
+  const month = new Date().getMonth() + 1; // 1-indexed (1 = Jan, 12 = Dec)
+  
+  // Seasonal classifications
+  // Cheia: Dec (12) to Jun (6)
+  // Vazante / Seca: Jul (7) to Nov (11)
+  const isCheia = month >= 12 || month <= 6; 
+  
+  const season: 'cheia' | 'vazante' = isCheia ? 'cheia' : 'vazante';
+  const seasonLabel = isCheia ? 'Cheia / Alagamento Sazonal (Dez-Jun)' : 'Vazante / Estiagem Severa (Jul-Nov)';
+  
+  let warning = "";
+  let historicalContext = "";
+  let riskPenalty = 0;
+
+  const addrLower = address.toLowerCase();
+
+  if (isCheia) {
+    if (addrLower.includes('centro') || addrLower.includes('porto') || addrLower.includes('educandos') || addrLower.includes('compensa')) {
+      warning = "Sinal de Cota Crítica: Nível do Rio Negro elevado. Vias adjacentes ao porto e pontes marginais enfrentam refluxo pluvial.";
+      historicalContext = "No pico de cheias, as bacias urbanas inundam orlas do Centro e Educandos, comprometendo o fluxo cinético e a aderência.";
+      riskPenalty = 25;
+    } else if (addrLower.includes('am-010') || addrLower.includes('br-319')) {
+      warning = "Saturação de Solos AM: Pavimento macio e riscos de desmoronamento fluvial periférico (erosão / terras caídas).";
+      historicalContext = "O fluxo hidrográfico desgasta encostas de rodovias sem escoamento, demandando torque estabilizado.";
+      riskPenalty = 20;
+    } else {
+      warning = "Inverno Amazônico Ativo: Índice pluviométrico diário elevado. Risco de buracos ocultos sob lâminas d'água.";
+      historicalContext = "A alta convergência intertropical satura bueiros, reduzindo a capacidade dinâmica das vias secundárias de Manaus.";
+      riskPenalty = 12;
+    }
+  } else {
+    // Vazante / Drought Phase (Jul-Nov)
+    if (addrLower.includes('ceasa') || addrLower.includes('porto') || addrLower.includes('chibatão')) {
+      warning = "Efeito Assoreamento Extremado: Cota fluvial mínima restringe calado de balsas e carretas. Filas longas de transbordo.";
+      historicalContext = "A seca severa isola terminais pesados, criando bancos de areia e gargalos de logística fluvial (Ferry-boat CEASA-Careiro).";
+      riskPenalty = 25;
+    } else if (addrLower.includes('am-010') || addrLower.includes('br-319') || addrLower.includes('ramal')) {
+      warning = "Suspensão de Fumos/Poeira: Estradas de terra batônica com erosão severa e baixa visibilidade transitória por areia.";
+      historicalContext = "A ausência de chuvas resseca leitos de argila, quebrando suspensões e gerando nuvens de poeira perigosas na BR-319.";
+      riskPenalty = 18;
+    } else {
+      warning = "Parição de Calor Extremo: Temperaturas superaquecem pneu e sistemas hidráulicos (pico de até 41°C).";
+      historicalContext = "A insolação equatorial na estiagem expande juntas de dilatação e fadiga metais das frotas de distribuição.";
+      riskPenalty = 10;
+    }
+  }
+
+  return {
+    season,
+    seasonLabel,
+    warning,
+    historicalContext,
+    riskPenalty
+  };
 }
 
 export async function optimizeRoute(
@@ -153,19 +225,92 @@ export async function optimizeRoute(
 
   const matrix = await getMatrix(coords, profile);
 
-  // 4. Routing logic: Mantém o primeiro como origem e o último como destino com simulação de tempo realista (iniciando às 08:00)
+  // 4. Enrich database occurrences and pre-scan environmental factors for all locations
+  const trafficIncidents = await getTrafficIncidents(coords);
+  let localOccurrences: any[] = [];
+  try {
+    localOccurrences = await db.occurrences.toArray();
+  } catch (err) {
+    console.warn("Could not retrieve local occurrences from database:", err);
+  }
+
+  const enrichedLocations = await Promise.all(locations.map(async (loc) => {
+    try {
+      const weather = await getWeather(loc.lat, loc.lon);
+      const elevation = await getElevation(loc.lat, loc.lon);
+      
+      const currentMonth = new Date().getMonth() + 1;
+      const isRainySeason = currentMonth >= 12 || currentMonth <= 5;
+
+      let risk = 0;
+      if (weather?.rain?.['1h'] > 5) risk += 15;
+      if (weather?.weather?.[0]?.main === 'Thunderstorm') risk += 30;
+      if (isRainySeason && weather?.weather?.[0]?.main === 'Rain') risk += 10;
+      
+      let poiList = [];
+      if (trafficIncidents && trafficIncidents.tm && Array.isArray(trafficIncidents.tm.poi)) {
+        poiList = trafficIncidents.tm.poi;
+      }
+      const nearbyIncidents = poiList.filter((p: any) => {
+          const py = p?.p?.y || 0;
+          const px = p?.p?.x || 0;
+          const dist = Math.sqrt(Math.pow(py - loc.lat, 2) + Math.pow(px - loc.lon, 2));
+          return dist < 0.01; // Approx 1km
+      });
+      if (nearbyIncidents.length > 0) risk += 20;
+
+      // Local Occurrences integration
+      const activeOccurrences = localOccurrences.filter((occ: any) => {
+        const dist = calculateDistance(loc.lat, loc.lon, occ.lat, occ.lon);
+        return dist <= 1.5; // Within 1.5km
+      });
+
+      if (activeOccurrences.length > 0) {
+        activeOccurrences.forEach((o: any) => {
+          if (o.type === 'flood' || o.type === 'road_closed') risk += 35;
+          else if (o.type === 'accident' || o.type === 'congestion') risk += 25;
+          else risk += 15;
+        });
+      }
+
+      // Cruze de dados hidrológicos/climáticos do Amazonas
+      const amazonasHydrology = getAmazonasHydrology(loc.address, loc.lat, loc.lon);
+      if (amazonasHydrology) {
+        risk += amazonasHydrology.riskPenalty;
+      }
+
+      return {
+        ...loc,
+        weather,
+        elevation,
+        riskScore: Math.min(100, risk),
+        activeOccurrences,
+        amazonasHydrology
+      };
+    } catch (e) {
+      console.warn("Failed to pre-enrich stop:", loc.address, e);
+      return {
+        ...loc,
+        weather: { main: { temp: 25 }, weather: [{ description: "Normal" }] },
+        elevation: 10,
+        riskScore: 0,
+        activeOccurrences: []
+      };
+    }
+  }));
+
+  // 5. Routing logic: Mantém o primeiro como origem e o último como destino com simulação de tempo realista (iniciando às 08:00)
   const sequence: RouteStop[] = [];
   const start = { 
-    ...locations[0], 
+    ...enrichedLocations[0], 
     sequence: 0, 
-    riskScore: 0, 
     estimatedArrival: "08:00", 
     timeWindow: timeWindows?.[0]
   };
-  const end = locations.length > 1 ? { ...locations[locations.length - 1] } : null;
-  const intermediates = locations.slice(1, -1);
+  const end = enrichedLocations.length > 1 ? { ...enrichedLocations[enrichedLocations.length - 1] } : null;
+  const intermediates = enrichedLocations.slice(1, -1);
 
-  sequence.push(start);
+  sequence.push(start as any);
 
   let currentTime = 480; // Entrada na rota: 08:00 AM em minutos acumulados
 
@@ -179,17 +324,48 @@ export async function optimizeRoute(
       let minCost = Infinity;
       let chosenArrival = currentTime;
       let chosenDeparture = currentTime;
-      const currentLocIdx = locations.findIndex(l => l.id === current.id);
+      const currentLocIdx = enrichedLocations.findIndex(l => l.id === current.id);
 
       for (let i = 0; i < unvisited.length; i++) {
         const target = unvisited[i];
-        const targetLocIdx = locations.findIndex(l => l.id === target.id);
+        const targetLocIdx = enrichedLocations.findIndex(l => l.id === target.id);
         
         const d = (matrix?.distances?.[currentLocIdx]?.[targetLocIdx] || 1000) / 1000; // km
         const t = (matrix?.durations?.[currentLocIdx]?.[targetLocIdx] || 600) / 60; // min
         
-        // Custo com base em pesos da prioridade de rota
-        const baseCost = (weights.w1 * d) + (weights.w2 * t);
+        // Custom Constraints Penalties
+        let customParamPenalty = 0;
+
+        // options.avoidDirt: penalize targets with general weather risk
+        if (options.avoidDirt && target.riskScore > 15) {
+          customParamPenalty += 30;
+        }
+
+        // options.avoidFloods: heavy restriction if target has active flood occurrence or high rain
+        if (options.avoidFloods) {
+          const hasFlood = target.activeOccurrences?.some((o: any) => o.type === 'flood') || target.weather?.weather?.[0]?.main === 'Thunderstorm';
+          if (hasFlood) {
+            customParamPenalty += 200; // major routing block
+          }
+        }
+
+        // options.avoidHills: check elevation change
+        if (options.avoidHills) {
+          const elevDiff = Math.abs((target.elevation || 0) - (current.elevation || 0));
+          if (elevDiff > 25) {
+            customParamPenalty += elevDiff * 2.5; 
+          }
+        }
+
+        // Economy component: fuel consumed by distance + steep climbs
+        const elevDiff = Math.abs((target.elevation || 0) - (current.elevation || 0));
+        const economyCost = (elevDiff > 30 ? (elevDiff / 10) : 0) + (d * 0.2);
+
+        // Safety component: target risk score
+        const safetyCost = target.riskScore || 0;
+
+        // Combine base cost from multi-variable weights
+        const baseCost = (weights.w1 * d) + (weights.w2 * t) + (weights.w3 * economyCost) + (weights.w4 * safetyCost);
         
         // Avaliação de janelas de entrega temporais (Time Windows)
         const originalIdx = parseInt(target.id);
@@ -215,7 +391,7 @@ export async function optimizeRoute(
         
         // Penalizar atraso de forma rígida, e espera de forma moderada
         const penalty = (waitTime * 0.15) + (lateness * 10.0);
-        const cost = baseCost + penalty;
+        const cost = baseCost + penalty + customParamPenalty;
         
         if (cost < minCost) {
           minCost = cost;
@@ -231,7 +407,6 @@ export async function optimizeRoute(
       current = { 
         ...nextStop, 
         sequence: sequence.length, 
-        riskScore: 0,
         estimatedArrival: arrivalStr,
         timeWindow: timeWindows?.[parseInt(nextStop.id)]
       };
@@ -242,8 +417,8 @@ export async function optimizeRoute(
 
   if (end) {
     const lastStop = sequence[sequence.length - 1];
-    const lastLocIdx = locations.findIndex(l => l.id === lastStop.id);
-    const endLocIdx = locations.findIndex(l => l.id === end.id);
+    const lastLocIdx = enrichedLocations.findIndex(l => l.id === lastStop.id);
+    const endLocIdx = enrichedLocations.findIndex(l => l.id === end.id);
     const lastT = (matrix?.durations?.[lastLocIdx]?.[endLocIdx] || 600) / 60; // min
     
     const endArrivalMins = currentTime + lastT;
@@ -252,91 +427,19 @@ export async function optimizeRoute(
     sequence.push({ 
       ...end, 
       sequence: sequence.length, 
-      riskScore: 0, 
       estimatedArrival: endArrivalStr,
       timeWindow: timeWindows?.[parseInt(end.id)]
     } as RouteStop);
   }
 
-  // 4. Enrich with Environmental Data & Local Occurrences
-  const trafficData = await getTrafficIncidents(coords);
-  const inmetData = await getInmetForecast();
-
-  let localOccurrences: any[] = [];
-  try {
-    localOccurrences = await db.occurrences.toArray();
-  } catch (err) {
-    console.warn("Could not retrieve local occurrences from database:", err);
-  }
-
-  const enrichedSequence = await Promise.all(sequence.map(async (stop, idx) => {
-    const weather = await getWeather(stop.lat, stop.lon);
-    const elevation = await getElevation(stop.lat, stop.lon);
-    
-    // Seasonal check: typically rainy season in Amazon region is Dec to May
-    const currentMonth = new Date().getMonth() + 1;
-    const isRainySeason = currentMonth >= 12 || currentMonth <= 5;
-
-    // Risk calculation
-    let risk = 0;
-    if (weather.rain?.['1h'] > 5) risk += 15;
-    if (weather.weather?.[0]?.main === 'Thunderstorm') risk += 30;
-    if (isRainySeason && weather.weather?.[0]?.main === 'Rain') risk += 10;
-    
-    let poiList = [];
-    if (trafficData && trafficData.tm && Array.isArray(trafficData.tm.poi)) {
-      poiList = trafficData.tm.poi;
-    }
-    const nearbyIncidents = poiList.filter((p: any) => {
-        const py = p?.p?.y || 0;
-        const px = p?.p?.x || 0;
-        const dist = Math.sqrt(Math.pow(py - stop.lat, 2) + Math.pow(px - stop.lon, 2));
-        return dist < 0.01; // Approx 1km
-    });
-    if (nearbyIncidents.length > 0) risk += 20;
-
-    // Elevation risk (simplified: check incline from previous stop if exists)
-    if (idx > 0) {
-        const prev = sequence[idx - 1];
-        const currentLocIdx = locations.findIndex(l => l.id === stop.id);
-        const prevLocIdx = locations.findIndex(l => l.id === prev.id);
-        
-        const dist = matrix?.distances?.[prevLocIdx]?.[currentLocIdx] || 1000;
-        const elevDiff = Math.abs(elevation - (prev.elevation || 0));
-        if (elevDiff > 50 && dist < 1000) risk += 10;
-    }
-
-    // Local Occurrences integration
-    const activeOccurrences = localOccurrences.filter((occ: any) => {
-      const dist = calculateDistance(stop.lat, stop.lon, occ.lat, occ.lon);
-      return dist <= 1.5; // Within 1.5km
-    });
-
-    if (activeOccurrences.length > 0) {
-      activeOccurrences.forEach((o: any) => {
-        if (o.type === 'flood' || o.type === 'road_closed') risk += 35;
-        else if (o.type === 'accident' || o.type === 'congestion') risk += 25;
-        else risk += 15;
-      });
-    }
-
-    return { 
-      ...stop, 
-      weather, 
-      elevation, 
-      riskScore: Math.min(100, risk),
-      activeOccurrences 
-    };
-  }));
-
-  // 5. Final geometry
-  let directions = await getDirections(enrichedSequence.map(s => [s.lat, s.lon]), profile, preference);
+  // 6. Final geometry
+  let directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference);
 
   if (!directions?.features?.[0]?.geometry) {
     console.error("Critical: Cannot find directions. Features array might be empty or directions is null.", directions);
     
     // Auto-generate a straight line fallback if all else fails
-    const distanceFallback = enrichedSequence.length > 1 ? 5000 * (enrichedSequence.length - 1) : 0; // 5km per leg
+    const distanceFallback = sequence.length > 1 ? 5000 * (sequence.length - 1) : 0; // 5km per leg
 
     directions = {
       type: 'FeatureCollection',
@@ -344,12 +447,12 @@ export async function optimizeRoute(
         type: 'Feature',
         geometry: {
           type: 'LineString',
-          coordinates: enrichedSequence.map(s => [s.lon, s.lat])
+          coordinates: sequence.map(s => [s.lon, s.lat])
         },
         properties: {
           summary: {
             distance: distanceFallback,
-            duration: enrichedSequence.length * 600
+            duration: sequence.length * 600
           },
           segments: []
         }
@@ -358,20 +461,25 @@ export async function optimizeRoute(
   }
 
   const baseResult = {
-    sequence: enrichedSequence,
+    sequence,
     geometry: directions?.features?.[0]?.geometry,
     summary: directions?.features?.[0]?.properties?.summary || { distance: 0, duration: 0 },
     segments: directions?.features?.[0]?.properties?.segments || [],
-    score: 100 - (enrichedSequence.reduce((acc, s) => acc + s.riskScore, 0) / enrichedSequence.length),
-    customPrompt: options.customPrompt
+    score: Math.max(0, Math.min(100, 100 - (sequence.reduce((acc, s) => acc + s.riskScore, 0) / sequence.length))),
+    customPrompt: options.customPrompt,
+    priority: options.priority,
+    vehicle: options.vehicle,
+    avoidDirt: options.avoidDirt,
+    avoidFloods: options.avoidFloods,
+    avoidHills: options.avoidHills
   };
 
-  // 6. Get AI Analysis - Call our reliable local/server AI engine directly
+  // 7. Get AI Analysis - Call our reliable local/server AI engine directly
   const aiAnalysis = await getGeminiAnalysis({ ...baseResult, strategy: aiStrategy });
 
   const finalResult = { 
     ...baseResult, 
-    sequence: enrichedSequence,
+    sequence: sequence,
     aiAnalysis,
     supabaseUsed: false
   };

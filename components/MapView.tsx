@@ -31,6 +31,18 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
   return (brng + 360) % 360;
 }
 
+// Function to calculate exact distance in KM between two latitude/longitude pairs
+function calculateDistanceInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // Highly optimized continuous rotation tracking with mathematical damping (low-pass filter) to prevent structural wrapping-spin bugs
 function calculateSmoothAngle(currentSmooth: number, target: number) {
   let diff = (target - currentSmooth) % 360;
@@ -235,6 +247,31 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
   const [speedHUD, setSpeedHUD] = useState(0);
   const [instructionHUD, setInstructionHUD] = useState("Pronto para iniciar a jornada");
 
+  // Local Occurrences database state
+  const [localOccurrences, setLocalOccurrences] = useState<any[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadOccurrences = async () => {
+      try {
+        const { db } = await import('@/lib/db');
+        const list = await db.occurrences.toArray();
+        if (active) {
+          setLocalOccurrences(list);
+        }
+      } catch (e) {
+        console.warn("Falha de persistencia de ocorrencias locais no mapa:", e);
+      }
+    };
+    loadOccurrences();
+    // Poll local Dexie IndexedDB every 2500ms for real-time reactivity without ANY network/API overload
+    const interval = setInterval(loadOccurrences, 2500);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
   // Sync state with props in render to avoid synchronous useEffect setState calls
   const [prevPolyline, setPrevPolyline] = useState<[number, number][]>(polyline);
   if (polyline !== prevPolyline) {
@@ -260,7 +297,118 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
     }
   }
 
-  // Real Geolocation Tracking
+  // Build high-resolution color-graded segments based on stops risk interpolation and Dexie reported occurrences
+  const segments = useMemo(() => {
+    if (polyline.length < 2) return [];
+
+    // Find index markers of route stops inside the polyline indices
+    const stopIndices = stops.map(stop => {
+      let minDistance = Infinity;
+      let closestIdx = 0;
+      for (let i = 0; i < polyline.length; i++) {
+        const latDiff = polyline[i][0] - stop.lat;
+        const lonDiff = polyline[i][1] - stop.lon;
+        const dist = latDiff * latDiff + lonDiff * lonDiff;
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestIdx = i;
+        }
+      }
+      return closestIdx;
+    });
+
+    // Compute localized risk profile for each individual point coordinate along the route
+    const getPointColor = (pt: [number, number], index: number) => {
+      // Step A: Interpolate stop-to-stop baseline risk
+      let baselineRisk = 0;
+      if (stops.length >= 2) {
+        let legIdx = 0;
+        for (let i = 0; i < stopIndices.length - 1; i++) {
+          if (index >= stopIndices[i] && index <= stopIndices[i + 1]) {
+            legIdx = i;
+            break;
+          }
+          if (index > stopIndices[i + 1]) {
+            legIdx = i;
+          }
+        }
+        const startIdx = stopIndices[legIdx];
+        const endIdx = stopIndices[legIdx + 1] || polyline.length - 1;
+        const totalSteps = Math.max(1, endIdx - startIdx);
+        const ratio = Math.max(0, Math.min(1, (index - startIdx) / totalSteps));
+        
+        const riskA = stops[legIdx]?.riskScore || 0;
+        const riskB = stops[legIdx + 1]?.riskScore || 0;
+        baselineRisk = riskA * (1 - ratio) + riskB * ratio;
+      } else if (stops.length === 1) {
+        baselineRisk = stops[0].riskScore || 0;
+      }
+
+      // Step B: Collect risk additions from local user-reported occurrences (saved in Dexie)
+      let localAlertBoost = 0;
+      for (const occ of localOccurrences) {
+        const dist = calculateDistanceInKm(pt[0], pt[1], occ.lat, occ.lon);
+        if (dist <= 0.5) { // within 500m (threat circle)
+          const desc = String(occ.description || occ.type).toLowerCase();
+          if (desc.includes('alagamento') || desc.includes('flood') || desc.includes('bloqueio') || desc.includes('closed')) {
+            localAlertBoost += 45; // total blockage / severe risk
+          } else if (desc.includes('acidente') || desc.includes('accident') || desc.includes('congestion') || desc.includes('lentidão')) {
+            localAlertBoost += 30; // moderate slow down
+          } else {
+            localAlertBoost += 20; // light warning (pothole, attention)
+          }
+        } else if (dist <= 1.2) { // cautious notice zone within 1.2km
+          localAlertBoost += 10;
+        }
+      }
+
+      // Step C: Incorporate static route weather/hazard components
+      stops.forEach(s => {
+        if (s.activeOccurrences) {
+          s.activeOccurrences.forEach((o: any) => {
+            const dist = calculateDistanceInKm(pt[0], pt[1], s.lat, s.lon);
+            if (dist <= 0.8) {
+              localAlertBoost += 15;
+            }
+          });
+        }
+      });
+
+      const finalScore = baselineRisk + localAlertBoost;
+
+      if (finalScore > 40) {
+        return "#EF4444"; // Red (Crítico / Bloqueado / Perigo)
+      } else if (finalScore > 15) {
+        return "#F59E0B"; // Orange (Atenção / Lentidão)
+      } else {
+        return "#00D4AA"; // Green (Pista Livre / Seguro)
+      }
+    };
+
+    // Fast-clustering contiguous indices with equivalent colors to prevent React-Leaflet element explosion
+    const clusters: { coords: [number, number][]; color: string }[] = [];
+    let currentCoords: [number, number][] = [polyline[0]];
+    let currentColor = getPointColor(polyline[0], 0);
+
+    for (let i = 1; i < polyline.length; i++) {
+      const color = getPointColor(polyline[i], i);
+      if (color === currentColor) {
+        currentCoords.push(polyline[i]);
+      } else {
+        currentCoords.push(polyline[i]); // overlap coordinate to avoid cracks/holes on line styling
+        clusters.push({ coords: currentCoords, color: currentColor });
+        currentCoords = [polyline[i]];
+        currentColor = color;
+      }
+    }
+    if (currentCoords.length > 0) {
+      clusters.push({ coords: currentCoords, color: currentColor });
+    }
+
+    return clusters;
+  }, [polyline, stops, localOccurrences]);
+
+  // Real Geolocation Tracking System (updates only when the device actually changes geographical location)
   useEffect(() => {
     let watchId: number | undefined;
 
@@ -275,7 +423,7 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
             
             setCarCoords((prevCarCoords) => {
               if (prevCarCoords) {
-                // If the device doesn't provide heading (frequent on web), calculate it
+                // If heading is not provided by device sensors, calculate it from the path progress dynamically
                 const calculatedHeading = geoHeading !== null && !isNaN(geoHeading) 
                   ? geoHeading 
                   : getBearing(prevCarCoords[0], prevCarCoords[1], latitude, longitude);
@@ -286,18 +434,39 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
               return newCoords;
             });
 
-            if (speed !== null) {
+            // Dynamically calculate which segment color matches closest to current live latitude & longitude coordinates
+            let activeColor = "#00D4AA";
+            let minD = Infinity;
+            for (const seg of segments) {
+              for (const c of seg.coords) {
+                const d = Math.sqrt(Math.pow(c[0] - latitude, 2) + Math.pow(c[1] - longitude, 2));
+                if (d < minD) {
+                  minD = d;
+                  activeColor = seg.color;
+                }
+              }
+            }
+
+            // Display speed if provided, otherwise fallback to 0 or stationary values safely
+            if (speed !== null && speed > 0.1) {
               setSpeedHUD(Math.round(speed * 3.6));
             } else {
               setSpeedHUD(0);
             }
 
-            setInstructionHUD("Navegação ativa. Siga a rota sugerida.");
-            
+            // Provide contextually intelligent safety-critical responses to active segment profiles
+            if (activeColor === "#EF4444") {
+              setInstructionHUD("ALERTA CRÍTICO: Você está em um trecho de alto perigo na rota! Navegação de segurança ativa.");
+            } else if (activeColor === "#F59E0B") {
+              setInstructionHUD("Alerta Moderado: Trecho sob alerta moderado ou lentidão adiante.");
+            } else {
+              setInstructionHUD("Trecho livre seguro (Verde). Siga a rota sugerida.");
+            }
+
             // Evaluate proxemics of critical security or terrain risks
             const dangerousStopIdx = stops.findIndex(s => {
               const distance = Math.sqrt(Math.pow(s.lat - latitude, 2) + Math.pow(s.lon - longitude, 2));
-              return distance < 0.005; // ~500 meters roughly depending on latitude
+              return distance < 0.005; // ~500 meters
             });
             if (dangerousStopIdx !== -1 && stops[dangerousStopIdx].riskScore > 35) {
               setInstructionHUD(`Alerta de Risco: Zona crítica próxima com ${Math.round(stops[dangerousStopIdx].riskScore)}% de risco.`);
@@ -331,17 +500,7 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
         navigator.geolocation.clearWatch(watchId);
       }
     };
-  }, [isDriving, stops, polyline]);
-
-  // Handle segment analysis colored visual lines
-  const segments: { coords: [number, number][], color: string }[] = [];
-  if (polyline.length > 2) {
-      const splitPoint = Math.floor(polyline.length * 0.7);
-      segments.push({ coords: polyline.slice(0, splitPoint + 1), color: "#00D4AA" });
-      segments.push({ coords: polyline.slice(splitPoint), color: "#FFA500" }); // Risk alert color lane
-  } else {
-      segments.push({ coords: polyline, color: "#00D4AA" });
-  }
+  }, [isDriving, polyline, segments, stops]);
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
@@ -442,7 +601,7 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
              />
           ))}
 
-          {polyline.length >= 2 && (
+  {polyline.length >= 2 && (
             <>
               {/* Backlight Route Tube Glow */}
               <Polyline 
@@ -452,19 +611,51 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
                 opacity={0.15}
               />
               {/* Colored Segments Multi-Path */}
-              {segments.map((seg, i) => (
-                  <Polyline 
-                      key={i}
+              {segments.map((seg, i) => {
+                const isRed = seg.color === "#EF4444";
+                const isOrange = seg.color === "#F59E0B";
+                
+                // Set custom stroke dash style based on safety profile
+                let strokeDash = "10, 5"; 
+                if (isOrange) {
+                  strokeDash = "6, 6"; // tight attention dashes
+                } else if (isRed) {
+                  strokeDash = "15, 6"; // thick hazard blocks
+                }
+
+                const segmentClass = isRed 
+                  ? "route-line-animated-danger" 
+                  : isOrange 
+                  ? "route-line-animated-warning" 
+                  : "route-line-animated-safe";
+
+                return (
+                  <React.Fragment key={i}>
+                    {/* Secondary underlying warning backlight aura specifically for the red critical pieces */}
+                    {isRed && (
+                      <Polyline 
+                        positions={seg.coords}
+                        color="#EF4444"
+                        weight={10}
+                        opacity={0.35}
+                        lineJoin="round"
+                        lineCap="round"
+                        className="route-line-glow"
+                      />
+                    )}
+                    <Polyline 
                       positions={seg.coords} 
                       color={seg.color} 
-                      weight={4} 
+                      weight={5} 
                       opacity={1}
                       lineJoin="round"
                       lineCap="round"
-                      dashArray={seg.color === "#FFA500" ? "4, 4" : "10, 5"}
-                      className="route-line-animated"
-                  />
-              ))}
+                      dashArray={strokeDash}
+                      className={segmentClass}
+                    />
+                  </React.Fragment>
+                );
+              })}
             </>
           )}
           
@@ -499,7 +690,7 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
       )}
 
       {/* PERSISTENT MAP SYSTEM CONTROLS (Floating Overlays) */}
-      <div className="absolute bottom-28 md:bottom-24 right-4 z-[1001] flex flex-col gap-2.5">
+      <div className={`absolute ${stops.length > 0 && !isNavigationScreen ? 'bottom-[185px] md:bottom-24' : 'bottom-28 md:bottom-24'} right-4 z-[1001] flex flex-col gap-2.5`}>
         
         {/* Toggle Map Orientation Mode */}
         <button
@@ -591,13 +782,46 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
           }
         }
 
-        .route-line-animated {
+        /* High Resolution Route Performance Segment Classes */
+        .route-line-animated-safe {
             stroke-dashoffset: 0;
-            animation: dash 35s linear infinite;
+            animation: dashSafe 16s linear infinite;
         }
-        @keyframes dash {
+        @keyframes dashSafe {
             from { stroke-dashoffset: 1000; }
             to { stroke-dashoffset: 0; }
+        }
+
+        .route-line-animated-warning {
+            stroke-dashoffset: 0;
+            animation: dashWarning 42s linear infinite;
+        }
+        @keyframes dashWarning {
+            from { stroke-dashoffset: 1000; }
+            to { stroke-dashoffset: 0; }
+        }
+
+        .route-line-animated-danger {
+            stroke-dashoffset: 0;
+            animation: dashDanger 70s linear infinite;
+        }
+        @keyframes dashDanger {
+            from { stroke-dashoffset: 0; }
+            to { stroke-dashoffset: 1000; } /* Flow backward simulating severe backlog */
+        }
+
+        .route-line-glow {
+          animation: pulseRouteGlow 1.8s ease-in-out infinite alternate;
+        }
+        @keyframes pulseRouteGlow {
+          from {
+            opacity: 0.18;
+            stroke-width: 8px;
+          }
+          to {
+            opacity: 0.52;
+            stroke-width: 12px;
+          }
         }
 
         /* Essential Leaflet 3D Tilt Overrides for Mapbox/Leaflet tilts */

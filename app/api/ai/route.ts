@@ -144,7 +144,11 @@ IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`,
     };
 
     let result;
-    const modelSequence = ["gemini-2.5-flash"];
+    const modelSequence = [
+      "gemini-3.5-flash",
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-flash"
+    ];
     let finalError = "";
 
     for (const modelName of modelSequence) {

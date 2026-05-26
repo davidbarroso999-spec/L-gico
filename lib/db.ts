@@ -7,6 +7,9 @@ export interface Route {
   sequence: any[];
   score: number;
   status: 'pending' | 'completed' | 'failed';
+  deliveryPhoto?: string;
+  deliveryNotes?: string;
+  completedAt?: Date;
 }
 
 export interface Occurrence {

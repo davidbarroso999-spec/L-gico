@@ -195,7 +195,7 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       mapboxQs.append('lon', lon.toString());
     }
 
-    const googleQs = new URLSearchParams({ input: composedQuery });
+    const googleQs = new URLSearchParams({ input: text });
     if (lat && lon) {
       googleQs.append('lat', lat.toString());
       googleQs.append('lon', lon.toString());
@@ -238,15 +238,24 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         const isPOI = p.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'shopping_mall', 'food', 'store'].includes(t));
         const name = p.displayName?.text || '';
         const context = p.formattedAddress || '';
+        
+        let label = '';
+        if (isPOI) {
+          label = `${name}${context ? `, ${context}` : ''}`;
+        } else {
+          label = context || name;
+        }
+
         addResult({
           lat: p.location?.latitude || 0,
           lon: p.location?.longitude || 0,
           name: name,
           context: context,
-          label: `${name}${context ? `, ${context}` : ''}`,
+          label: label,
           confidenceScore: 100, // Highest priority
           source: 'google',
-          type: isPOI ? 'poi' : 'address'
+          type: isPOI ? 'poi' : 'address',
+          cep: p.cep
         });
       });
     }
@@ -544,7 +553,8 @@ export async function preciseGeocode(address: string): Promise<GeocodeResult> {
           label: address,
           confidenceScore: 100,
           source: 'google',
-          type: isPOI ? 'poi' : 'address'
+          type: isPOI ? 'poi' : 'address',
+          cep: item.cep
         };
       }
     }

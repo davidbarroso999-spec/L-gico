@@ -30,7 +30,9 @@ import {
   Database,
   Server,
   Terminal,
-  HelpCircle
+  HelpCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
@@ -100,6 +102,12 @@ export default function LogixApp() {
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
   const [addresses, setAddresses] = useState<string[]>(['']);
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
+  
+  // Roteiro de Apresentação / Simulador de Fluxo
+  const [showDemoAssistant, setShowDemoAssistant] = useState(false);
+  const [demoStep, setDemoStep] = useState(0);
+  const [demoMinimized, setDemoMinimized] = useState(false);
+
   const [options, setOptions] = useState<RouteOptions>({
     priority: 'balanced',
     vehicle: 'van',
@@ -131,6 +139,88 @@ export default function LogixApp() {
   const [navIndex, setNavIndex] = useState(0);
   const [isReporting, setIsReporting] = useState(false);
   const [reportType, setReportType] = useState<string>('');
+
+  // Delivery proof modal and camera states
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
+  const [deliveryPhoto, setDeliveryPhoto] = useState<string | null>(null);
+  const [deliveryNotes, setDeliveryNotes] = useState<string>('');
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const [webcamError, setWebcamError] = useState<string | null>(null);
+  
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const webcamStreamRef = React.useRef<MediaStream | null>(null);
+
+  const startWebcam = async () => {
+    setWebcamError(null);
+    setDeliveryPhoto(null);
+    setIsWebcamActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }, // Back camera preferred on mobile
+        audio: false
+      });
+      webcamStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(err => console.error("Error playing video:", err));
+      }
+    } catch (err: any) {
+      console.warn("Could not access camera device:", err);
+      setWebcamError("Não foi possível acessar a câmera do dispositivo. Por favor, tire a foto clicando em fazer upload.");
+      setIsWebcamActive(false);
+    }
+  };
+
+  const stopWebcam = () => {
+    if (webcamStreamRef.current) {
+      webcamStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
+      webcamStreamRef.current = null;
+    }
+    setIsWebcamActive(false);
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current) {
+      try {
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setDeliveryPhoto(dataUrl);
+          stopWebcam();
+        }
+      } catch (err) {
+        console.error("Error capturing photo:", err);
+      }
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setDeliveryPhoto(reader.result as string);
+        stopWebcam();
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      // Cleanup webcam stream on unmount
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
 
   // Autocomplete states
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -204,11 +294,12 @@ export default function LogixApp() {
   };
   const removeAddress = (idx: number) => setAddresses(addresses.filter((_, i) => i !== idx));
 
-  const runOptimization = async () => {
+  const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent) => {
     // Map timeWindows correctly to validAddresses indices to prevent offset bugs
+    const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
     let validCount = 0;
-    const validAddresses = addresses.filter((a, i) => {
+    const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
       if (isValid) {
         const win = timeWindows[i];
@@ -252,6 +343,90 @@ export default function LogixApp() {
       setApiWarning(`Falha na rota: ${errMsg}${errStack}`);
       setCurrentScreen('home');
     }
+  };
+
+  const renderSuggestionsDropdown = (idx: number) => {
+    if (!showSuggestions || activeSuggestionIdx !== idx) return null;
+    return (
+      <div 
+        className="absolute left-0 right-0 z-[5000] mt-1 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[300px] flex flex-col w-full"
+      >
+        <div className="overflow-y-auto custom-scrollbar flex-1">
+          {suggestions.length > 0 ? (
+            suggestions.map((s, sIdx) => (
+              <button
+                key={sIdx}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                }}
+                onClick={async () => {
+                  updateAddress(idx, s.label);
+                  setShowSuggestions(false);
+                  setSuggestions([]);
+                  setActiveSuggestionIdx(null);
+                  
+                  if (s.lat && s.lon) {
+                    setResolvedCoords(prev => ({
+                      ...prev,
+                      [s.label]: { lat: s.lat, lon: s.lon }
+                    }));
+                  } else {
+                    try {
+                      const geo = await preciseGeocode(s.label);
+                      if (geo && geo.lat && geo.lon) {
+                        setResolvedCoords(prev => ({
+                          ...prev,
+                          [s.label]: { lat: geo.lat, lon: geo.lon }
+                        }));
+                      }
+                    } catch(e) {}
+                  }
+                  
+                  const nextIdx = idx + 1;
+                  if (idx === 0 && addresses.length === 1) {
+                    setAddresses([...addresses, '']);
+                  }
+                  setTimeout(() => inputRefs.current[nextIdx]?.focus(), 150);
+                }}
+                className="w-full px-4 py-3.5 text-left hover:bg-slate-800 border-b border-slate-800 last:border-0 group transition-colors flex items-center justify-between"
+              >
+                <div className="flex-1 min-w-0 pr-4 flex items-start gap-2.5">
+                  <div className="mt-0.5 shrink-0">
+                    {(() => {
+                      const iconObj = getSuggestionIconObj(s.name, s.type);
+                      const IconComp = iconObj.icon;
+                      return (
+                        <div className={`p-1.5 rounded-lg ${iconObj.bg}`}>
+                          <IconComp className="w-3.5 h-3.5" />
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate">{s.name}</p>
+                    <p className="text-[10px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.context || s.label}</p>
+                  </div>
+                </div>
+                {s.confidenceScore && (
+                  <div className="flex flex-col items-end shrink-0 gap-0.5">
+                    <div className={`text-[8.5px] font-black px-1.5 py-0.5 rounded shadow-sm ${s.confidenceScore >= 80 ? 'bg-tech text-slate-900' : s.confidenceScore >= 50 ? 'bg-warning text-slate-900' : 'bg-red-500 text-white'}`}>
+                      {Math.max(0, Math.round(s.confidenceScore))}%
+                    </div>
+                  </div>
+                )}
+              </button>
+            ))
+          ) : (
+            <div className="p-6 text-center bg-slate-900/50">
+              <p className="text-xs font-bold text-slate-400 mb-1">Local não encontrado</p>
+              <p className="text-[9px] text-slate-500 max-w-[200px] mx-auto">
+                Busque pelo endereço completo.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   if (isMobile === undefined) {
@@ -343,9 +518,10 @@ export default function LogixApp() {
           {currentScreen === 'home' && (
             <motion.div
               key="home-ui"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className={`h-full w-full flex flex-col items-center max-w-4xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
             >
               <div className="w-full flex-shrink-0 flex flex-col items-center mb-12">
@@ -360,7 +536,7 @@ export default function LogixApp() {
               </div>
 
               <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 mb-12">
-                <div className="glass p-8 rounded-[40px] shadow-2xl relative h-fit">
+                <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit">
                   <div className="absolute top-0 right-0 p-4 opacity-5">
                     <MapIcon className="w-32 h-32" />
                   </div>
@@ -390,6 +566,7 @@ export default function LogixApp() {
                               className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10"
                             />
                             <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
+                            {renderSuggestionsDropdown(0)}
                           </div>
                       </div>
                     </div>
@@ -418,6 +595,7 @@ export default function LogixApp() {
                                     className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10"
                                   />
                                   <Search className="absolute right-3 top-3.5 w-4 h-4 text-slate-600" />
+                                  {renderSuggestionsDropdown(realIdx)}
                                 </div>
                                 <button 
                                   onClick={() => removeAddress(realIdx)}
@@ -481,6 +659,7 @@ export default function LogixApp() {
                               className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10"
                             />
                             <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
+                            {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
                         </div>
                         {/* Janela de Entrega do Destino */}
@@ -513,120 +692,6 @@ export default function LogixApp() {
                         </div>
                       </div>
                     )}
-
-                    {/* Suggestions Content Overlay */}
-                    <AnimatePresence>
-                      {showSuggestions && activeSuggestionIdx !== null && (
-                        <motion.div 
-                          className="absolute left-0 right-0 z-[5000] mt-2 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[400px] flex flex-col"
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                        >
-                          <div className="overflow-y-auto custom-scrollbar flex-1">
-                            {suggestions.length > 0 ? (
-                              suggestions.map((s, sIdx) => (
-                                <button
-                                  key={sIdx}
-                                  onMouseDown={(e) => {
-                                    // Evita o fechamento prematuro no onBlur do input (Causa de race conditions)
-                                    e.preventDefault();
-                                  }}
-                                  onClick={async () => {
-                                    const currentIdx = activeSuggestionIdx!;
-                                    updateAddress(currentIdx, s.label);
-                                    setShowSuggestions(false);
-                                    setSuggestions([]);
-                                    setActiveSuggestionIdx(null);
-                                    
-                                    if (s.lat && s.lon) {
-                                      setResolvedCoords(prev => ({
-                                        ...prev,
-                                        [s.label]: { lat: s.lat, lon: s.lon }
-                                      }));
-                                    } else {
-                                      // Search precise geo immediately if coordinates are placeholders
-                                      try {
-                                        const geo = await preciseGeocode(s.label);
-                                        if (geo && geo.lat && geo.lon) {
-                                          setResolvedCoords(prev => ({
-                                            ...prev,
-                                            [s.label]: { lat: geo.lat, lon: geo.lon }
-                                          }));
-                                        }
-                                      } catch(e) {}
-                                    }
-                                    
-                                    // Jump to next field or create one
-                                    const nextIdx = currentIdx + 1;
-                                    
-                                    if (currentIdx === 0 && addresses.length === 1) {
-                                      setAddresses([...addresses, '']);
-                                    }
-
-                                    setTimeout(() => inputRefs.current[nextIdx]?.focus(), 150);
-                                  }}
-                                  className="w-full px-6 py-4 text-left hover:bg-slate-800 border-b border-slate-800 last:border-0 group transition-colors flex items-center justify-between"
-                                >
-                                  <div className="flex-1 min-w-0 pr-4 flex items-start gap-3">
-                                    <div className="mt-1 shrink-0">
-                                      {(() => {
-                                        const iconObj = getSuggestionIconObj(s.name, s.type);
-                                        const IconComp = iconObj.icon;
-                                        return (
-                                          <div className={`p-2 rounded-xl ${iconObj.bg}`}>
-                                            <IconComp className="w-4 h-4" />
-                                          </div>
-                                        );
-                                      })()}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-bold text-slate-100 group-hover:text-tech transition-colors truncate">{s.name}</p>
-                                      <p className="text-[11px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.context || s.label}</p>
-                                      {s.cep && (
-                                        <div className="mt-1 flex items-center">
-                                          <span className="font-mono text-[9px] text-slate-500 bg-slate-950/40 border border-slate-800/40 px-1.5 py-0.5 rounded tracking-widest flex items-center gap-1.5 group-hover:text-slate-400 group-hover:border-slate-700/40 transition-colors">
-                                            <span className="text-[7px] uppercase font-black tracking-widest text-slate-600">CEP</span>
-                                            {s.cep}
-                                          </span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {s.confidenceScore && (
-                                    <div className="flex flex-col items-end shrink-0 gap-1">
-                                      <div className={`text-[10px] font-black px-2 py-1 rounded-md shadow-sm ${s.confidenceScore >= 80 ? 'bg-tech text-slate-900' : s.confidenceScore >= 50 ? 'bg-warning text-slate-900' : 'bg-red-500 text-white'}`}>
-                                        {Math.max(0, Math.round(s.confidenceScore))}% de Precisão
-                                      </div>
-                                      {s.source && (
-                                        <span className="text-[8px] uppercase font-bold text-slate-500 tracking-wider">
-                                          FONTE: {s.source}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                </button>
-                              ))
-                            ) : (
-                              <div className="p-8 text-center bg-slate-900/50">
-                                <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                                  <Search className="w-5 h-5 text-slate-600" />
-                                </div>
-                                <p className="text-sm font-bold text-slate-400 mb-2">Local não encontrado</p>
-                                <p className="text-[10px] text-slate-500 leading-relaxed max-w-[200px] mx-auto">
-                                  Busque por nomes de empresas, comércios, praças ou o endereço completo com número.
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                          {suggestions.length > 0 && (
-                            <div className="px-4 py-2 bg-slate-950/50 border-t border-slate-800 text-center">
-                              <p className="text-[9px] text-slate-600 uppercase tracking-widest font-bold">Use Scroll para ver mais resultados</p>
-                            </div>
-                          )}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </div>
 
                   <div className="flex flex-col gap-3">
@@ -728,9 +793,10 @@ export default function LogixApp() {
           {currentScreen === 'loading' && (
             <motion.div
               key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
               className="h-full flex flex-col items-center justify-center"
             >
               <div className="relative w-32 h-32 mb-8">
@@ -755,8 +821,10 @@ export default function LogixApp() {
           {currentScreen === 'result' && routeResult && (
             <motion.div
               key="result"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
+              initial={{ opacity: 0, y: 25 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -25 }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
@@ -778,8 +846,10 @@ export default function LogixApp() {
           {currentScreen === 'navigation' && routeResult && (
             <motion.div
               key="navigation"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
+              initial={{ opacity: 0, y: 25 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -25 }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
@@ -800,6 +870,202 @@ export default function LogixApp() {
                      </motion.div>
                    )}
                  </AnimatePresence>
+
+                {/* Delivery Photo Modal (Etapa Obrigatória ao Finalizar Rota) */}
+                <AnimatePresence>
+                  {showDeliveryModal && (
+                    <motion.div 
+                      initial={{ opacity: 0 }} 
+                      animate={{ opacity: 1 }} 
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 z-[2000] glass flex items-center justify-center p-4 md:p-6"
+                    >
+                      <motion.div 
+                        initial={{ scale: 0.95, y: 15 }} 
+                        animate={{ scale: 1, y: 0 }}
+                        exit={{ scale: 0.95, y: 15 }}
+                        className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar"
+                      >
+                        <div className="flex justify-between items-center mb-4">
+                          <div>
+                            <h2 className="text-xl md:text-2xl font-black text-white flex items-center gap-2">
+                              <Camera className="w-5 md:w-6 h-5 md:h-6 text-tech" />
+                              Comprovar Entrega
+                            </h2>
+                            <p className="text-xs text-slate-400 mt-1">O motorista precisa registrar o pacote entregue.</p>
+                          </div>
+                          <button 
+                            onClick={() => {
+                              stopWebcam();
+                              setShowDeliveryModal(false);
+                            }} 
+                            className="text-slate-405 hover:text-white transition-colors"
+                          >
+                            <XCircle className="w-6 h-6" />
+                          </button>
+                        </div>
+
+                        {/* Camera Viewfinder / Preview Section */}
+                        <div className="relative aspect-video w-full bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex flex-col items-center justify-center mb-4">
+                          {deliveryPhoto ? (
+                            <div className="relative w-full h-full">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img 
+                                src={deliveryPhoto} 
+                                alt="Comprovante de entrega" 
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute top-3 right-3 bg-tech text-slate-950 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-lg">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Foto Anexada
+                              </div>
+                            </div>
+                          ) : isWebcamActive ? (
+                            <div className="relative w-full h-full bg-black">
+                              <video 
+                                ref={videoRef} 
+                                autoPlay 
+                                playsInline 
+                                muted 
+                                className="w-full h-full object-cover"
+                              />
+                              {/* Camera design decorations */}
+                              <div className="absolute inset-4 border border-white/10 pointer-events-none rounded-lg flex items-center justify-center">
+                                <div className="w-8 h-8 border-t-2 border-l-2 border-tech absolute top-0 left-0"></div>
+                                <div className="w-8 h-8 border-t-2 border-r-2 border-tech absolute top-0 right-0"></div>
+                                <div className="w-8 h-8 border-b-2 border-l-2 border-tech absolute bottom-0 left-0"></div>
+                                <div className="w-8 h-8 border-b-2 border-r-2 border-tech absolute bottom-0 right-0"></div>
+                                <div className="text-[10px] text-white/40 font-mono tracking-widest uppercase">ENQUADRE O PACOTE</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="p-6 text-center flex flex-col items-center justify-center gap-3">
+                              <Camera className="w-12 h-12 text-slate-700" />
+                              {webcamError ? (
+                                <p className="text-xs text-amber-500 max-w-[280px] leading-relaxed">{webcamError}</p>
+                              ) : (
+                                <p className="text-xs text-slate-500 max-w-[250px] leading-relaxed">Câmera desativada ou indisponível.</p>
+                              )}
+                              <button
+                                type="button"
+                                onClick={startWebcam}
+                                className="px-4 py-2 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-750 text-xs text-white font-bold transition-all mt-1"
+                              >
+                                Ativar Câmera Live
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Capture and Upload Actions */}
+                        <div className="flex flex-col gap-2.5 mb-5 font-sans">
+                          {isWebcamActive && !deliveryPhoto && (
+                            <button
+                              type="button"
+                              onClick={capturePhoto}
+                              className="w-full bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_4px_16px_rgba(0,212,170,0.35)] hover:brightness-110 active:scale-95 transition-all text-xs uppercase cursor-pointer"
+                            >
+                              <Camera className="w-4 h-4 text-slate-950" />
+                              Capturar Foto do Pacote
+                            </button>
+                          )}
+
+                          {deliveryPhoto && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeliveryPhoto(null);
+                                startWebcam();
+                              }}
+                              className="w-full bg-slate-800 hover:bg-slate-750 text-white font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 border border-slate-700 transition-all text-xs uppercase cursor-pointer"
+                            >
+                              <Camera className="w-4 h-4 text-tech" />
+                              Tirar Outra Foto
+                            </button>
+                          )}
+
+                          {/* Hidden input file connector */}
+                          <div className="w-full">
+                            <label className="w-full flex items-center justify-center gap-2 py-3 border border-dashed border-slate-800 rounded-2xl cursor-pointer text-slate-400 hover:text-tech hover:border-tech/40 hover:bg-tech/5 transition-all text-xs font-semibold uppercase">
+                              <span className="truncate">{deliveryPhoto ? "Substituir com arquivo" : "Fazer Upload / Abrir Câmera Padrão"}</span>
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                onChange={handleFileUpload} 
+                                className="hidden" 
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Observation / Notes panel */}
+                        <div className="mb-6 flex flex-col gap-2 font-sans">
+                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Anotações / Observações</label>
+                          <textarea
+                            value={deliveryNotes}
+                            onChange={(e) => setDeliveryNotes(e.target.value)}
+                            placeholder="ex: Carga entregue nas mãos da recepcionista Maria."
+                            className="w-full h-20 px-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-xs text-white placeholder-slate-600 outline-none focus:border-tech/40 transition-colors resize-none font-sans"
+                          />
+                        </div>
+
+                        {/* Mandatory step disclaimer */}
+                        {!deliveryPhoto && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-3 rounded-2xl flex items-center gap-2 mb-5">
+                            <AlertOctagon className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                            <span className="text-[10px] font-semibold leading-relaxed">Etapa Obrigatória: Registre ou envie uma foto para comprovar a conclusão com segurança.</span>
+                          </div>
+                        )}
+
+                        {/* Main Delivery Confirm Actions */}
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              stopWebcam();
+                              setShowDeliveryModal(false);
+                            }}
+                            className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-750 border border-slate-750 text-xs font-black text-white uppercase rounded-2xl transition-all h-12"
+                          >
+                            Cancelar
+                          </button>
+                          
+                          <button
+                            type="button"
+                            disabled={!deliveryPhoto}
+                            onClick={async () => {
+                              if (!deliveryPhoto) return;
+                              try {
+                                // Finalize route in IndexedDB with safety photo proof
+                                const latest = await db.routes.toCollection().last();
+                                if (latest?.id) {
+                                  await db.routes.update(latest.id, { 
+                                    status: 'completed',
+                                    deliveryPhoto: deliveryPhoto,
+                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
+                                    completedAt: new Date()
+                                  });
+                                }
+                              } catch (err) {
+                                console.error("Erro salvando foto no Dexie:", err);
+                              }
+                              
+                              // Close webcam and return
+                              stopWebcam();
+                              setShowDeliveryModal(false);
+                              setNavIndex(0);
+                              setCurrentScreen('dashboard');
+                            }}
+                            className="flex-1 py-3.5 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-1 shadow-lg bg-tech text-slate-950 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer h-12"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Finalizar
+                          </button>
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                  <div className="absolute top-10 md:top-6 left-1/2 -translate-x-1/2 w-full max-w-md z-[1000] px-4 flex flex-col gap-2">
                     <button 
@@ -850,13 +1116,11 @@ export default function LogixApp() {
                         if (navIndex < routeResult.sequence.length - 1) {
                           setNavIndex(navIndex + 1);
                         } else {
-                          // Finalize route in DB
-                          const latest = await db.routes.toCollection().last();
-                          if (latest?.id) {
-                            await db.routes.update(latest.id, { status: 'completed' });
-                          }
-                          setCurrentScreen('dashboard');
-                          setNavIndex(0);
+                          // Abre a etapa obrigatória de comprovante de entrega (foto) ao finalizar a rota
+                          setShowDeliveryModal(true);
+                          setDeliveryPhoto(null);
+                          setDeliveryNotes('');
+                          startWebcam();
                         }
                       }}
                       className={`${navIndex === 0 ? 'w-48 h-16 rounded-full' : 'w-20 h-20 md:w-24 md:h-24 rounded-full'} bg-tech text-slate-950 flex ${navIndex === 0 ? 'flex-row' : 'flex-col'} items-center justify-center shadow-[0_10px_30px_rgba(0,212,170,0.4)] active:scale-95 transition-all font-black text-[9px] md:text-[10px] text-center hover:brightness-110`}
@@ -948,17 +1212,86 @@ export default function LogixApp() {
           )}
 
           {currentScreen === 'dashboard' && (
-            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full w-full">
+            <motion.div 
+              key="dashboard" 
+              initial={{ opacity: 0, y: 20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+              className="h-full w-full"
+            >
               <KpiDashboard />
             </motion.div>
           )}
 
           {currentScreen === 'settings' && (
-            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 py-6 pb-32' : 'p-12'}`}>
+            <motion.div 
+              key="settings" 
+              initial={{ opacity: 0, y: 20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 py-6 pb-32' : 'p-12'}`}
+            >
               <div className="max-w-2xl mx-auto w-full">
                 <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
                 
                 <div className="space-y-8">
+                  {/* 🔮 APRESENTAÇÃO TÉCNICA E TUTORIAL GUIADO */}
+                  <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-tech/35 p-6 sm:p-8 rounded-[32px] shadow-[0_0_30px_rgba(0,212,170,0.1)] relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
+                    
+                    <div className="flex items-start gap-4 mb-5">
+                      <div className="p-3 bg-tech/10 rounded-2xl text-tech shrink-0 mt-1">
+                        <Sparkles className="w-6 h-6 animate-pulse" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black tracking-widest text-tech uppercase">Recurso de Apresentação & TCC</span>
+                        <h2 className="text-xl font-bold font-display text-white mt-0.5">Roteiro Demonstrativo e Histórias de Uso</h2>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Apresente o aplicativo Logix Route com total autoridade e clareza.
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-3.5 text-xs text-slate-300 leading-relaxed mb-6">
+                      <p>
+                        Este roteiro de demonstração preenche e executa um fluxo de uso completo e realista com dados de <strong>Manaus-AM</strong>. Ele guiará você por todas as telas do aplicativo, explicando o que cada funcionalidade faz e sugerindo o melhor <em>pitch</em> comercial para investidores ou professores:
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-400 font-sans mt-2">
+                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
+                          <span className="text-tech font-bold">1. Input & IA</span>
+                          <span>Paradas e Prompts Gemini</span>
+                        </div>
+                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
+                          <span className="text-tech font-bold">2. Custos & Clima</span>
+                          <span>Combustíveis e Meteorologia</span>
+                        </div>
+                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
+                          <span className="text-tech font-bold">3. Telemetria GPS</span>
+                          <span>Ocorrências IndexedDB</span>
+                        </div>
+                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
+                          <span className="text-tech font-bold">4. Prova de Entrega</span>
+                          <span>Comprovante e Foto Digital</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <button
+                      onClick={() => {
+                        setShowDemoAssistant(true);
+                        setDemoStep(0);
+                        setDemoMinimized(false);
+                        setCurrentScreen('home'); // Go to home to start the tour from the beginning
+                      }}
+                      className="w-full sm:w-auto bg-tech text-slate-950 font-black text-xs px-6 py-4 rounded-2xl uppercase tracking-wider hover:brightness-110 hover:shadow-[0_0_15px_rgba(0,212,170,0.3)] active:scale-95 transition-all text-center cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      Iniciar Roteiro & Tutorial Passo a Passo
+                    </button>
+                  </div>
+
                   <div className="glass p-8 rounded-[32px] border-tech/10">
                     <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
                       <Zap className="w-5 h-5 text-tech" />
@@ -1026,6 +1359,342 @@ export default function LogixApp() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* 🔮 ASSISTENTE INTERATIVO DE APRESENTAÇÃO / TUTORIAL DE PITCH */}
+      {showDemoAssistant && demoMinimized && (
+        <motion.button
+          initial={{ opacity: 0, scale: 0.8, y: 30 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          onClick={() => setDemoMinimized(false)}
+          className="fixed bottom-6 right-6 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(0,212,170,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
+          title="Retomar Tutorial"
+        >
+          <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
+          <span className="text-xs tracking-wide text-white/95">Retomar Apresentação ({demoStep + 1}/6)</span>
+          <div className="bg-tech text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-mono">
+            {demoStep + 1}
+          </div>
+        </motion.button>
+      )}
+
+      {showDemoAssistant && !demoMinimized && (
+        <motion.div
+          id="panel-demo-assistant"
+          initial={{ opacity: 0, y: 30, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          className="fixed bottom-6 right-6 md:bottom-8 md:right-8 z-[10000] max-w-sm sm:max-w-md w-[calc(100vw-32px)] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(0,212,170,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
+        >
+          <div className="flex justify-between items-start border-b border-white/10 pb-2.5">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-tech animate-bounce shrink-0" />
+              <div>
+                <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Tutorial Guiado</span>
+                <span className="text-xs text-slate-400 font-bold">Apresentação ao Vivo</span>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setDemoMinimized(true)}
+                className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
+                title="Minimizar (Ocultar para ver a tela)"
+              >
+                <EyeOff className="w-4 h-4 text-slate-350" />
+              </button>
+              <button
+                onClick={() => {
+                  setShowDemoAssistant(false);
+                  setDemoStep(0);
+                }}
+                className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
+                title="Encerrar Demo"
+              >
+                <XCircle className="w-4 h-4 text-slate-350" />
+              </button>
+            </div>
+          </div>
+
+          {demoStep === 0 && (
+            <div className="flex flex-col gap-3">
+              <h3 className="text-sm font-black text-white">Bem-vindo ao Tour de Apresentação! 🎓</h3>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                Este assistente de pitch guiará você por um <strong>fluxo de uso do Logix Route</strong>. Cada tela será explicada para que você demonstre as competências logísticas e de monitoramento ativo para a banca.
+              </p>
+              <div className="bg-slate-900/60 p-2.5 rounded-xl border border-tech/10 text-[10px] text-slate-300">
+                <p className="font-bold text-tech mb-0.5">💡 Cruze Climático e Hidrológico do Amazonas:</p>
+                Roteamento autônomo baseado em janelas de tempo, cálculo de diesel e <strong>prevenção ativa de Cheias (Dez-Jun) ou Secas (Jul-Nov) no Amazonas</strong>.
+              </div>
+              <button
+                onClick={() => {
+                  setDemoStep(1);
+                  setCurrentScreen('home');
+                  setAddresses([
+                    'CEASA, Manaus, AM',
+                    'Centro, Manaus, AM',
+                    'Adrianópolis, Manaus, AM',
+                    'Compensa, Manaus, AM',
+                    'BR-319, Manaus, AM'
+                  ]);
+                  setTimeWindows({
+                    1: { start: '08:00', end: '11:00' },
+                    2: { start: '13:00', end: '15:30' }
+                  });
+                  setOptions({
+                    priority: 'safety',
+                    vehicle: 'truck',
+                    avoidDirt: true,
+                    avoidFloods: true,
+                    avoidHills: false
+                  });
+                  setAiCustomPrompt('Evitar asfalto submerso próximo ao porto devido ao período de cheias fluviais amazônicas.');
+                }}
+                className="w-full mt-1 bg-tech text-slate-950 font-black text-[11px] py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+              >
+                Carregar Cenário & Avançar
+              </button>
+            </div>
+          )}
+
+          {demoStep === 1 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 1 de 5</span>
+                <span className="text-tech">Torre de Planejamento</span>
+              </div>
+              <h4 className="text-xs font-bold text-white">📍 Entrada de Endereços & Diretivas de IA</h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                Estamos na <strong>Tela Inicial (Home)</strong>. É aqui que o operador de tráfego central inicia o dia:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>📝 Alvos Estratégicos:</strong> Foram carregados 5 pontos reais de Manaus (incluindo acessos de Porto e Rodovias).</p>
+                <p><strong>🌧️ Cruze Hidrológico:</strong> O motor lê a latitude/longitude do Amazonas para cruzar com a data atual, alertando sobre inundações ou estiagens severas.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    setDemoStep(0);
+                  }}
+                  className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={async () => {
+                    await runOptimization([
+                      'CEASA, Manaus, AM',
+                      'Centro, Manaus, AM',
+                      'Adrianópolis, Manaus, AM',
+                      'Compensa, Manaus, AM',
+                      'BR-319, Manaus, AM'
+                    ]);
+                    setDemoStep(2);
+                  }}
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans text-ellipsis overflow-hidden whitespace-nowrap"
+                >
+                  Otimizar Rota
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 2 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 2 de 5</span>
+                <span className="text-tech">Análise de Custos & Clima</span>
+              </div>
+              <h4 className="text-xs font-bold text-white">📈 Diagnósticos Avançados e Custos</h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                O traçado ideal foi calculado e ordenado para maximizar a economia e evitar áreas de risco!
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>🌊 Hidrologia Ativa:</strong> Role o painel lateral de resultados. Cada parada associada a zonas de igarapés ou rios da região (Centro, Compensa, CEASA) possui um alerta dinâmico histórico.</p>
+                <p><strong>🧠 Brain AI (Gemini):</strong> O relatório detalhado ao final incorpora esses dados para calibrar o score de integridade da carga.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    setDemoStep(1);
+                    setCurrentScreen('home');
+                  }}
+                  className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={() => {
+                    setNavIndex(0);
+                    setCurrentScreen('navigation');
+                    setDemoStep(3);
+                  }}
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  Iniciar GPS de Viagem
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 3 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 3 de 5</span>
+                <span className="text-tech">Cockpit Operacional</span>
+              </div>
+              <h4 className="text-xs font-bold text-white">🚚 GPS Ativo e Ocorrências Offline</h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                Esta é a interface que fica no celular ou tablet do motorista dentro da cabine do veículo:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>🔊 Voz & Sentido:</strong> Fornece orientações curva-a-curva com assistência de fala.</p>
+                <p><strong>⚠️ Registro de Sinistros Offline:</strong> O motorista relata desmoronamento fluvial ou via alagada. Se o celular perder o sinal, os dados são salvos localmente via IndexedDB!</p>
+              </div>
+              <div className="flex flex-col gap-2 mt-1">
+                <button
+                  onClick={async () => {
+                    try {
+                      await db.occurrences.add({
+                        type: 'flood',
+                        description: 'refluxo pluvial severo na orla do Centro de Manaus',
+                        lat: -3.134,
+                        lon: -60.024,
+                        timestamp: new Date(),
+                        synced: false
+                      });
+                      setApiWarning("OCORRÊNCIA REGISTRADA: Alerta de transbordamento salvo localmente e reportado à central!");
+                    } catch(e){}
+                  }}
+                  className="w-full bg-slate-900/80 border border-alert/20 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
+                >
+                  ⚠️ Reportar Alagamento Sazonal (Sinistro Local)
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setDemoStep(2);
+                      setCurrentScreen('result');
+                    }}
+                    className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNavIndex(4); // Advance to final address
+                      setDemoStep(4);
+                    }}
+                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                  >
+                    Ir ao Destino Final
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 4 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 4 de 5</span>
+                <span className="text-tech">Prova Eletrônica</span>
+              </div>
+              <h4 className="text-xs font-bold text-white">📸 Comprovante de Entrega Seguro (POD)</h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                Chegamos ao último cliente! Para auditar juridicamente a entrega e comprovar o recebimento:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>📊 Geolocalização Criptografada:</strong> Registra as coordenadas GPS de onde a foto foi tirada para evitar fraudes logísticas de carga.</p>
+              </div>
+              <div className="flex flex-col gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">LOGIX ROUTE - COMPROVANTE SEGURO</text></svg>`;
+                    setDeliveryPhoto(boxSvg);
+                    setDeliveryNotes("Insumos biológicos em temperatura regulada entregues com perfeição no terminal.");
+                    setShowDeliveryModal(true);
+                  }}
+                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
+                >
+                  📷 Simular Captação de Foto POD
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setDemoStep(3);
+                      setNavIndex(0);
+                    }}
+                    className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">LOGIX ROUTE - COMPROVANTE SEGURO</text></svg>`;
+                      try {
+                        const finalAddresses = [
+                          'CEASA, Manaus, AM',
+                          'Centro, Manaus, AM',
+                          'Adrianópolis, Manaus, AM',
+                          'Compensa, Manaus, AM',
+                          'BR-319, Manaus, AM'
+                        ];
+                        await db.routes.add({
+                          date: new Date(),
+                          addresses: finalAddresses,
+                          sequence: finalAddresses.map((a, i) => ({ address: a, index: i })),
+                          score: 95,
+                          status: 'completed',
+                          deliveryPhoto: boxSvg,
+                          deliveryNotes: 'Entrega efetuada com sucesso sob inspeção em orla fluviométrica.',
+                          completedAt: new Date()
+                        });
+                      } catch (err) {
+                        console.warn(err);
+                      }
+                      stopWebcam();
+                      setShowDeliveryModal(false);
+                      setNavIndex(0);
+                      setCurrentScreen('dashboard');
+                      setDemoStep(5);
+                    }}
+                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                  >
+                    Salvar e Concluir
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 5 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 5 de 5</span>
+                <span className="text-tech">Painel de Gerenciamento</span>
+              </div>
+              <h4 className="text-xs font-bold text-white">📊 Centro de Gerência & Controle de Carga</h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                Sucesso! Chegamos à torre administrativa central onde gestores monitoram frotas e regulamentos das vias terrestres e acessos fluviais:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
+                <p><strong>⚖️ Balança Inteligente de Peso:</strong> Localize o controle de <em>Peso da Carga</em> ao lado do ícone da balança.</p>
+                <p><strong>🚨 Multas Fiscais de Excesso ANTT:</strong> Se ultrapassar o limite, o sistema calcula na hora de acordo com a resolução brasileira!</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    setShowDemoAssistant(false);
+                    setDemoStep(0);
+                  }}
+                  className="w-full bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-115 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  🎉 Concluir e Voltar ao App
+                </button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }

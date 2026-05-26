@@ -40,28 +40,43 @@ export async function getGeminiAnalysis(input: any) {
       `;
     } else {
       prompt = `
-        ### MISSÃO: VEREDITO LOGIX
+        ### MISSÃO: VEREDITO LOGIX (IA ESTRATÉGICA)
         ESTRATÉGIA APLICADA: ${input.strategy || 'N/A'}
         
-        DADOS DA EXECUÇÃO FINAL:
-        - PRIORIDADE: ${input.priority}
-        - DISTÂNCIA: ${(input.summary.distance / 1000).toFixed(2)} km
-        - TEMPO ESTIMADO: ${Math.round(input.summary.duration / 60)} min
-        - SCORE DE INTEGRIDADE: ${Math.round(input.score)}/100
+        DADOS REAIS DA EXECUÇÃO FINAL DA ROTA:
+        - PRIORIDADE DA ROTA: ${input.priority || 'N/A'}
+        - VEÍCULO SELECIONADO: ${input.vehicle || 'N/A'}
+        - PARÂMETROS PERSONALIZADOS ATIVOS:
+          * Evitar vias não pavimentadas (avoidDirt): ${input.avoidDirt ? 'ATIVADO' : 'DESACTIVADO'}
+          * Evitar zonas inundáveis (avoidFloods): ${input.avoidFloods ? 'ATIVADO' : 'DESACTIVADO'}
+          * Evitar trechos inclinados/morros (avoidHills): ${input.avoidHills ? 'ATIVADO' : 'DESACTIVADO'}
+        - DISTÂNCIAS E TEMPOS TÁTICOS:
+          * Distância total calculada: ${(input.summary.distance / 1000).toFixed(2)} km
+          * Tempo total estimado: ${Math.round(input.summary.duration / 60)} minutos
+          * Score de integridade operacional do trajeto: ${Math.round(input.score)}/100
         
-        OCORRÊNCIAS MAPEADAS AO LONGO DA ROTA (RAIO DE 1.5KM):
+        SEQUÊNCIA OFICIAL DE PARADAS TRAFEGADAS:
+        ${input.sequence.map((stop: any, idx: number) => {
+          const amHydro = stop.amazonasHydrology ? ` [Hidrologia AM: ${stop.amazonasHydrology.seasonLabel} - Alerta: ${stop.amazonasHydrology.warning}]` : '';
+          return `* Parada #${idx + 1}: ${stop.address} (Coordenadas: ${stop.lat.toFixed(4)}, ${stop.lon.toFixed(4)}) - Temperatura: ${Math.round(stop.weather?.main?.temp || 0)}°C - Clima: ${stop.weather?.weather?.[0]?.description || 'Normal'} - Perigo/Risco Local Calculado: ${Math.round(stop.riskScore)}%${amHydro}`;
+        }).join('\n')}
+        
+        OCORRÊNCIAS OPERACIONAIS REGISTRADAS NO ENTORNO (RAIO DE 1.5KM):
         ${input.sequence.map((stop: any, idx: number) => {
           const occs = stop.activeOccurrences || [];
-          if (occs.length === 0) return `Parada #${idx + 1} (${stop.address}): Sem ocorrências registradas no entorno.`;
-          return `Parada #${idx + 1} (${stop.address}): ${occs.length} ocorrência(s) registrada(s): ${occs.map((o: any) => `[${o.type}] ${o.description}`).join('; ')}`;
+          if (occs.length === 0) return `* Parada #${idx + 1} (${stop.address}): Nenhuma ocorrência ou bloqueio encontrado no raio de 1.5km.`;
+          return `* Parada #${idx + 1} (${stop.address}): Encontradas ${occs.length} ocorrência(s): ${occs.map((o: any) => `[Tipo: ${o.type}] Descrição: ${o.description}`).join('; ')}`;
         }).join('\n')}
 
-        ${input.customPrompt ? `--- DIRETRIZES PERSONALIZADAS DO USUÁRIO ---
-        O usuário solicitou: "${input.customPrompt}"
-        Avalie se a rota gerada com as ocorrências detectadas atende com sucesso às necessidades personalizadas descritas.` : ''}
+        ${input.customPrompt ? `--- DIRETRIZES PERSONALIZADAS ADICIONAIS DO OPERADOR ---
+        O operador solicitou com prioridade absoluta: "${input.customPrompt}"` : ''}
 
-        Analise se a rota gerada honra a prioridade selecionada e de que forma os locais com incidentes impactam na jornada. Forneça o insight final de segurança de forma extremamente direta e tática (Máx 3 frases).
-        RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.
+        ### DIRETRIZES IMPORTANTES PARA A IA (MÁXIMA PRECISÃO):
+        1. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente ruas fictícias, acidentes fictícios, engarrafamentos fictícios ou alagamentos fictícios. Se os dados reais de ocorrências mostram "Nenhuma ocorrência", não invente perigos! Mencione que a via está livre e segura.
+        2. ANÁLISE FIEL DA ROTA: Retrate estritamente a sequência de paradas reais descritas nos dados. Mostre como as prioridades selecionadas (prioridade: ${input.priority || 'N/A'}) e as diretrizes do operador influenciaram na escolha da ordem ideal de paradas.
+        3. AVALIAÇÃO DOS PARÂMETROS PERSONALIZADOS: Analise detalhadamente se os parâmetros ${input.avoidDirt ? 'Evitar vias não pavimentadas, ' : ''}${input.avoidFloods ? 'Evitar zonas inundáveis, ' : ''}${input.avoidHills ? 'Evitar trechos inclinados/morros' : ''} e a diretriz customizada ("${input.customPrompt || 'Nenhuma'}") foram cumpridos com sucesso na rota traçada de ${(input.summary.distance / 1000).toFixed(2)} km.
+        4. RESPOSTA EXECUTIVA: Forneça um insight tático de segurança extremamente direto, profissional e realista (Máximo de 3 frase explicativas). Responda com termos técnicos logísticos reais (sinergia cinética, vetor de fluxo, otimização cinemática).
+        5. IDIOMA: Responda sempre em Português do Brasil de forma executiva.
       `;
     }
 
