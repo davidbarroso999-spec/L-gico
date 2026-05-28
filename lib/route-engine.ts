@@ -24,6 +24,122 @@ export interface RouteStop {
     historicalContext: string;
     riskPenalty: number;
   };
+  status?: 'completed' | 'failed';
+  failureReason?: string;
+  deliveryNotes?: string;
+  fluvialPort?: string;
+}
+
+interface FluvialNode {
+  id: string;
+  lat: number;
+  lon: number;
+  connections: string[];
+}
+
+export const FLUVIAL_GRAPH: Record<string, FluvialNode> = {
+  ponta_negra: { id: 'ponta_negra', lat: -3.0620, lon: -60.1020, connections: ['taruma'] },
+  taruma: { id: 'taruma', lat: -3.0900, lon: -60.0800, connections: ['ponta_negra', 'compensa'] },
+  compensa: { id: 'compensa', lat: -3.1150, lon: -60.0650, connections: ['taruma', 'ponte'] },
+  ponte: { id: 'ponte', lat: -3.1250, lon: -60.0550, connections: ['compensa', 'sao_raimundo', 'cacau_pirera'] },
+  sao_raimundo: { id: 'sao_raimundo', lat: -3.1350, lon: -60.0450, connections: ['ponte', 'porto'] },
+  porto: { id: 'porto', lat: -3.1410, lon: -60.0260, connections: ['sao_raimundo', 'educandos'] },
+  educandos: { id: 'educandos', lat: -3.1480, lon: -60.0120, connections: ['porto', 'castanhal'] },
+  castanhal: { id: 'castanhal', lat: -3.1550, lon: -59.9800, connections: ['educandos', 'ceasa'] },
+  ceasa: { id: 'ceasa', lat: -3.1450, lon: -59.9420, connections: ['castanhal', 'encontro', 'careiro'] },
+  encontro: { id: 'encontro', lat: -3.1350, lon: -59.9030, connections: ['ceasa', 'puraquequara'] },
+  puraquequara: { id: 'puraquequara', lat: -3.0760, lon: -59.8700, connections: ['encontro'] },
+  careiro: { id: 'careiro', lat: -3.1970, lon: -59.8220, connections: ['ceasa', 'cacau_pirera'] },
+  cacau_pirera: { id: 'cacau_pirera', lat: -3.1670, lon: -60.0650, connections: ['ponte', 'iranduba', 'careiro'] },
+  iranduba: { id: 'iranduba', lat: -3.2800, lon: -60.1700, connections: ['cacau_pirera'] },
+};
+
+export const FLUVIAL_PORTS = [
+  { name: "Porto de Manaus (Centro)", nodeId: 'porto', lat: -3.1410, lon: -60.0260 },
+  { name: "Porto da Ceasa", nodeId: 'ceasa', lat: -3.1450, lon: -59.9420 },
+  { name: "Marina do Davi (Pontal)", nodeId: 'taruma', lat: -3.0900, lon: -60.0800 },
+  { name: "Porto de São Raimundo", nodeId: 'sao_raimundo', lat: -3.1350, lon: -60.0450 },
+  { name: "Porto do Educandos", nodeId: 'educandos', lat: -3.1480, lon: -60.0120 },
+  { name: "Ponta Negra (Fluvial)", nodeId: 'ponta_negra', lat: -3.0620, lon: -60.1020 },
+  { name: "Fronteira Puraquequara", nodeId: 'puraquequara', lat: -3.0760, lon: -59.8700 },
+  { name: "Porto do Careiro da Várzea", nodeId: 'careiro', lat: -3.1970, lon: -59.8220 },
+  { name: "Porto de Iranduba", nodeId: 'iranduba', lat: -3.2800, lon: -60.1700 },
+  { name: "Porto de Cacau Pirêra", nodeId: 'cacau_pirera', lat: -3.1670, lon: -60.0650 },
+];
+
+export function getFluvialRoute(startNodeId: string, endNodeId: string): [number, number][] {
+  const distances: Record<string, number> = {};
+  const previous: Record<string, string | null> = {};
+  const queue: string[] = [];
+
+  for (const node in FLUVIAL_GRAPH) {
+    distances[node] = Infinity;
+    previous[node] = null;
+    queue.push(node);
+  }
+
+  distances[startNodeId] = 0;
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => distances[a] - distances[b]);
+    const current = queue.shift()!;
+
+    if (current === endNodeId) break;
+    if (distances[current] === Infinity) break;
+
+    const currentLat = FLUVIAL_GRAPH[current].lat;
+    const currentLon = FLUVIAL_GRAPH[current].lon;
+
+    for (const neighbor of FLUVIAL_GRAPH[current].connections) {
+      if (!queue.includes(neighbor)) continue;
+      
+      const neighborNode = FLUVIAL_GRAPH[neighbor];
+      const dist = calculateDistance(currentLat, currentLon, neighborNode.lat, neighborNode.lon);
+      const alt = distances[current] + dist;
+
+      if (alt < distances[neighbor]) {
+        distances[neighbor] = alt;
+        previous[neighbor] = current;
+      }
+    }
+  }
+
+  const pathNodes: string[] = [];
+  let u: string | null = endNodeId;
+  if (previous[u] !== null || u === startNodeId) {
+    while (u !== null) {
+      pathNodes.unshift(u);
+      u = previous[u];
+    }
+  }
+
+  return pathNodes.map(id => [FLUVIAL_GRAPH[id].lat, FLUVIAL_GRAPH[id].lon]);
+}
+
+export function getFluvialPathStats(startNodeId: string, endNodeId: string, priority: string) {
+  const pathCoords = getFluvialRoute(startNodeId, endNodeId);
+  let totalDistanceAttr = 0;
+  for (let i = 0; i < pathCoords.length - 1; i++) {
+    totalDistanceAttr += calculateDistance(
+      pathCoords[i][0], pathCoords[i][1],
+      pathCoords[i + 1][0], pathCoords[i + 1][1]
+    );
+  }
+  
+  let speed = 25; // default balanced speed in km/h
+  if (priority === 'speed') speed = 45; // Fast boat (lancha rápida)
+  else if (priority === 'economy') speed = 15; // Slow boat/rabeta
+  else if (priority === 'safety') speed = 30; // Safer patrolled navigation
+  else if (priority === 'distance') speed = 20;
+
+  const durationHours = totalDistanceAttr / speed;
+  const durationMinutes = durationHours * 60;
+
+  return {
+    path: pathCoords,
+    distance: totalDistanceAttr, // km
+    duration: durationMinutes // minutes
+  };
 }
 
 export interface RouteOptions {
@@ -151,7 +267,7 @@ export async function optimizeRoute(
   }
 
   // 1. Geocode
-  const locations = await Promise.all(addresses.map(async (addr, i) => {
+  let locations = await Promise.all(addresses.map(async (addr, i) => {
     try {
       if (knownCoords && knownCoords[addr]) {
         return {
@@ -162,11 +278,12 @@ export async function optimizeRoute(
           label: addr,
           confidenceScore: 100,
           source: 'cache' as const,
-          type: 'address' as const
+          type: 'address' as const,
+          fluvialPort: undefined as string | undefined
         };
       }
       const geo = await preciseGeocode(addr);
-      return { ...geo, id: i.toString(), address: addr };
+      return { ...geo, id: i.toString(), address: addr, fluvialPort: undefined as string | undefined };
     } catch (error) {
       console.warn('Geocoding failed, falling back to approximation.', error);
       // Rough emergency approximation for fallback (Manaus center)
@@ -174,10 +291,32 @@ export async function optimizeRoute(
         lat: -3.119 + (Math.random() - 0.5) * 0.02,
         lon: -60.021 + (Math.random() - 0.5) * 0.02,
         id: i.toString(),
-        address: addr
+        address: addr,
+        fluvialPort: undefined as string | undefined
       };
     }
   }));
+
+  if (options.vehicle === 'boat') {
+    locations = locations.map(loc => {
+      let closestPort = FLUVIAL_PORTS[0];
+      let minDistance = Infinity;
+      for (const port of FLUVIAL_PORTS) {
+        const d = calculateDistance(loc.lat, loc.lon, port.lat, port.lon);
+        if (d < minDistance) {
+          minDistance = d;
+          closestPort = port;
+        }
+      }
+      return {
+        ...loc,
+        lat: closestPort.lat,
+        lon: closestPort.lon,
+        fluvialPort: closestPort.name,
+        address: `${loc.address.split(' (Atracado')[0]} (Atracado no ${closestPort.name})`
+      };
+    });
+  }
 
   // 2. Intelligence Layer: Gemini Strategic Observations
   let envReport = { weather: "Desconhecida", elevation: "Analizando...", traffic: "Normal" };
@@ -223,7 +362,26 @@ export async function optimizeRoute(
     preference = 'recommended'; // Best balance for others
   }
 
-  const matrix = await getMatrix(coords, profile);
+  let matrix: any = null;
+  if (options.vehicle === 'boat') {
+    const n = locations.length;
+    const distances: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
+    const durations: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
+
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const fromPort = FLUVIAL_PORTS.find(p => p.name === locations[i].fluvialPort) || FLUVIAL_PORTS[0];
+        const toPort = FLUVIAL_PORTS.find(p => p.name === locations[j].fluvialPort) || FLUVIAL_PORTS[0];
+        const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority);
+        distances[i][j] = stats.distance * 1000;
+        durations[i][j] = stats.duration * 60;
+      }
+    }
+    matrix = { distances, durations };
+  } else {
+    matrix = await getMatrix(coords, profile);
+  }
 
   // 4. Enrich database occurrences and pre-scan environmental factors for all locations
   const trafficIncidents = await getTrafficIncidents(coords);
@@ -433,7 +591,51 @@ export async function optimizeRoute(
   }
 
   // 6. Final geometry
-  let directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference);
+  let directions: any = null;
+  if (options.vehicle === 'boat') {
+    const allCoordinates: [number, number][] = [];
+    let fluvialDistance = 0;
+    let fluvialDuration = 0;
+
+    for (let i = 0; i < sequence.length - 1; i++) {
+      const fromStop = sequence[i];
+      const toStop = sequence[i + 1];
+      
+      const fromPort = FLUVIAL_PORTS.find(p => p.name === fromStop.fluvialPort) || FLUVIAL_PORTS[0];
+      const toPort = FLUVIAL_PORTS.find(p => p.name === toStop.fluvialPort) || FLUVIAL_PORTS[0];
+      
+      const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority);
+      
+      fluvialDistance += stats.distance * 1000; // in meters (for GeoJSON summary)
+      fluvialDuration += stats.duration * 60; // in seconds (for GeoJSON summary)
+
+      stats.path.forEach((c, idx) => {
+        if (idx > 0 || allCoordinates.length === 0) {
+          allCoordinates.push([c[1], c[0]]); // GeoJSON expects [lon, lat]
+        }
+      });
+    }
+
+    directions = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: allCoordinates
+        },
+        properties: {
+          summary: {
+            distance: fluvialDistance,
+            duration: fluvialDuration
+          },
+          segments: []
+        }
+      }]
+    };
+  } else {
+    directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference);
+  }
 
   if (!directions?.features?.[0]?.geometry) {
     console.error("Critical: Cannot find directions. Features array might be empty or directions is null.", directions);

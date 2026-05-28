@@ -2,7 +2,7 @@ import type {Metadata} from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Logix Route | Smart Delivery Planner',
+  title: 'Voie Express | Smart Delivery Planner',
   description: 'Intelligent route optimization with real-time weather and traffic analysis.',
 };
 

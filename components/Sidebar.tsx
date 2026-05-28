@@ -3,7 +3,7 @@
 import React from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
-import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation } from 'lucide-react';
+import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation, Anchor } from 'lucide-react';
 import { RouteStop } from '@/lib/route-engine';
 import { useIsMobile } from '@/hooks/use-mobile';
 
@@ -105,7 +105,7 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                 <div className="p-3 bg-tech/5 border border-tech/10 rounded-xl relative overflow-hidden">
                   <p className="text-[9px] uppercase tracking-widest font-bold text-tech mb-1 flex items-center gap-1">
                     <span className="w-1 h-1 rounded-full bg-tech animate-pulse" />
-                    Análise Logix (IA)
+                    Análise da Rota
                   </p>
                   <p className="text-[10px] text-slate-300 leading-relaxed italic">
                     &quot;{aiAnalysis}&quot;
@@ -127,9 +127,19 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                     className="mb-3 bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl"
                   >
                     <div className="flex gap-3">
-                      <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-xs font-black border border-slate-700 text-slate-300 shrink-0 mt-0.5">
-                        {idx + 1}
-                      </div>
+                      {stop.status === 'completed' ? (
+                        <div className="w-6 h-6 rounded-full bg-tech/20 border border-tech text-tech flex items-center justify-center text-xs font-black shrink-0 mt-0.5">
+                          ✓
+                        </div>
+                      ) : stop.status === 'failed' ? (
+                        <div className="w-6 h-6 rounded-full bg-alert/20 border border-alert text-alert flex items-center justify-center text-xs font-black shrink-0 mt-0.5">
+                          ✕
+                        </div>
+                      ) : (
+                        <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-xs font-black border border-slate-700 text-slate-300 shrink-0 mt-0.5">
+                          {idx + 1}
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-start mb-0.5 gap-2">
                           <p className="font-bold text-slate-100 text-xs truncate leading-tight">{stop.address}</p>
@@ -137,6 +147,28 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                             <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
                           )}
                         </div>
+                        {stop.fluvialPort && (
+                          <div className="mb-2 mt-1 flex items-center gap-1.5 text-[9.5px] font-bold text-sky-400 bg-sky-950/40 border border-sky-900/40 px-2 py-0.5 rounded w-fit uppercase font-mono">
+                            <Anchor className="w-3 h-3 text-sky-450 shrink-0" />
+                            {stop.fluvialPort}
+                          </div>
+                        )}
+                        
+                        {stop.status === 'completed' && (
+                          <div className="mb-1 text-[9px] font-bold text-tech bg-tech/10 border border-tech/20 px-1.5 py-0.5 rounded uppercase w-fit">
+                            ✓ Entregue com Sucesso
+                          </div>
+                        )}
+                        {stop.status === 'failed' && (
+                          <div className="mb-2 flex flex-col gap-0.5">
+                            <span className="inline-block w-fit text-[9px] font-bold text-alert bg-alert/10 border border-alert/20 px-1.5 py-0.5 rounded uppercase">
+                              ✕ Falha na Entrega: {stop.failureReason}
+                            </span>
+                            {stop.deliveryNotes && (
+                              <p className="text-[9px] text-slate-400 italic">Obs: {stop.deliveryNotes}</p>
+                            )}
+                          </div>
+                        )}
                         
                         <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap mt-1">
                           <span className="flex items-center gap-0.5">Alt: {Math.round(stop.elevation || 0)}m</span>
@@ -254,7 +286,7 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
             </div>
             <p className="text-[10px] uppercase tracking-widest font-bold text-tech mb-2 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
-              Brain Logix (IA)
+              Análise da Rota
             </p>
             <p className="text-xs text-slate-300 leading-relaxed italic">
               &quot;{aiAnalysis}&quot;
@@ -288,9 +320,19 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
             >
               <div className="flex gap-4">
                 <div className="flex flex-col items-center">
-                  <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-sm font-bold border border-slate-700">
-                    {idx + 1}
-                  </div>
+                  {stop.status === 'completed' ? (
+                    <div className="w-8 h-8 rounded-full bg-tech/20 border border-tech text-tech flex items-center justify-center text-sm font-bold">
+                      ✓
+                    </div>
+                  ) : stop.status === 'failed' ? (
+                    <div className="w-8 h-8 rounded-full bg-alert/20 border border-alert text-alert flex items-center justify-center text-sm font-bold">
+                      ✕
+                    </div>
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-sm font-bold border border-slate-700 text-slate-300">
+                      {idx + 1}
+                    </div>
+                  )}
                   {idx < stops.length - 1 && (
                     <div className="w-0.5 h-full bg-slate-800 my-1 min-h-[20px]" />
                   )}
@@ -302,6 +344,28 @@ export default function Sidebar({ stops, summary, score, aiAnalysis, onNavigate,
                       <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />
                     )}
                   </div>
+                  {stop.fluvialPort && (
+                    <div className="mb-2 mt-0.5 flex items-center gap-1.5 text-[9.5px] font-bold text-sky-400 bg-sky-950/40 border border-sky-900/40 px-2 py-0.5 rounded w-fit uppercase font-mono">
+                      <Anchor className="w-3 h-3 text-sky-450 shrink-0" />
+                      {stop.fluvialPort}
+                    </div>
+                  )}
+                  
+                  {stop.status === 'completed' && (
+                    <div className="mt-1 mb-2 text-[10px] font-bold text-tech bg-tech/10 border border-tech/20 px-2 py-0.5 rounded uppercase w-fit">
+                      ✓ Entregue com Sucesso
+                    </div>
+                  )}
+                  {stop.status === 'failed' && (
+                    <div className="mt-1 mb-2 flex flex-col gap-1">
+                      <span className="inline-block w-fit text-[10px] font-bold text-alert bg-alert/10 border border-alert/20 px-2 py-0.5 rounded uppercase font-sans">
+                        ✕ Falha na Entrega: {stop.failureReason}
+                      </span>
+                      {stop.deliveryNotes && (
+                        <p className="text-xs text-slate-400 italic font-sans">Observação: {stop.deliveryNotes}</p>
+                      )}
+                    </div>
+                  )}
                   
                   <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 flex-wrap">
                     <span className="flex items-center gap-1">

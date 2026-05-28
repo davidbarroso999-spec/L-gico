@@ -42,68 +42,20 @@ function cleanErrorMessage(err: any): string {
 }
 
 function generateTacticalFallback(prompt: string): string {
-  let priority = "Equilibrada";
-  if (prompt.includes("SPEED") || prompt.includes("Rápido") || prompt.toLowerCase().includes("fast")) {
-    priority = "Velocidade Mestre";
-  } else if (prompt.includes("DISTANCE") || prompt.includes("Curto") || prompt.toLowerCase().includes("short")) {
-    priority = "Distância Mínima";
-  } else if (prompt.includes("ECONOMY") || prompt.includes("Eco") || prompt.toLowerCase().includes("eco")) {
-    priority = "Máxima Economia (Eco)";
-  } else if (prompt.includes("SAFETY") || prompt.includes("Seguro") || prompt.toLowerCase().includes("safe")) {
-    priority = "Protocolo de Segurança Crítico";
-  }
-
-  let customDirective = "";
-  const matchUser = prompt.match(/(?:O usuário solicitou|Instrução Customizada.*|diretrizes personalizadas.*):?\s*["']([^"']+)["']/i);
-  if (matchUser && matchUser[1]) {
-    customDirective = matchUser[1].trim();
-  } else {
-    // Busca secundária sem aspas, aceitando quebras de linha com [\s\S]
-    const matchUserSec = prompt.match(/diretrizes personalizadas do usuário ---\s*([\s\S]*?)\s*(?:regras de resposta|---)/i);
-    if (matchUserSec && matchUserSec[1]) {
-      customDirective = matchUserSec[1].replace(/["']/g, "").trim();
-    }
-  }
-
-  const hasAccident = prompt.toLowerCase().includes("accident") || prompt.toLowerCase().includes("acidente");
-  const hasFlood = prompt.toLowerCase().includes("flood") || prompt.toLowerCase().includes("alagamento") || prompt.toLowerCase().includes("inundação");
-  const hasRoadClosed = prompt.toLowerCase().includes("road_closed") || prompt.toLowerCase().includes("via interditada") || prompt.toLowerCase().includes("interditada");
-  const hasCongestion = prompt.toLowerCase().includes("congestion") || prompt.toLowerCase().includes("congestionamento") || prompt.toLowerCase().includes("trânsito");
-  const hasPothole = prompt.toLowerCase().includes("pothole") || prompt.toLowerCase().includes("buraco");
-
-  const alerts: string[] = [];
-  if (hasFlood) {
-    alerts.push("Bloqueios de via por alagamentos detectados.");
-  }
-  if (hasRoadClosed) {
-    alerts.push("Seção de via interditada identificada.");
-  }
-  if (hasAccident) {
-    alerts.push("Zona com colisão veicular ativa à frente.");
-  }
-  if (hasCongestion) {
-    alerts.push("Retenção de fluxo e perda de velocidade média.");
-  }
-  if (hasPothole) {
-    alerts.push("Trecho de pavimentação degradada mapeado.");
-  }
-
-  let analysis = `Logix (Redundância Inteligente): Vetor otimizado com foco no perfil [${priority.toUpperCase()}].\n`;
-  analysis += `• Fluxo cinético de rota estruturado para máxima conformidade de deslocamento.\n`;
+  const isEco = prompt.toLowerCase().includes("eco") || prompt.toLowerCase().includes("economia");
+  const isSafe = prompt.toLowerCase().includes("seguran") || prompt.toLowerCase().includes("seguro") || prompt.toLowerCase().includes("risk") || prompt.toLowerCase().includes("perigo");
+  const isShort = prompt.toLowerCase().includes("curto") || prompt.toLowerCase().includes("dist") || prompt.toLowerCase().includes("short");
   
-  if (customDirective && customDirective.length < 150) {
-    analysis += `• Diretiva integrada com sucesso: "${customDirective}" contemplada operacionalmente.\n`;
+  if (isSafe) {
+    return "Rota planejada com foco absoluto em segurança operacional e desvios de áreas de risco histórico. Recomenda-se atenção redobrada aos limites de velocidade do trecho.";
   }
-
-  if (alerts.length > 0) {
-    analysis += `• Alertas no entorno: ${alerts.slice(0, 2).join(" · ")}\n`;
-    analysis += `• Mitigação tática: Recomendado controle dinâmico de tração e atenção no raio de 1.5km dos nós críticos.`;
-  } else {
-    analysis += `• Zonas operacionais limpas próximas às paradas. Rota livre de incidentes graves.\n`;
-    analysis += `• Sugestão Logix: Condução fluida e velocidade constante para otimização do combustível.`;
+  if (isEco) {
+    return "Trajeto otimizado para economia de combustível, priorizando a manutenção de velocidade constante. Evite acelerações bruscas para maximizar a performance operacional.";
   }
-
-  return analysis;
+  if (isShort) {
+    return "Desenho de rota focado na menor distância física de deslocamento ponto a ponto. Verifique o asfalto nas vias secundárias para manter a eficiência tática.";
+  }
+  return "Análise de rota realizada em conformidade com as diretrizes táticas estabelecidas. O trajeto selecionado oferece o melhor equilíbrio de tempo e fluidez de trânsito.";
 }
 
 export async function POST(req: Request) {
@@ -190,7 +142,7 @@ IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`,
   } catch (error: any) {
     console.error("Erro geral no handler de IA:", error);
     return NextResponse.json({ 
-      content: "Logix: Sistema tático de contingência operacional. Rota validada com foco em controle de tração estrutural e prevenção ativa de incidentes." 
+      content: "Sistema de contingência operacional ativado. Rota calculada em conformidade com as diretrizes de trânsito locais." 
     });
   }
 }

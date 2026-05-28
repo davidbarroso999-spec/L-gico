@@ -43,7 +43,7 @@ export default function KpiDashboard() {
   const [vehicleType, setVehicleType] = useState<'van' | 'light_truck' | 'medium_truck' | 'heavy_truck'>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehicleType) return parsed.vehicleType;
@@ -56,7 +56,7 @@ export default function KpiDashboard() {
   const [vehicleModel, setVehicleModel] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehicleModel) return parsed.vehicleModel;
@@ -69,7 +69,7 @@ export default function KpiDashboard() {
   const [vehiclePlate, setVehiclePlate] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehiclePlate) return parsed.vehiclePlate;
@@ -82,7 +82,7 @@ export default function KpiDashboard() {
   const [vehicleTara, setVehicleTara] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehicleTara !== undefined) return Number(parsed.vehicleTara);
@@ -95,7 +95,7 @@ export default function KpiDashboard() {
   const [vehiclePayloadMax, setVehiclePayloadMax] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehiclePayloadMax !== undefined) return Number(parsed.vehiclePayloadMax);
@@ -108,7 +108,7 @@ export default function KpiDashboard() {
   const [vehicleCargoWeight, setVehicleCargoWeight] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehicleCargoWeight !== undefined) return Number(parsed.vehicleCargoWeight);
@@ -121,7 +121,7 @@ export default function KpiDashboard() {
   const [fuelPrice, setFuelPrice] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('logix_vehicle_settings');
+        const saved = localStorage.getItem('voie_express_vehicle_settings');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.fuelPrice !== undefined) return Number(parsed.fuelPrice);
@@ -195,7 +195,7 @@ export default function KpiDashboard() {
     setVehicleCargoWeight(safeCargo);
 
     // Auto-save preset
-    localStorage.setItem('logix_vehicle_settings', JSON.stringify({
+    localStorage.setItem('voie_express_vehicle_settings', JSON.stringify({
       vehicleType: type,
       vehicleModel: model,
       vehiclePlate,
@@ -207,7 +207,7 @@ export default function KpiDashboard() {
   };
 
   const handleSaveSettings = () => {
-    localStorage.setItem('logix_vehicle_settings', JSON.stringify({
+    localStorage.setItem('voie_express_vehicle_settings', JSON.stringify({
       vehicleType,
       vehicleModel,
       vehiclePlate,

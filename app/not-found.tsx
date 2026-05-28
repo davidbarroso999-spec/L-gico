@@ -11,7 +11,7 @@ export default function NotFound() {
           <h1 className="text-4xl font-bold font-display tracking-tight text-white">404</h1>
           <p className="text-base text-slate-200 font-medium">Página Não Encontrada</p>
           <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-            O endereço fornecido não foi localizado no servidor da Logix Route ou está temporariamente inacessível.
+            O endereço fornecido não foi localizado no servidor da Voie Express ou está temporariamente inacessível.
           </p>
         </div>
         <Link 

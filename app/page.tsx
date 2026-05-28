@@ -32,13 +32,18 @@ import {
   Terminal,
   HelpCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Truck,
+  Bike,
+  Car,
+  Droplets
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
 import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
+import Logo from '@/components/Logo';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -142,6 +147,9 @@ export default function LogixApp() {
 
   // Delivery proof modal and camera states
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
+  const [showFailureModal, setShowFailureModal] = useState(false);
+  const [failureReason, setFailureReason] = useState<string>('');
+  const [failureNotes, setFailureNotes] = useState<string>('');
   const [deliveryPhoto, setDeliveryPhoto] = useState<string | null>(null);
   const [deliveryNotes, setDeliveryNotes] = useState<string>('');
   const [isWebcamActive, setIsWebcamActive] = useState(false);
@@ -455,8 +463,8 @@ export default function LogixApp() {
       {/* Desktop Sidebar Nav */}
       {!isMobile && (
         <nav className="w-20 border-r border-slate-800 flex flex-col items-center py-8 gap-8 z-50 bg-slate-950">
-          <div className="w-12 h-12 bg-tech rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(0,212,170,0.3)]">
-            <RouteIcon className="w-7 h-7 text-slate-950" />
+          <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center overflow-hidden border border-slate-800/80 shadow-[0_0_20px_rgba(0,245,255,0.1)]">
+            <Logo size="sm" />
           </div>
           
           <div className="flex flex-col gap-4">
@@ -522,114 +530,135 @@ export default function LogixApp() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className={`h-full w-full flex flex-col items-center max-w-4xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
+              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
             >
-              <div className="w-full flex-shrink-0 flex flex-col items-center mb-12">
+              <div className="w-full flex-shrink-0 flex flex-col items-center mb-10">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.8, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+                  className="w-20 h-20 bg-slate-900/60 backdrop-blur-md rounded-3xl flex items-center justify-center p-1.5 shadow-[0_0_50px_rgba(0,245,255,0.06)] border border-slate-800/80 mb-6"
+                >
+                  <Logo size="lg" />
+                </motion.div>
                 <motion.h1 
-                  className="text-4xl md:text-6xl font-bold font-display mb-4 tracking-tighter text-center"
+                  className="font-bold font-display text-center flex flex-col items-center justify-center leading-none mb-4"
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
-                  Logix <span className="text-tech">Route</span>
+                  <span className="text-5xl md:text-6xl font-black tracking-wider text-white">VOIE</span>
+                  <span className="text-xs md:text-sm font-bold tracking-[0.25em] text-tech uppercase mt-1">express</span>
                 </motion.h1>
-                <p className="text-slate-400 text-sm md:text-lg text-center">Otimização inteligente para entregas sem filtros.</p>
+                <p className="text-slate-400 text-sm md:text-base text-center max-w-lg">Otimização inteligente para entregas rápidas, econômicas e seguras, adaptadas às condições locais.</p>
               </div>
 
-              <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 mb-12">
-                <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit">
-                  <div className="absolute top-0 right-0 p-4 opacity-5">
+              <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12">
+                {/* Left Column: Itinerary inputs (Spans 7 columns on desktop) */}
+                <div className="lg:col-span-7 glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
+                  <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
-                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                    <Plus className="w-5 h-5 text-tech" />
+                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4">
+                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(0,245,255,0.5)]" />
                     Paradas de Entrega
                   </h3>
                   
-                  <div className="space-y-4 mb-6">
-                    {/* Ponto de Partida */}
-                    <div className="space-y-1">
-                      <label className="text-[10px] text-tech font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
-                        Ponto de Partida (Origem)
-                      </label>
-                      <div className="flex gap-2 relative">
-                          <div className="flex-1 relative">
-                            <input
-                              ref={el => { inputRefs.current[0] = el; }}
-                              value={addresses[0] || ''}
-                              onChange={(e) => updateAddress(0, e.target.value)}
-                              onFocus={() => setActiveSuggestionIdx(0)}
-                              onBlur={() => setTimeout(() => {
-                                if (activeSuggestionIdx === 0) setShowSuggestions(false);
-                              }, 200)}
-                              placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
-                              className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10"
-                            />
-                            <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
-                            {renderSuggestionsDropdown(0)}
-                          </div>
+                  <div className="space-y-5 mb-8 relative">
+                    {/* Vertical Connecting Itinerary Line */}
+                    <div className="absolute left-6 top-8 bottom-8 w-0.5 border-l-2 border-dashed border-slate-800 pointer-events-none" />
+
+                    {/* Starting Point */}
+                    <div className="relative flex gap-4 items-start">
+                      <div className="w-4 h-4 rounded-full bg-tech text-slate-950 font-black flex items-center justify-center text-[10px] mt-4.5 z-10 shadow-[0_0_15px_rgba(0,242,255,0.4)]">
+                        A
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <label className="text-[10px] text-tech font-black uppercase tracking-widest px-1 flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
+                          Ponto de Partida (Origem)
+                        </label>
+                        <div className="relative">
+                          <input
+                            ref={el => { inputRefs.current[0] = el; }}
+                            value={addresses[0] || ''}
+                            onChange={(e) => updateAddress(0, e.target.value)}
+                            onFocus={() => setActiveSuggestionIdx(0)}
+                            onBlur={() => setTimeout(() => {
+                              if (activeSuggestionIdx === 0) setShowSuggestions(false);
+                            }, 200)}
+                            placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
+                            className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10 hover:border-slate-700 font-sans"
+                          />
+                          <Search className="absolute right-3.5 top-4 w-5 h-5 text-slate-600" />
+                          {renderSuggestionsDropdown(0)}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Paradas Intermediárias */}
+                    {/* Intermediate Stops */}
                     {addresses.length > 2 && (
-                      <div className="space-y-3 pl-4 border-l-2 border-slate-800 ml-4 py-2">
+                      <div className="space-y-5 pl-10">
                         {addresses.slice(1, -1).map((addr, idx) => {
                           const realIdx = idx + 1;
                           return (
-                            <div key={realIdx} className="space-y-1">
-                              <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
-                                Parada {idx + 1}
-                              </label>
-                              <div className="flex gap-2 relative">
-                                <div className="flex-1 relative">
-                                  <input
-                                    ref={el => { inputRefs.current[realIdx] = el; }}
-                                    value={addr}
-                                    onChange={(e) => updateAddress(realIdx, e.target.value)}
-                                    onFocus={() => setActiveSuggestionIdx(realIdx)}
-                                    onBlur={() => setTimeout(() => {
-                                      if (activeSuggestionIdx === realIdx) setShowSuggestions(false);
-                                    }, 200)}
-                                    placeholder="Empresa, hospital, praça ou rua..."
-                                    className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10"
-                                  />
-                                  <Search className="absolute right-3 top-3.5 w-4 h-4 text-slate-600" />
-                                  {renderSuggestionsDropdown(realIdx)}
-                                </div>
-                                <button 
-                                  onClick={() => removeAddress(realIdx)}
-                                  className="p-3 text-slate-600 hover:text-alert transition-colors"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                            <div key={realIdx} className="space-y-2 relative">
+                              <div className="absolute -left-10 top-3 w-4 h-4 rounded-full bg-slate-800 text-slate-300 font-bold flex items-center justify-center text-[9px] z-10 border border-slate-750">
+                                {idx + 1}
                               </div>
-                              {/* Janela de Entrega de Parada */}
-                              <div className="flex items-center gap-2 mt-1.5 px-1 pb-1">
-                                <Clock className="w-3.5 h-3.5 text-slate-600 transition-colors" />
-                                <span className="text-[9.5px] uppercase font-black text-slate-500 tracking-wider">Janela de Entrega:</span>
-                                <div className="flex items-center gap-1.5 ml-1">
-                                  <input 
-                                    type="time"
-                                    value={timeWindows[realIdx]?.start || ''}
-                                    onChange={(e) => updateTimeWindow(realIdx, 'start', e.target.value)}
-                                    className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
-                                  />
-                                  <span className="text-[10px] text-slate-600">até</span>
-                                  <input 
-                                    type="time"
-                                    value={timeWindows[realIdx]?.end || ''}
-                                    onChange={(e) => updateTimeWindow(realIdx, 'end', e.target.value)}
-                                    className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
-                                  />
-                                  {(timeWindows[realIdx]?.start || timeWindows[realIdx]?.end) && (
-                                    <button 
-                                      onClick={() => removeTimeWindow(realIdx)}
-                                      className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
-                                    >
-                                      Limpar
-                                    </button>
-                                  )}
+                              <div className="space-y-1">
+                                <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
+                                  Parada {idx + 1}
+                                </label>
+                                <div className="flex gap-2 relative">
+                                  <div className="flex-1 relative">
+                                    <input
+                                      ref={el => { inputRefs.current[realIdx] = el; }}
+                                      value={addr}
+                                      onChange={(e) => updateAddress(realIdx, e.target.value)}
+                                      onFocus={() => setActiveSuggestionIdx(realIdx)}
+                                      onBlur={() => setTimeout(() => {
+                                        if (activeSuggestionIdx === realIdx) setShowSuggestions(false);
+                                      }, 200)}
+                                      placeholder="Empresa, hospital, praça ou rua..."
+                                      className="w-full bg-slate-900/50 border border-slate-800/80 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10 hover:border-slate-700/60 font-sans"
+                                    />
+                                    <Search className="absolute right-3.5 top-3.5 w-4 h-4 text-slate-600" />
+                                    {renderSuggestionsDropdown(realIdx)}
+                                  </div>
+                                  <button 
+                                    onClick={() => removeAddress(realIdx)}
+                                    className="p-3 text-slate-600 hover:text-alert hover:bg-slate-950/40 rounded-xl transition-all"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                                {/* Stop Delivery Time Window */}
+                                <div className="flex items-center gap-2 mt-2 px-1 pb-1">
+                                  <Clock className="w-3.5 h-3.5 text-slate-650" />
+                                  <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">Janela de Entrega:</span>
+                                  <div className="flex items-center gap-1.5 ml-1">
+                                    <input 
+                                      type="time"
+                                      value={timeWindows[realIdx]?.start || ''}
+                                      onChange={(e) => updateTimeWindow(realIdx, 'start', e.target.value)}
+                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                    />
+                                    <span className="text-[10px] text-slate-600">até</span>
+                                    <input 
+                                      type="time"
+                                      value={timeWindows[realIdx]?.end || ''}
+                                      onChange={(e) => updateTimeWindow(realIdx, 'end', e.target.value)}
+                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                    />
+                                    {(timeWindows[realIdx]?.start || timeWindows[realIdx]?.end) && (
+                                      <button 
+                                        onClick={() => removeTimeWindow(realIdx)}
+                                        className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                                      >
+                                        Limpar
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -638,15 +667,18 @@ export default function LogixApp() {
                       </div>
                     )}
 
-                    {/* Destino Final */}
+                    {/* Final Destination */}
                     {addresses.length >= 2 && (
-                       <div className="space-y-1">
-                        <label className="text-[10px] text-alert font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-alert" />
-                          Destino Final
-                        </label>
-                        <div className="flex gap-2 relative">
-                          <div className="flex-1 relative">
+                       <div className="relative flex gap-4 items-start">
+                        <div className="w-4 h-4 rounded-full bg-alert text-white font-black flex items-center justify-center text-[10px] mt-4.5 z-10 shadow-[0_0_15px_rgba(239,68,68,0.3)]">
+                          B
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <label className="text-[10px] text-alert font-black uppercase tracking-widest px-1 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-alert" />
+                            Destino Final
+                          </label>
+                          <div className="relative">
                             <input
                               ref={el => { inputRefs.current[addresses.length - 1] = el; }}
                               value={addresses[addresses.length - 1] || ''}
@@ -656,49 +688,48 @@ export default function LogixApp() {
                                 if (activeSuggestionIdx === addresses.length - 1) setShowSuggestions(false);
                               }, 200)}
                               placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
-                              className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10"
+                              className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10 hover:border-slate-705 font-sans"
                             />
-                            <Search className="absolute right-3 top-4.5 w-4 h-4 text-slate-600" />
+                            <Search className="absolute right-3.5 top-4 w-5 h-5 text-slate-600" />
                             {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
-                        </div>
-                        {/* Janela de Entrega do Destino */}
-                        <div className="flex items-center gap-2 mt-1.5 px-1 pb-1">
-                          <Clock className="w-3.5 h-3.5 text-slate-600 hover:text-amber-500 transition-colors" />
-                          <span className="text-[9.5px] uppercase font-black text-slate-500 tracking-wider">Janela de Entrega:</span>
-                          <div className="flex items-center gap-1.5 ml-1">
-                            <input 
-                              type="time"
-                              value={timeWindows[addresses.length - 1]?.start || ''}
-                              onChange={(e) => updateTimeWindow(addresses.length - 1, 'start', e.target.value)}
-                              className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
-                            />
-                            <span className="text-[10px] text-slate-600">até</span>
-                            <input 
-                              type="time"
-                              value={timeWindows[addresses.length - 1]?.end || ''}
-                              onChange={(e) => updateTimeWindow(addresses.length - 1, 'end', e.target.value)}
-                              className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech transition-all"
-                            />
-                            {(timeWindows[addresses.length - 1]?.start || timeWindows[addresses.length - 1]?.end) && (
-                              <button 
-                                onClick={() => removeTimeWindow(addresses.length - 1)}
-                                className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
-                              >
-                                Limpar
-                              </button>
-                            )}
+                          {/* Final Destination Time Window */}
+                          <div className="flex items-center gap-2 mt-2 px-1 pb-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-650" />
+                            <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">Janela de Entrega:</span>
+                            <div className="flex items-center gap-1.5 ml-1">
+                              <input 
+                                type="time"
+                                value={timeWindows[addresses.length - 1]?.start || ''}
+                                onChange={(e) => updateTimeWindow(addresses.length - 1, 'start', e.target.value)}
+                                className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                              />
+                              <span className="text-[10px] text-slate-600">até</span>
+                              <input 
+                                type="time"
+                                value={timeWindows[addresses.length - 1]?.end || ''}
+                                onChange={(e) => updateTimeWindow(addresses.length - 1, 'end', e.target.value)}
+                                className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                              />
+                              {(timeWindows[addresses.length - 1]?.start || timeWindows[addresses.length - 1]?.end) && (
+                                <button 
+                                  onClick={() => removeTimeWindow(addresses.length - 1)}
+                                  className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                                >
+                                  Limpar
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
                     )}
                   </div>
 
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-3.5 mt-auto">
                     <button 
                       onClick={() => {
                         const next = [...addresses];
-                        // Insert a new empty address BEFORE the last one
                         if (next.length > 1) {
                           next.splice(addresses.length - 1, 0, '');
                         } else {
@@ -710,25 +741,59 @@ export default function LogixApp() {
                            inputRefs.current[focusIdx]?.focus();
                         }, 100);
                       }}
-                      className="w-full py-4 border-2 border-dashed border-slate-800 hover:border-tech hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all"
+                      className="w-full py-4 border border-dashed border-slate-800 hover:border-tech hover:bg-tech/5 hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer"
                     >
-                      + Adicionar Parada
+                      + Adicionar Parada Intermediária
                     </button>
-                    <div className="mt-2">
+                    <div>
                       <button 
                         onClick={() => setAddresses(DEFAULT_ADDRESSES)}
-                        className="w-full py-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
+                        className="w-full py-3 bg-slate-950/30 hover:bg-slate-800/40 border border-slate-800/40 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
                       >
-                        Usar Rota Demo (Manaus)
+                        Usar Rota de Laboratório Demo (Manaus / AM)
                       </button>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-6">
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px]">
-                    <h3 className="text-lg md:text-xl font-bold mb-5 font-display flex items-center gap-2">Prioridade da Rota</h3>
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 md:gap-3">
+                {/* Right Column: Dynamic Logistics Configuration Bento Box List (Spans 5 columns on desktop) */}
+                <div className="lg:col-span-5 flex flex-col gap-6">
+                  {/* Bento Box 1: Vehicle selection */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
+                      <Truck className="w-4 h-4" />
+                      Perfil de Transporte
+                    </h3>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[
+                        { id: 'moto', icon: Bike, label: 'Moto' },
+                        { id: 'van', icon: Car, label: 'Van' },
+                        { id: 'truck', icon: Truck, label: 'Caminhão' },
+                        { id: 'boat', icon: MapIcon, label: 'Barco' },
+                      ].map((v) => (
+                        <button
+                          key={v.id}
+                          onClick={() => setOptions({ ...options, vehicle: v.id as any })}
+                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-2xl border transition-all cursor-pointer ${
+                            options.vehicle === v.id
+                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
+                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          <v.icon className="w-5 h-5 mb-1.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-tight">{v.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 2: Route optimization priority */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
+                      <Zap className="w-4 h-4" />
+                      Algoritmo de Prioridade
+                    </h3>
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                       {[
                         { id: 'speed', icon: Zap, label: 'Rápido' },
                         { id: 'distance', icon: MapIcon, label: 'Curto' },
@@ -739,48 +804,107 @@ export default function LogixApp() {
                         <button
                           key={p.id}
                           onClick={() => setOptions({ ...options, priority: p.id })}
-                          className={`flex flex-col items-center justify-center p-2.5 rounded-xl border transition-all ${
+                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
                             options.priority === p.id 
-                            ? 'bg-tech/10 border-tech text-tech' 
-                            : 'bg-slate-900/50 border-slate-800 text-slate-500 hover:border-slate-700'
+                            ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]' 
+                            : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
                           }`}
                         >
-                          <p.icon className="w-4 h-4 md:w-5 md:h-5 mb-1.5 shrink-0" />
-                          <span className="text-[9px] md:text-[10px] font-black uppercase tracking-tight leading-none">{p.label}</span>
+                          <p.icon className="w-4 h-4 mb-1 shrink-0" />
+                          <span className="text-[9px] font-black uppercase tracking-tight leading-none">{p.label}</span>
                         </button>
                       ))}
                     </div>
 
-                    <div className="mt-5 p-4 rounded-xl bg-slate-900/40 border border-slate-800/40 text-xs md:text-sm text-slate-400 leading-relaxed">
-                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Rota que prioriza fluidez e velocidade média elevada, contornando gargalos clássicos mesmo que resulte em um trajeto ligeiramente mais longo.</p>}
-                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima (Curto):</strong> Traçado matematicamente ideal de menor metragem física secundarizando tráfego ou semáforos.</p>}
-                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Otimização mestre visando estabilidade, evitando arranques e aclives severos sob carga logística.</p>}
-                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Análise preventiva de integridade física. Desvia ativamente de incidências climáticas críticas e trechos de risco grave.</p>}
-                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Otimização unificada ponderando distâncias, tempos previstos de viagem, integridade das cargas e consumo médio.</p>}
+                    <div className="mt-4 p-3.5 rounded-xl bg-slate-950/40 border border-slate-900 text-xs text-slate-400 leading-relaxed font-sans">
+                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Evita congestionamentos em avenidas principais e privilegia fluxos ágeis, reduzindo tempo total de trajeto.</p>}
+                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima:</strong> Traçado seco com menor metragem absoluta, secundarizando congestionamento ou semáforos.</p>}
+                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Trajeto plano visando estabilidade, evitando desgaste operacional e acelerações sob declives pesados.</p>}
+                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Prevenção de risco. Desvia de zonas com alertas de acidentes, vias perigosas ou ocorrências climáticas.</p>}
+                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo médio, tipo de carga e integridade operacional.</p>}
                     </div>
                   </div>
 
-                  {/* IA Customized Instructions Prompt */}
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-2xl md:rounded-[40px]">
-                    <h3 className="text-lg md:text-xl font-bold mb-3 flex items-center gap-2 font-display">
-                      <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-tech animate-pulse shrink-0" />
-                      Instruções da IA (Opcional)
+                  {/* Bento Box 3: Land & Soil constraints options (The Avoid parameters) */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
+                      <Shield className="w-4 h-4" />
+                      Restrições de Relevo e Solo
                     </h3>
-                    <p className="text-slate-400 text-xs mb-3 leading-relaxed">
-                      Indique parâmetros específicos para que a inteligência artificial avalie o entorno e as paradas da sua rota na triagem estratégica.
+                    <div className="flex flex-col gap-2.5">
+                      {[
+                        { 
+                          id: 'avoidDirt', 
+                          icon: Leaf, 
+                          label: 'Evitar Não Pavimentado', 
+                          desc: 'Desvia de estradas de terra e vias sem asfalto' 
+                        },
+                        { 
+                          id: 'avoidFloods', 
+                          icon: Droplets, 
+                          label: 'Evitar Zonas de Alagamento', 
+                          desc: 'Evita áreas com histórico ou alerta de inundação' 
+                        },
+                        { 
+                          id: 'avoidHills', 
+                          icon: BarChart4, 
+                          label: 'Evitar Trechos com Declive', 
+                          desc: 'Contorna ruas com inclinações severas/morros' 
+                        },
+                      ].map((item) => {
+                        const active = (options as any)[item.id];
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => setOptions({ ...options, [item.id]: !active })}
+                            className={`flex items-center gap-3.5 p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                              active
+                                ? 'bg-amber-500/10 border-amber-500/50 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.05)]'
+                                : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-400 hover:border-slate-800'
+                            }`}
+                          >
+                            <div className={`p-2 rounded-xl shrink-0 ${active ? 'bg-amber-500/10' : 'bg-slate-900'}`}>
+                              <item.icon className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-xs font-bold leading-tight ${active ? 'text-amber-500 font-black' : 'text-slate-300'}`}>
+                                {item.label}
+                              </p>
+                              <p className="text-[10px] text-slate-500 truncate mt-0.5">{item.desc}</p>
+                            </div>
+                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                              active ? 'border-amber-500 bg-amber-500' : 'border-slate-800 bg-slate-950'
+                            }`}>
+                              {active && <span className="text-[9px] text-slate-950 font-black">✓</span>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 4: AI Custom Prompts */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[#a855f7] mb-2.5 font-display flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-[#a855f7] animate-pulse" />
+                      Instruções da IA
+                    </h3>
+                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
+                      Adicione diretrizes customizadas para que o cérebro artificial analise a segurança física da sua equipe e do trajeto.
                     </p>
                     <textarea
                       value={aiCustomPrompt}
                       onChange={(e) => setAiCustomPrompt(e.target.value)}
-                      placeholder="Ex: 'priorizar vias bem iluminadas', 'evitar asfalto danificado', 'buscar zonas com boa sinalização de rede'..."
+                      placeholder="Ex: 'priorizar vias com boa iluminação pública', 'informar rotas transitáveis por carretas', 'checar incidências climáticas recentes'..."
                       rows={2}
-                      className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-xs md:text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all resize-none text-slate-100 placeholder-slate-600 font-sans"
+                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#a855f7] focus:ring-1 focus:ring-[#a855f7]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
                     />
                   </div>
 
+                  {/* Ultimate Execution Button */}
                   <button 
                     onClick={runOptimization}
-                    className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(0,212,170,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                    className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(0,212,170,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
                   >
                     <Play className="w-5 h-5 fill-current" />
                     CALCULAR MELHOR ROTA
@@ -1039,12 +1163,23 @@ export default function LogixApp() {
                                 // Finalize route in IndexedDB with safety photo proof
                                 const latest = await db.routes.toCollection().last();
                                 if (latest?.id) {
+                                  const updatedSequence = [...routeResult.sequence];
+                                  updatedSequence[navIndex] = {
+                                    ...updatedSequence[navIndex],
+                                    status: 'completed',
+                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso'
+                                  };
                                   await db.routes.update(latest.id, { 
                                     status: 'completed',
+                                    sequence: updatedSequence,
                                     deliveryPhoto: deliveryPhoto,
                                     deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
                                     completedAt: new Date()
                                   });
+                                  setRouteResult((prev: any) => ({
+                                    ...prev,
+                                    sequence: updatedSequence
+                                  }));
                                 }
                               } catch (err) {
                                 console.error("Erro salvando foto no Dexie:", err);
@@ -1114,6 +1249,15 @@ export default function LogixApp() {
                     <button 
                       onClick={async () => {
                         if (navIndex < routeResult.sequence.length - 1) {
+                          const updatedSequence = [...routeResult.sequence];
+                          updatedSequence[navIndex] = {
+                            ...updatedSequence[navIndex],
+                            status: 'completed'
+                          };
+                          setRouteResult((prev: any) => ({
+                            ...prev,
+                            sequence: updatedSequence
+                          }));
                           setNavIndex(navIndex + 1);
                         } else {
                           // Abre a etapa obrigatória de comprovante de entrega (foto) ao finalizar a rota
@@ -1140,7 +1284,11 @@ export default function LogixApp() {
 
                     {navIndex > 0 && (
                       <button 
-                        onClick={() => {}} // Could open failure modal
+                        onClick={() => {
+                          setFailureReason('Destinatário Ausente');
+                          setFailureNotes('');
+                          setShowFailureModal(true);
+                        }}
                         className="flex-1 glass py-3 md:py-4 rounded-2xl text-warning flex flex-col items-center gap-1 border-warning/20 font-bold text-[10px] md:text-xs"
                       >
                         <XCircle className="w-4 h-4 md:w-5 md:h-5" />
@@ -1208,6 +1356,111 @@ export default function LogixApp() {
                    </motion.div>
                  )}
                </AnimatePresence>
+
+               {/* Failure Registration Modal */}
+               <AnimatePresence>
+                 {showFailureModal && (
+                   <motion.div 
+                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                     className="absolute inset-0 z-[2000] glass flex items-center justify-center p-6"
+                   >
+                     <motion.div 
+                       initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+                       className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[40px] w-full max-w-md shadow-2xl flex flex-col"
+                     >
+                       <div className="flex justify-between items-center mb-5">
+                         <div>
+                           <h2 className="text-xl font-bold text-white uppercase tracking-wider">Registrar Falha</h2>
+                           <p className="text-xs text-slate-400">Selecione o motivo da falha de entrega</p>
+                         </div>
+                         <button onClick={() => setShowFailureModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                           <XCircle className="w-6 h-6" />
+                         </button>
+                       </div>
+
+                       <div className="grid grid-cols-1 gap-2.5 mb-6">
+                         {[
+                           'Destinatário Ausente',
+                           'Estabelecimento Fechado',
+                           'Recusado pelo Recebedor',
+                           'Endereço Não Localizado',
+                           'Problemas Operacionais'
+                         ].map(reason => (
+                           <button 
+                             key={reason}
+                             onClick={() => setFailureReason(reason)}
+                             className={`px-4 py-3 rounded-xl border text-left text-xs font-bold transition-all ${
+                               failureReason === reason 
+                                 ? 'bg-amber-500/10 border-amber-500 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.15)]' 
+                                 : 'border-slate-800 text-slate-400 hover:border-slate-700/80 hover:text-slate-200'
+                             }`}
+                           >
+                             {reason}
+                           </button>
+                         ))}
+                       </div>
+
+                       <div className="mb-6 flex flex-col gap-2">
+                         <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Observações Opcionais</label>
+                         <textarea
+                           value={failureNotes}
+                           onChange={(e) => setFailureNotes(e.target.value)}
+                           placeholder="Descreva detalhes ou observações sobre o problema de entrega..."
+                           className="w-full h-16 px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 outline-none focus:border-amber-550/45 transition-colors resize-none"
+                         />
+                       </div>
+
+                       <div className="flex gap-3 mt-1 font-sans">
+                         <button 
+                           onClick={() => setShowFailureModal(false)}
+                           className="flex-1 py-3 bg-slate-800 hover:bg-slate-750 text-xs font-black text-white hover:text-slate-200 uppercase rounded-xl transition-all"
+                         >
+                           Cancelar
+                         </button>
+                         <button 
+                           onClick={async () => {
+                             const updatedSequence = [...routeResult.sequence];
+                             updatedSequence[navIndex] = {
+                               ...updatedSequence[navIndex],
+                               status: 'failed',
+                               failureReason: failureReason || 'Outro',
+                               deliveryNotes: failureNotes
+                             };
+                             
+                             setRouteResult((prev: any) => ({
+                               ...prev,
+                               sequence: updatedSequence
+                             }));
+
+                             if (navIndex < routeResult.sequence.length - 1) {
+                               setNavIndex(navIndex + 1);
+                             } else {
+                               try {
+                                 const latest = await db.routes.toCollection().last();
+                                 if (latest?.id) {
+                                   await db.routes.update(latest.id, {
+                                     status: 'completed',
+                                     sequence: updatedSequence,
+                                     completedAt: new Date()
+                                   });
+                                 }
+                               } catch (err) {
+                                 console.error("Erro salvando falha final no Dexie:", err);
+                               }
+                               setNavIndex(0);
+                               setCurrentScreen('dashboard');
+                             }
+                             setShowFailureModal(false);
+                           }}
+                           className="flex-1 bg-amber-500 text-slate-950 font-black py-3 rounded-xl hover:brightness-110 active:scale-95 transition-all text-xs uppercase"
+                         >
+                           Registrar Falha
+                         </button>
+                       </div>
+                     </motion.div>
+                   </motion.div>
+                 )}
+               </AnimatePresence>
             </motion.div>
           )}
 
@@ -1249,7 +1502,7 @@ export default function LogixApp() {
                         <span className="text-[10px] font-black tracking-widest text-tech uppercase">Recurso de Apresentação & TCC</span>
                         <h2 className="text-xl font-bold font-display text-white mt-0.5">Roteiro Demonstrativo e Histórias de Uso</h2>
                         <p className="text-xs text-slate-400 mt-1">
-                          Apresente o aplicativo Logix Route com total autoridade e clareza.
+                          Apresente o aplicativo Voie Express com total autoridade e clareza.
                         </p>
                       </div>
                     </div>
@@ -1349,7 +1602,7 @@ export default function LogixApp() {
                   <div className="glass p-8 rounded-[32px]">
                     <h3 className="text-xl font-bold mb-6">Segurança dos Dados</h3>
                     <p className="text-sm text-slate-400 leading-relaxed">
-                      Todas as chaves de API fornecidas estão integradas nativamente ao motor do Logix Route. 
+                      Todas as chaves de API fornecidas estão integradas nativamente ao motor do Voie Express. 
                       Os dados de navegação e ocorrências são armazenados localmente e sincronizados de ponta-a-ponta.
                     </p>
                   </div>
@@ -1418,7 +1671,7 @@ export default function LogixApp() {
             <div className="flex flex-col gap-3">
               <h3 className="text-sm font-black text-white">Bem-vindo ao Tour de Apresentação! 🎓</h3>
               <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Este assistente de pitch guiará você por um <strong>fluxo de uso do Logix Route</strong>. Cada tela será explicada para que você demonstre as competências logísticas e de monitoramento ativo para a banca.
+                Este assistente de pitch guiará você por um <strong>fluxo de uso do Voie Express</strong>. Cada tela será explicada para que você demonstre as competências logísticas e de monitoramento ativo para a banca.
               </p>
               <div className="bg-slate-900/60 p-2.5 rounded-xl border border-tech/10 text-[10px] text-slate-300">
                 <p className="font-bold text-tech mb-0.5">💡 Cruze Climático e Hidrológico do Amazonas:</p>
@@ -1509,7 +1762,7 @@ export default function LogixApp() {
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
                 <p><strong>🌊 Hidrologia Ativa:</strong> Role o painel lateral de resultados. Cada parada associada a zonas de igarapés ou rios da região (Centro, Compensa, CEASA) possui um alerta dinâmico histórico.</p>
-                <p><strong>🧠 Brain AI (Gemini):</strong> O relatório detalhado ao final incorpora esses dados para calibrar o score de integridade da carga.</p>
+                <p><strong>🧠 Análise de Rota (IA)</strong> O relatório detalhado ao final incorpora esses dados para calibrar o score de integridade da carga.</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button

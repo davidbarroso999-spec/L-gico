@@ -32,10 +32,10 @@ export async function getGeminiAnalysis(input: any) {
         "${input.customPrompt}"
         Incorpore ESSAS DIRETRIZES DO USUÁRIO com prioridade absoluta na sua análise estratégica.` : ''}
         
-        REGRAS DE RESPOSTA:
-        1. Explique como orquestrou a rota em 2 frases técnicas incorporando as prioridades e diretrizes personalizadas.
-        2. Use terminologia logística/transporte (vetores, fluxo cinético, gradiente).
-        3. Identifique o "Nó Crítico" da missão e onde podem ter ocorrências relevantes.
+        REGRAS DE RESPOSTA (MÁXIMA RETENÇÃO):
+        1. Forneça o insight de orquestração em no máximo 1 ou 2 frases curtas e diretas.
+        2. Use terminologia logística de alto nível (vetor de fluxo, otimização cinemática).
+        3. Nunca ultrapasse 2 frases sob nenhuma hipótese.
         4. RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.
       `;
     } else {
@@ -72,11 +72,11 @@ export async function getGeminiAnalysis(input: any) {
         O operador solicitou com prioridade absoluta: "${input.customPrompt}"` : ''}
 
         ### DIRETRIZES IMPORTANTES PARA A IA (MÁXIMA PRECISÃO):
-        1. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente ruas fictícias, acidentes fictícios, engarrafamentos fictícios ou alagamentos fictícios. Se os dados reais de ocorrências mostram "Nenhuma ocorrência", não invente perigos! Mencione que a via está livre e segura.
-        2. ANÁLISE FIEL DA ROTA: Retrate estritamente a sequência de paradas reais descritas nos dados. Mostre como as prioridades selecionadas (prioridade: ${input.priority || 'N/A'}) e as diretrizes do operador influenciaram na escolha da ordem ideal de paradas.
-        3. AVALIAÇÃO DOS PARÂMETROS PERSONALIZADOS: Analise detalhadamente se os parâmetros ${input.avoidDirt ? 'Evitar vias não pavimentadas, ' : ''}${input.avoidFloods ? 'Evitar zonas inundáveis, ' : ''}${input.avoidHills ? 'Evitar trechos inclinados/morros' : ''} e a diretriz customizada ("${input.customPrompt || 'Nenhuma'}") foram cumpridos com sucesso na rota traçada de ${(input.summary.distance / 1000).toFixed(2)} km.
-        4. RESPOSTA EXECUTIVA: Forneça um insight tático de segurança extremamente direto, profissional e realista (Máximo de 3 frase explicativas). Responda com termos técnicos logísticos reais (sinergia cinética, vetor de fluxo, otimização cinemática).
-        5. IDIOMA: Responda sempre em Português do Brasil de forma executiva.
+        1. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente ruas, acidentes ou alagamentos fictícios. Se dados reais mostram "Nenhuma ocorrência", relate que a via está livre e segura.
+        2. ANÁLISE FIEL DA ROTA: Relate como as prioridades (${input.priority || 'N/A'}) influenciaram na escolha da ordem das paradas.
+        3. AVALIAÇÃO DOS PARÂMETROS PERSONALIZADOS: Analise se os parâmetros de restrição foram cumpridos com sucesso no trajeto de ${(input.summary.distance / 1000).toFixed(2)} km.
+        4. RESPOSTA EXECUTIVA E CURTA: Forneça um insight tático direto e realista com no máximo 2 frases explicativas. Responda em termos logísticos objetivos.
+        5. EXTENSÃO E IDIOMA: Nunca ultrapasse o limite de 2 frases. Responda sempre em Português do Brasil.
       `;
     }
 
@@ -90,19 +90,19 @@ export async function getGeminiAnalysis(input: any) {
 
     if (!response.ok) {
       console.warn("API AI returned error status:", response.status);
-      return "Logix: Análise tática pré-ativa. Priorizando a segurança devido a possíveis variações climáticas. Reduza velocidade nos cruzamentos principais.";
+      return "Fluxo dinâmico otimizado. Rota estruturada em total conformidade para garantir maior segurança operacional.";
     }
 
     const contentType = response.headers.get("content-type");
     if (!contentType || !contentType.includes("application/json")) {
       console.warn("API AI non-JSON response received");
-      return "Logix: Fluxo cinético otimizado. Traçado mestre gerado em total conformidade.";
+      return "Fluxo tático de transporte otimizado. Traçado mestre gerado de acordo com as restrições selecionadas.";
     }
 
     const data = await response.json();
-    return data.content || "Análise indisponível no momento.";
+    return data.content || "Análise do trajeto indisponível no momento.";
   } catch (error) {
     console.error("Gemini AI Connector Error:", error);
-    return "Logix: Conexão estratego de contingência operacional. A IA recomenda cautela redobrada em trechos de aclive sob as condições climáticas atuais.";
+    return "Conexão de contingência operacional ativada. Recomenda-se atenção redobrada sob as condições de trânsito locais.";
   }
 }
