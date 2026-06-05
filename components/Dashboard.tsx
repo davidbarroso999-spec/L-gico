@@ -27,6 +27,7 @@ import {
   Download
 } from 'lucide-react';
 import { db } from '@/lib/db';
+import InfoTooltip from '@/components/InfoTooltip';
 
 export default function KpiDashboard() {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
@@ -39,99 +40,37 @@ export default function KpiDashboard() {
   const [magnifiedAddress, setMagnifiedAddress] = useState<string>('');
   const [magnifiedAt, setMagnifiedAt] = useState<string>('');
 
-  // Vehicle Configuration States with lazy localstorage initialization (No set state in useEffect)
-  const [vehicleType, setVehicleType] = useState<'van' | 'light_truck' | 'medium_truck' | 'heavy_truck'>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehicleType) return parsed.vehicleType;
-        }
-      } catch (e) {}
-    }
-    return 'light_truck';
-  });
-
-  const [vehicleModel, setVehicleModel] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehicleModel) return parsed.vehicleModel;
-        }
-      } catch (e) {}
-    }
-    return 'Mercedes-Benz Accelo';
-  });
-
-  const [vehiclePlate, setVehiclePlate] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehiclePlate) return parsed.vehiclePlate;
-        }
-      } catch (e) {}
-    }
-    return 'LOG-2026';
-  });
-
-  const [vehicleTara, setVehicleTara] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehicleTara !== undefined) return Number(parsed.vehicleTara);
-        }
-      } catch (e) {}
-    }
-    return 4100;
-  });
-
-  const [vehiclePayloadMax, setVehiclePayloadMax] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehiclePayloadMax !== undefined) return Number(parsed.vehiclePayloadMax);
-        }
-      } catch (e) {}
-    }
-    return 5000;
-  });
-
-  const [vehicleCargoWeight, setVehicleCargoWeight] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.vehicleCargoWeight !== undefined) return Number(parsed.vehicleCargoWeight);
-        }
-      } catch (e) {}
-    }
-    return 3800;
-  });
-
-  const [fuelPrice, setFuelPrice] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.fuelPrice !== undefined) return Number(parsed.fuelPrice);
-        }
-      } catch (e) {}
-    }
-    return 5.85;
-  });
+  // Vehicle Configuration States initialized with pristine standard defaults to prevent Hydration Mismatch
+  const [vehicleType, setVehicleType] = useState<'van' | 'light_truck' | 'medium_truck' | 'heavy_truck'>('light_truck');
+  const [vehicleModel, setVehicleModel] = useState<string>('Mercedes-Benz Accelo');
+  const [vehiclePlate, setVehiclePlate] = useState<string>('LOG-2026');
+  const [vehicleTara, setVehicleTara] = useState<number>(4100);
+  const [vehiclePayloadMax, setVehiclePayloadMax] = useState<number>(5000);
+  const [vehicleCargoWeight, setVehicleCargoWeight] = useState<number>(3800);
+  const [fuelPrice, setFuelPrice] = useState<number>(5.85);
 
   const [showSavedToast, setShowSavedToast] = useState(false);
+
+  // Load saved vehicle configurations securely after mounting on the client side
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('voie_express_vehicle_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setTimeout(() => {
+          if (parsed.vehicleType) setVehicleType(parsed.vehicleType);
+          if (parsed.vehicleModel) setVehicleModel(parsed.vehicleModel);
+          if (parsed.vehiclePlate) setVehiclePlate(parsed.vehiclePlate);
+          if (parsed.vehicleTara !== undefined) setVehicleTara(Number(parsed.vehicleTara));
+          if (parsed.vehiclePayloadMax !== undefined) setVehiclePayloadMax(Number(parsed.vehiclePayloadMax));
+          if (parsed.vehicleCargoWeight !== undefined) setVehicleCargoWeight(Number(parsed.vehicleCargoWeight));
+          if (parsed.fuelPrice !== undefined) setFuelPrice(Number(parsed.fuelPrice));
+        }, 0);
+      }
+    } catch (e) {
+      console.warn("Could not load vehicle settings from localStorage safely:", e);
+    }
+  }, []);
 
   // Load metrics logic is kept intact to poll completed routes and occurrences
   useEffect(() => {
@@ -190,9 +129,9 @@ export default function KpiDashboard() {
     setVehiclePayloadMax(maxPayload);
     setVehicleModel(model);
 
-    // Keep cargo weight safe or update
-    const safeCargo = vehicleCargoWeight > maxPayload ? Math.round(maxPayload * 0.8) : vehicleCargoWeight;
-    setVehicleCargoWeight(safeCargo);
+    // Dynamically set standard cargo load to 75% of max capacity to see immediate realistic metrics
+    const standardCargo = Math.round(maxPayload * 0.75);
+    setVehicleCargoWeight(standardCargo);
 
     // Auto-save preset
     localStorage.setItem('voie_express_vehicle_settings', JSON.stringify({
@@ -201,7 +140,7 @@ export default function KpiDashboard() {
       vehiclePlate,
       vehicleTara: tara,
       vehiclePayloadMax: maxPayload,
-      vehicleCargoWeight: safeCargo,
+      vehicleCargoWeight: standardCargo,
       fuelPrice
     }));
   };
@@ -277,7 +216,9 @@ export default function KpiDashboard() {
 
   // Real-time managerial math models
   const totalKm = 1248; // Preserved static or responsive mileage
-  const cargoFillRatio = Math.round((vehicleCargoWeight / vehiclePayloadMax) * 100);
+  const safePayloadMax = vehiclePayloadMax > 0 ? vehiclePayloadMax : 1;
+  const safeTara = vehicleTara > 0 ? vehicleTara : 0;
+  const cargoFillRatio = Math.round((vehicleCargoWeight / safePayloadMax) * 100);
   
   // Base fuel consumption in Liters/100km depending on cargo type
   let baseFuelCoeff = 10;
@@ -297,7 +238,7 @@ export default function KpiDashboard() {
   }
 
   // Weight penalty (heavier cargo increases consumption)
-  const weightPenaltyRatio = vehicleCargoWeight / vehiclePayloadMax;
+  const weightPenaltyRatio = vehicleCargoWeight / safePayloadMax;
   const loadConsumptionPenalty = weightPenaltyRatio * (baseFuelCoeff * 0.15); // penalidade de até 15% a mais com carga cheia
   const currentFuelConsumption = Math.round((baseFuelCoeff + loadConsumptionPenalty) * 10) / 10;
 
@@ -324,8 +265,8 @@ export default function KpiDashboard() {
   }
 
   // Weight distribution preview
-  const estimatedFrontAxleWeight = Math.round((vehicleTara * 0.40) + (vehicleCargoWeight * 0.30));
-  const estimatedRearAxleWeight = Math.round((vehicleTara * 0.60) + (vehicleCargoWeight * 0.70));
+  const estimatedFrontAxleWeight = Math.round((safeTara * 0.40) + (vehicleCargoWeight * 0.30));
+  const estimatedRearAxleWeight = Math.round((safeTara * 0.60) + (vehicleCargoWeight * 0.70));
 
   const weekdays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
   const dataValues = [85, 92, 78, 90, 95, 88, 91];
@@ -365,8 +306,8 @@ export default function KpiDashboard() {
   ];
 
   return (
-    <div className="p-8 h-full overflow-y-auto custom-scrollbar md:pb-8 pb-32">
-      <header className="mb-12 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div className="p-4 md:p-8 pt-20 md:pt-8 h-full overflow-y-auto custom-scrollbar pb-16 md:pb-8">
+      <header className="mb-8 md:mb-12 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <span className="text-[10px] font-black tracking-widest text-tech bg-tech/10 px-3 py-1 rounded-full uppercase mb-2 inline-block">
             Módulo de Gestão de Frotas
@@ -440,9 +381,12 @@ export default function KpiDashboard() {
           <div>
             <div className="flex justify-between items-center mb-6">
               <div>
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-tech" />
-                  SLA & Curva de Eficiência Diária
+                <h3 className="text-xl font-bold text-white flex items-center gap-2 flex-wrap">
+                  <TrendingUp className="w-5 h-5 text-tech shrink-0" />
+                  <span>
+                    SLA & Curva de Eficiência Diária
+                    <InfoTooltip text="Monitora a porcentagem de entregas realizadas no prazo estipulado (SLA) visando identificar gargalos." />
+                  </span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">Produtividade média de entregas programadas x realizadas</p>
               </div>
@@ -623,9 +567,12 @@ export default function KpiDashboard() {
         <div className="glass p-8 rounded-3xl flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <Truck className="w-5 h-5 text-tech" />
-                Configurar Veículo
+              <h3 className="text-xl font-bold text-white flex items-center gap-2 flex-wrap">
+                <Truck className="w-5 h-5 text-tech shrink-0" />
+                <span>
+                  Configurar Veículo
+                  <InfoTooltip text="Parametrize placa, capacidade de carga e autonomia. Essas informações afetam diretamente os custos de rotaixos." />
+                </span>
               </h3>
               <button 
                 onClick={handleSaveSettings}
@@ -719,28 +666,56 @@ export default function KpiDashboard() {
               </div>
 
               {/* DYNAMIC WEIGHT CONTROLLER SECTION */}
-              <div className="border-t border-slate-800/80 pt-4 mt-5">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Peso da Carga Carregada</span>
-                  <span className={`text-xs font-mono font-black ${isOverloaded ? 'text-alert' : 'text-tech'}`}>
-                    {vehicleCargoWeight.toLocaleString('pt-BR')} kg
-                  </span>
+              <div className="border-t border-slate-800/80 pt-4 mt-5 space-y-4">
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Peso da Carga Carregada</span>
+                    <span className={`text-xs font-mono font-black ${isOverloaded ? 'text-alert' : 'text-tech'}`}>
+                      {vehicleCargoWeight.toLocaleString('pt-BR')} kg
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] text-slate-500">0</span>
+                    <input 
+                      type="range"
+                      min="0"
+                      max={String(vehiclePayloadMax * 1.3)} // allow sliding past payload limit to simulate overload fines!
+                      value={vehicleCargoWeight}
+                      onChange={(e) => {
+                        const newWeight = Number(e.target.value);
+                        setVehicleCargoWeight(newWeight);
+                      }}
+                      className="flex-1 accent-tech h-1 rounded-lg bg-slate-950 cursor-pointer"
+                    />
+                    <span className="text-[10px] text-slate-500">{(vehiclePayloadMax * 1.3).toLocaleString('pt-BR')}</span>
+                  </div>
                 </div>
-                
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-[10px] text-slate-500">0</span>
-                  <input 
-                    type="range"
-                    min="0"
-                    max={String(vehiclePayloadMax * 1.3)} // allow sliding past payload limit to simulate overload fines!
-                    value={vehicleCargoWeight}
-                    onChange={(e) => {
-                      const newWeight = Number(e.target.value);
-                      setVehicleCargoWeight(newWeight);
-                    }}
-                    className="flex-1 accent-tech h-1 rounded-lg bg-slate-950 cursor-pointer"
-                  />
-                  <span className="text-[10px] text-slate-500">{(vehiclePayloadMax * 1.3).toFixed(0)}</span>
+
+                {/* VISUAL CONTROLLER FOR PESO BRUTO TOTAL (PBT) */}
+                <div className="bg-slate-950/60 border border-slate-800/40 rounded-2xl p-4 flex flex-col gap-2.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Peso Bruto Total (PBT Real)</span>
+                    <span className="text-xs font-mono font-black text-white">
+                      {(safeTara + vehicleCargoWeight).toLocaleString('pt-BR')} kg
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        isOverloaded 
+                          ? 'bg-alert shadow-[0_0_10px_rgba(239,68,68,0.5)]' 
+                          : cargoFillRatio > 85 
+                            ? 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)]' 
+                            : 'bg-tech shadow-[0_0_10px_rgba(0,212,170,0.5)]'
+                      }`}
+                      style={{ width: `${Math.min(100, ((safeTara + vehicleCargoWeight) / (safeTara + safePayloadMax)) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between items-center text-[9px] text-slate-500 font-mono font-semibold">
+                    <span>Tara: {safeTara.toLocaleString('pt-BR')} kg</span>
+                    <span>PBT Máx: {(safeTara + safePayloadMax).toLocaleString('pt-BR')} kg</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -774,9 +749,12 @@ export default function KpiDashboard() {
 
       {/* REALISTIC MANAGERIAL METRICS GRID: Centro de Custo e Eco-Distribuição */}
       <div className="mb-12">
-        <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-tech" />
-          Centro de Controle de Carga e Custos (Dados do Gestor)
+        <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2 flex-wrap">
+          <Sparkles className="w-5 h-5 text-tech shrink-0" />
+          <span>
+            Centro de Controle de Carga e Custos (Dados do Gestor)
+            <InfoTooltip text="Visualize indicadores cruciais como CPK (Custo Por Quilômetro) e pegada de carbono baseados no veículo configurado." />
+          </span>
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -862,9 +840,12 @@ export default function KpiDashboard() {
 
       {/* Comprovantes de Entregas Realizadas (Novos e Persistidos localmente no Dexie) */}
       <div className="mt-8">
-        <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-          <Camera className="w-5 h-5 text-tech animate-pulse" />
-          Comprovantes de Entrega Recente (Banco Local Dexie)
+        <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2 flex-wrap">
+          <Camera className="w-5 h-5 text-tech animate-pulse shrink-0" />
+          <span>
+            Comprovantes de Entrega Recente (Banco Local Dexie)
+            <InfoTooltip text="Histórico sincronizado localmente das fotos e notas das encomendas entregues, garantindo auditoria offline." />
+          </span>
         </h3>
 
         {completedRoutes.length === 0 ? (

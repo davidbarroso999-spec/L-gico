@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'LogixRoute-App/1.0 (davidbarroso999@gmail.com)',
+          'User-Agent': 'VoieExpress-App/1.0 (davidbarroso999@gmail.com)',
           'Accept-Language': 'pt-BR,pt;q=0.9'
         },
         next: { revalidate: 3600 } // Cache for 1 hour on server
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
 
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'LogixRoute-App/1.0 (davidbarroso999@gmail.com)',
+          'User-Agent': 'VoieExpress-App/1.0 (davidbarroso999@gmail.com)',
           'Accept-Language': 'pt-BR,pt;q=0.9'
         },
         next: { revalidate: 3600 }

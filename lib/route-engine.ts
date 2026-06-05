@@ -310,8 +310,6 @@ export async function optimizeRoute(
       }
       return {
         ...loc,
-        lat: closestPort.lat,
-        lon: closestPort.lon,
         fluvialPort: closestPort.name,
         address: `${loc.address.split(' (Atracado')[0]} (Atracado no ${closestPort.name})`
       };
@@ -457,7 +455,7 @@ export async function optimizeRoute(
     }
   }));
 
-  // 5. Routing logic: Mantém o primeiro como origem e o último como destino com simulação de tempo realista (iniciando às 08:00)
+  // 5. Routing logic: Mantém o primeiro como origem (start) e todos os demais são ordenados por proximidade logística coletiva
   const sequence: RouteStop[] = [];
   const start = { 
     ...enrichedLocations[0], 
@@ -465,8 +463,9 @@ export async function optimizeRoute(
     estimatedArrival: "08:00", 
     timeWindow: timeWindows?.[0]
   };
-  const end = enrichedLocations.length > 1 ? { ...enrichedLocations[enrichedLocations.length - 1] } : null;
-  const intermediates = enrichedLocations.slice(1, -1);
+  
+  // All other locations except the starting location are treated as intermediates to be sorted by proximity
+  const intermediates = enrichedLocations.slice(1);
 
   sequence.push(start as any);
 
@@ -573,27 +572,10 @@ export async function optimizeRoute(
     }
   }
 
-  if (end) {
-    const lastStop = sequence[sequence.length - 1];
-    const lastLocIdx = enrichedLocations.findIndex(l => l.id === lastStop.id);
-    const endLocIdx = enrichedLocations.findIndex(l => l.id === end.id);
-    const lastT = (matrix?.durations?.[lastLocIdx]?.[endLocIdx] || 600) / 60; // min
-    
-    const endArrivalMins = currentTime + lastT;
-    const endArrivalStr = formatMinutes(endArrivalMins);
-    
-    sequence.push({ 
-      ...end, 
-      sequence: sequence.length, 
-      estimatedArrival: endArrivalStr,
-      timeWindow: timeWindows?.[parseInt(end.id)]
-    } as RouteStop);
-  }
-
   // 6. Final geometry
   let directions: any = null;
   if (options.vehicle === 'boat') {
-    const allCoordinates: [number, number][] = [];
+    const rawCoordinates: [number, number][] = [];
     let fluvialDistance = 0;
     let fluvialDuration = 0;
 
@@ -604,16 +586,61 @@ export async function optimizeRoute(
       const fromPort = FLUVIAL_PORTS.find(p => p.name === fromStop.fluvialPort) || FLUVIAL_PORTS[0];
       const toPort = FLUVIAL_PORTS.find(p => p.name === toStop.fluvialPort) || FLUVIAL_PORTS[0];
       
-      const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority);
-      
-      fluvialDistance += stats.distance * 1000; // in meters (for GeoJSON summary)
-      fluvialDuration += stats.duration * 60; // in seconds (for GeoJSON summary)
+      if (fromPort.name === toPort.name) {
+        // Same port node (land-bound transition)
+        rawCoordinates.push([fromStop.lon, fromStop.lat]);
+        rawCoordinates.push([toStop.lon, toStop.lat]);
+        
+        const dLand = calculateDistance(fromStop.lat, fromStop.lon, toStop.lat, toStop.lon);
+        fluvialDistance += dLand * 1000;
+        fluvialDuration += (dLand / 30) * 3600; // 30 km/h average
+      } else {
+        // Hybrid path: Origin street coordinate -> closest departure port -> river waterway -> closest arrival port -> Destination street coordinate
+        rawCoordinates.push([fromStop.lon, fromStop.lat]);
+        rawCoordinates.push([fromPort.lon, fromPort.lat]);
+        
+        const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority);
+        fluvialDistance += stats.distance * 1000; // in meters (for GeoJSON summary)
+        fluvialDuration += stats.duration * 60; // in seconds (for GeoJSON summary)
+        
+        stats.path.forEach((c) => {
+          rawCoordinates.push([c[1], c[0]]); // [lon, lat]
+        });
+        
+        rawCoordinates.push([toPort.lon, toPort.lat]);
+        rawCoordinates.push([toStop.lon, toStop.lat]);
+        
+        // Add small approximate access distance metrics
+        const dLand1 = calculateDistance(fromStop.lat, fromStop.lon, fromPort.lat, fromPort.lon);
+        const dLand2 = calculateDistance(toStop.lat, toStop.lon, toPort.lat, toPort.lon);
+        fluvialDistance += (dLand1 + dLand2) * 1000;
+        fluvialDuration += ((dLand1 + dLand2) / 30) * 3600;
+      }
+    }
 
-      stats.path.forEach((c, idx) => {
-        if (idx > 0 || allCoordinates.length === 0) {
-          allCoordinates.push([c[1], c[0]]); // GeoJSON expects [lon, lat]
+    // Clean up consecutive redundant/duplicate coordinates for high-fidelity Leaflet lines
+    const allCoordinates: [number, number][] = [];
+    rawCoordinates.forEach(c => {
+      if (allCoordinates.length === 0) {
+        allCoordinates.push(c);
+      } else {
+        const last = allCoordinates[allCoordinates.length - 1];
+        if (Math.abs(last[0] - c[0]) > 0.0001 || Math.abs(last[1] - c[1]) > 0.0001) {
+          allCoordinates.push(c);
         }
-      });
+      }
+    });
+
+    // Ensure we have at least 2 points to be a valid LineString
+    if (allCoordinates.length < 2) {
+      if (allCoordinates.length === 1) {
+        allCoordinates.push([allCoordinates[0][0] + 0.001, allCoordinates[0][1] + 0.001]);
+      } else {
+        sequence.forEach(s => allCoordinates.push([s.lon, s.lat]));
+        if (allCoordinates.length === 1) {
+          allCoordinates.push([allCoordinates[0][0] + 0.001, allCoordinates[0][1] + 0.001]);
+        }
+      }
     }
 
     directions = {

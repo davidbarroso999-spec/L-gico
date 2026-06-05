@@ -9,7 +9,7 @@ export async function getGeminiAnalysis(input: any) {
     
     if (input.task === "STRATEGY_ONLY") {
       prompt = `
-        ### MISSÃO: PLANEJAMENTO ESTRATÉGICO LOGIX
+        ### MISSÃO: PLANEJAMENTO ESTRATÉGICO HARPIA
         Analise a topologia da rota e forneça a diretriz mestre considerando os parâmetros reais:
         
         LOCAIS: ${input.locations.join(' -> ')}
@@ -40,7 +40,7 @@ export async function getGeminiAnalysis(input: any) {
       `;
     } else {
       prompt = `
-        ### MISSÃO: VEREDITO LOGIX (IA ESTRATÉGICA)
+        ### MISSÃO: VEREDITO HARPIA (IA ESTRATÉGICA)
         ESTRATÉGIA APLICADA: ${input.strategy || 'N/A'}
         
         DADOS REAIS DA EXECUÇÃO FINAL DA ROTA:

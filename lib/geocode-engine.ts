@@ -22,14 +22,135 @@ function formatCep(cep: any): string | undefined {
 const geoCache = new Map<string, GeocodeResult[]>();
 
 // High-precision offline registry for famous Manaus neighborhoods & locations (demoroute)
-const OFFLINE_REGISTRY: Record<string, { lat: number, lon: number, name: string, context: string }> = {
-  'centro, manaus, am': { lat: -3.1311, lon: -60.0242, name: 'Centro', context: 'Manaus, AM, Brasil' },
-  'adrianopolis, manaus, am': { lat: -3.1116, lon: -60.0121, name: 'Adrianópolis', context: 'Manaus, AM, Brasil' },
-  'aleixo, manaus, am': { lat: -3.0963, lon: -59.9892, name: 'Aleixo', context: 'Manaus, AM, Brasil' },
-  'cidade nova, manaus, am': { lat: -3.0298, lon: -59.9723, name: 'Cidade Nova', context: 'Manaus, AM, Brasil' },
-  'flores, manaus, am': { lat: -3.0801, lon: -60.0163, name: 'Flores', context: 'Manaus, AM, Brasil' },
-  'compensa, manaus, am': { lat: -3.1102, lon: -60.0468, name: 'Compensa', context: 'Manaus, AM, Brasil' },
-};
+interface RegistryEntry {
+  lat: number;
+  lon: number;
+  name: string;
+  context: string;
+  aliases: string[];
+}
+
+const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
+  {
+    lat: -3.1311,
+    lon: -60.0242,
+    name: 'Centro',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['centro', 'centro manaus', 'centro civico']
+  },
+  {
+    lat: -3.1116,
+    lon: -60.0121,
+    name: 'Adrianópolis',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['adrianopolis', 'bairro adrianopolis', 'mario ypiranga']
+  },
+  {
+    lat: -3.0963,
+    lon: -59.9892,
+    name: 'Aleixo',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['aleixo', 'bairro aleixo']
+  },
+  {
+    lat: -3.0298,
+    lon: -59.9723,
+    name: 'Cidade Nova',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['cidade nova', 'bairro cidade nova', 'noel nutels']
+  },
+  {
+    lat: -3.0801,
+    lon: -60.0163,
+    name: 'Flores',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['flores', 'bairro flores']
+  },
+  {
+    lat: -3.1102,
+    lon: -60.0468,
+    name: 'Compensa',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['compensa', 'bairro compensa']
+  },
+  {
+    lat: -3.0355,
+    lon: -60.0125,
+    name: 'Bemol Torquato (CD - Centro de Distribuição)',
+    context: 'Av. Torquato Tapajós, Manaus - AM',
+    aliases: ['bemol torquato', 'cd', 'cd bemol', 'centro de distribuicao', 'centro de distribuicao bemol', 'bemol cd', 'cd bemol torquato', 'torquato tapajos bemol', 'distribuicao bemol', 'deposito bemol']
+  },
+  {
+    lat: -3.1312,
+    lon: -60.0268,
+    name: 'Bemol Centro',
+    context: 'Rua Marquês de Santa Cruz, Centro, Manaus - AM',
+    aliases: ['bemol centro', 'loja bemol centro', 'bemol da marques', 'marques de santa cruz']
+  },
+  {
+    lat: -3.0248,
+    lon: -59.9678,
+    name: 'Sumaúma Park Shopping',
+    context: 'Av. Noel Nutels, Cidade Nova, Manaus - AM',
+    aliases: ['-3.0248', 'sumauma', 'sumauma shopping', 'sumauma park shopping', 'shopping sumauma']
+  },
+  {
+    lat: -3.1042,
+    lon: -60.0102,
+    name: 'Manauara Shopping',
+    context: 'Av. Mário Ypiranga Monteiro, Adrianópolis, Manaus - AM',
+    aliases: ['manauara', 'manauara shopping', 'shopping manauara']
+  },
+  {
+    lat: -3.1025,
+    lon: -60.0278,
+    name: 'Amazonas Shopping',
+    context: 'Av. Djalma Batista, Flores, Manaus - AM',
+    aliases: ['amazonas shopping', 'shopping amazonas', 'djalma batista']
+  },
+  {
+    lat: -3.0411,
+    lon: -60.0494,
+    name: 'Aeroporto Internacional Eduardo Gomes',
+    context: 'Av. Santos Dumont, Tarumã, Manaus - AM',
+    aliases: ['aeroporto', 'aeroporto de manaus', 'eduardo gomes', 'santos dumont', 'aero', 'aeroporto eduardo gomes']
+  },
+  {
+    lat: -3.1410,
+    lon: -60.0260,
+    name: 'Porto de Manaus',
+    context: 'Centro, Manaus - AM',
+    aliases: ['porto', 'porto de manaus', 'porto centro', 'escadaria roadway']
+  },
+  {
+    lat: -3.0825,
+    lon: -60.0281,
+    name: 'Arena da Amazônia',
+    context: 'Av. Constantino Nery, Flores, Manaus - AM',
+    aliases: ['arena da amazonia', 'estadio arena', 'constantino nery', 'sambodromo']
+  },
+  {
+    lat: -3.1302,
+    lon: -60.0234,
+    name: 'Teatro Amazonas',
+    context: 'Largo de São Sebastião, Centro, Manaus - AM',
+    aliases: ['teatro amazonas', 'largo de sao sebastiao', 'teatro centro']
+  },
+  {
+    lat: -3.0991,
+    lon: -59.9723,
+    name: 'Ufam - Campus Universitário',
+    context: 'Av. General Rodrigo Otávio, Coroado, Manaus - AM',
+    aliases: ['ufam', 'universidade federal', 'campus ufam', 'rodrigo otavio', 'general rodrigo otavio']
+  },
+  {
+    lat: -3.1364,
+    lon: -59.9839,
+    name: 'Suframa',
+    context: 'Distrito Industrial I, Manaus - AM',
+    aliases: ['suframa', 'superintendencia suframa', 'distrito industrial']
+  }
+];
 
 /**
  * Normalizes a string for deduplication comparison.
@@ -54,21 +175,32 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
   if (!text || text.trim().length < 2) return [];
   const normalizedText = text.trim().toLowerCase();
   
-  // 1. Check offline registry match first - resolves instantly with 0ms API cost or key
-  const normalizedSearch = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  for (const [key, val] of Object.entries(OFFLINE_REGISTRY)) {
-    if (normalizedSearch === key || key.includes(normalizedSearch) || normalizedSearch.includes(key)) {
-      const offlineResult: GeocodeResult = {
-        lat: val.lat,
-        lon: val.lon,
-        name: val.name,
-        context: val.context,
-        label: `${val.name}, ${val.context}`,
-        confidenceScore: 100,
-        source: 'cache',
-        type: 'address'
-      };
-      return [offlineResult];
+  // 1. Check offline registry matches by searching our rich aliases or names
+  const normalizedSearch = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const offlineMatches: GeocodeResult[] = [];
+  
+  if (normalizedSearch.length >= 2) {
+    for (const entry of RICH_OFFLINE_REGISTRY) {
+      const matchFound = entry.aliases.some(alias => {
+        const normAlias = alias.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return normAlias.includes(normalizedSearch) || normalizedSearch.includes(normAlias);
+      }) || entry.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(normalizedSearch);
+
+      if (matchFound) {
+        offlineMatches.push({
+          lat: entry.lat,
+          lon: entry.lon,
+          name: entry.name,
+          context: entry.context,
+          label: `${entry.name}, ${entry.context}`,
+          confidenceScore: 100,
+          source: 'cache',
+          type: 'address'
+        });
+      }
+    }
+    if (offlineMatches.length > 0) {
+      return offlineMatches;
     }
   }
 
@@ -78,12 +210,27 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
   }
 
   try {
-    // Default fallback to Manaus, AM coord context to ensure precise local resolution if GPS is inactive
-    const lat = proximity?.lat ?? -3.1116;
-    const lon = proximity?.lon ?? -60.0242;
-    const hasProximity = true;
-
+    let lat = proximity?.lat;
+    let lon = proximity?.lon;
+    
+    // Default fallback to Manaus only if we don't have proximity AND the string doesn't explicitly look like another state
+    if (lat == null || lon == null) {
+       const queryNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+       const isSearchingOutsideAmazonas = /\b(sp|sao paulo|rj|rio de janeiro|mg|minas gerais|pr|parana|rs|rio grande do sul|sc|santa catarina|df|distrito federal|ce|ceara|pe|pernambuco|ba|bahia|pa|para|go|goias|mt|mato grosso|ms|mato grosso do sul|es|espirito santo|ac|acre|al|alagoas|ap|amapa|ma|maranhao|pb|paraiba|pi|piaui|rn|rio grande do norte|ro|rondonia|rr|roraima|se|sergipe|to|tocantins|curitiba|recife|fortaleza|salvador|brasilia|goiania|belem|rio branco|macapa|maceio|vitoria|sao luis|joao pessoa|teresina|natal|aracaju|palmas)\b/.test(queryNorm);
+       
+       if (!isSearchingOutsideAmazonas) {
+           lat = -3.1116;
+           lon = -60.0242;
+       }
+    }
+    
+    const hasProximity = (lat != null && lon != null);
+    
     let composedQuery = text;
+    if (!text.toLowerCase().includes('brasil') && !text.toLowerCase().includes('br') && !text.toLowerCase().includes('brazil')) {
+      composedQuery = `${text}, Brasil`;
+    }
+
     let viaCepResolved = false;
     let resolvedViaCepData: any = null;
 
@@ -134,8 +281,8 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     }
 
     const cleanText = encodeURIComponent(composedQuery);
-    const viewboxStr = `&viewbox=${lon - 0.5},${lat + 0.5},${lon + 0.5},${lat - 0.5}`;
-    const photonLocation = `&lat=${lat}&lon=${lon}`;
+    const viewboxStr = hasProximity ? `&viewbox=${lon! - 0.5},${lat! + 0.5},${lon! + 0.5},${lat! - 0.5}` : '';
+    const photonLocation = hasProximity ? `&lat=${lat}&lon=${lon}` : '';
 
     const results: GeocodeResult[] = [];
     const seenKeys = new Set<string>();
@@ -159,6 +306,17 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       const normLabel = normalizeForDedup(res.label);
       const normName = normalizeForDedup(res.name);
       
+      if (res.cep) {
+        const cleanCepStr = res.cep.replace('-', '');
+        if (!res.label.replace('-', '').includes(cleanCepStr)) {
+            if (res.label.endsWith(', Brasil') || res.label.endsWith(', Brazil')) {
+                res.label = res.label.replace(/, (Brasil|Brazil)$/i, ` - ${res.cep}`);
+            } else {
+                res.label = `${res.label} - ${res.cep}`;
+            }
+        }
+      }
+
       // Coordinate grid up to 4 decimals (~11 meters precision) provides excellent deduplication
       const latGrid = Math.floor(res.lat * 10000);
       const lonGrid = Math.floor(res.lon * 10000);
@@ -190,13 +348,13 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     }
 
     const mapboxQs = new URLSearchParams({ q: composedQuery });
-    if (lat && lon) {
+    if (hasProximity && lat && lon) {
       mapboxQs.append('lat', lat.toString());
       mapboxQs.append('lon', lon.toString());
     }
 
     const googleQs = new URLSearchParams({ input: text });
-    if (lat && lon) {
+    if (hasProximity && lat && lon) {
       googleQs.append('lat', lat.toString());
       googleQs.append('lon', lon.toString());
     }
@@ -220,12 +378,12 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       }).then(r => r.ok ? r.json() : null).catch(() => null),
 
       // 3. Nominatim (OSM online geocoder proxied to avoid client-side CORS failures)
-      fetch(`/api/places/osm?type=nominatim&q=${cleanText}&viewbox=${lon - 0.5},${lat + 0.5},${lon + 0.5},${lat - 0.5}`)
+      fetch(`/api/places/osm?type=nominatim&q=${cleanText}${viewboxStr}`)
         .then(r => r.ok ? r.json() : null)
         .catch(() => null),
 
       // 4. Photon (High-availability search engine proxied to avoid client-side CORS failures)
-      fetch(`/api/places/osm?type=photon&q=${cleanText}&lat=${lat}&lon=${lon}`)
+      fetch(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`)
         .then(r => r.ok ? r.json() : null)
         .catch(() => null)
     ];

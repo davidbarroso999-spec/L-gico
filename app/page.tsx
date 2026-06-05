@@ -36,7 +36,9 @@ import {
   Truck,
   Bike,
   Car,
-  Droplets
+  Droplets,
+  Menu,
+  X
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
@@ -44,6 +46,8 @@ import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
 import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
 import Logo from '@/components/Logo';
+import InfoTooltip from '@/components/InfoTooltip';
+import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -84,15 +88,22 @@ const getSuggestionIconObj = (name: string, type?: string) => {
   return { icon: MapPin, bg: 'bg-slate-800 text-slate-400 border border-slate-700/50' };
 };
 
-const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile }: any) => (
+const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile, isExpanded }: any) => (
     <button
       onClick={onClick}
-      className={`p-3 rounded-xl transition-all relative group ${
-        isActive ? (isMobile ? 'text-tech' : 'bg-tech text-slate-950') : 'text-slate-500 hover:text-white'
+      className={`p-3 rounded-xl transition-all relative group flex items-center gap-3 ${
+        isExpanded ? 'w-full px-4 py-3 justify-start' : 'justify-center'
+      } ${
+        isActive ? (isMobile ? 'text-tech' : 'bg-tech text-slate-950') : 'text-slate-500 hover:text-white hover:bg-white/5'
       }`}
     >
-      <Icon className={isMobile ? "w-6 h-6" : "w-5 h-5"} />
-      {!isMobile && (
+      <Icon className={isMobile ? "w-6 h-6" : "w-5 h-5 shrink-0"} />
+      {!isMobile && isExpanded && (
+        <span className="text-xs font-black uppercase tracking-wider font-sans truncate">
+          {label}
+        </span>
+      )}
+      {!isMobile && !isExpanded && (
         <span className="absolute left-14 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
           {label}
         </span>
@@ -102,9 +113,12 @@ const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile }: any) => (
 
 import { useIsMobile } from '@/hooks/use-mobile';
 
-export default function LogixApp() {
+export default function VoieExpressApp() {
   const isMobile = useIsMobile();
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [addresses, setAddresses] = useState<string[]>(['']);
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
   
@@ -141,6 +155,13 @@ export default function LogixApp() {
   };
 
   const [routeResult, setRouteResult] = useState<any>(null);
+
+  // Simulation Mode states
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulatedResults, setSimulatedResults] = useState<Record<string, any>>({});
+  const [isCalculatingSim, setIsCalculatingSim] = useState<string | null>(null);
+  const [activeSimProfile, setActiveSimProfile] = useState<string | null>(null);
+
   const [navIndex, setNavIndex] = useState(0);
   const [isReporting, setIsReporting] = useState(false);
   const [reportType, setReportType] = useState<string>('');
@@ -343,13 +364,88 @@ export default function LogixApp() {
         console.warn("Could not save to IndexedDB, continuing...", dbErr);
       }
 
-      setTimeout(() => setCurrentScreen('result'), 1500);
+      setCurrentScreen('result');
     } catch (error: any) {
       console.error("Optimization failed:", error);
       const errMsg = error?.message || String(error);
       const errStack = error?.stack ? ` | Detalhe Técnico: ${error.stack.split('\\n')[1]}` : "";
       setApiWarning(`Falha na rota: ${errMsg}${errStack}`);
       setCurrentScreen('home');
+    }
+  };
+
+  const handleStartSimulation = async () => {
+    setIsSimulating(true);
+    if (routeResult) {
+      const currentPriority = options.priority || 'balanced';
+      setSimulatedResults({
+        [currentPriority]: routeResult
+      });
+      setActiveSimProfile(currentPriority);
+    } else {
+      setActiveSimProfile('balanced');
+    }
+  };
+
+  const handleStopSimulation = () => {
+    setIsSimulating(false);
+    setActiveSimProfile(null);
+    setIsCalculatingSim(null);
+  };
+
+  const handleSimulateProfile = async (profile: 'speed' | 'distance' | 'economy' | 'safety' | 'balanced') => {
+    setActiveSimProfile(profile);
+    if (simulatedResults[profile]) {
+      return;
+    }
+
+    const listToUse = Array.isArray(addresses) ? addresses : [];
+    const validWithWindows: Record<number, { start: string; end: string }> = {};
+    let validCount = 0;
+    const validAddresses = listToUse.filter((a, i) => {
+      const isValid = a.trim().length > 3;
+      if (isValid) {
+        const win = timeWindows[i];
+        if (win && (win.start || win.end)) {
+          validWithWindows[validCount] = {
+            start: win.start || "00:00",
+            end: win.end || "23:59"
+          };
+        }
+        validCount++;
+      }
+      return isValid;
+    });
+
+    if (validAddresses.length < 2) return;
+
+    setIsCalculatingSim(profile);
+    try {
+      const simOptions = {
+        ...options,
+        priority: profile
+      };
+      const result = await optimizeRoute(validAddresses, simOptions, resolvedCoords, validWithWindows);
+      
+      setSimulatedResults(prev => ({
+        ...prev,
+        [profile]: result
+      }));
+    } catch (err) {
+      console.error("Simulation optimization failed for profile:", profile, err);
+    } finally {
+      setIsCalculatingSim(null);
+    }
+  };
+
+  const handleApplySimulatedRoute = (simulatedRoute: any) => {
+    if (simulatedRoute) {
+      setRouteResult(simulatedRoute);
+      if (simulatedRoute.priority) {
+        setOptions(prev => ({ ...prev, priority: simulatedRoute.priority }));
+      }
+      setIsSimulating(false);
+      setActiveSimProfile(null);
     }
   };
 
@@ -412,16 +508,9 @@ export default function LogixApp() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate">{s.name}</p>
-                    <p className="text-[10px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.context || s.label}</p>
+                    <p className="text-[10px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.label}</p>
                   </div>
                 </div>
-                {s.confidenceScore && (
-                  <div className="flex flex-col items-end shrink-0 gap-0.5">
-                    <div className={`text-[8.5px] font-black px-1.5 py-0.5 rounded shadow-sm ${s.confidenceScore >= 80 ? 'bg-tech text-slate-900' : s.confidenceScore >= 50 ? 'bg-warning text-slate-900' : 'bg-red-500 text-white'}`}>
-                      {Math.max(0, Math.round(s.confidenceScore))}%
-                    </div>
-                  </div>
-                )}
               </button>
             ))
           ) : (
@@ -446,7 +535,7 @@ export default function LogixApp() {
   }
 
   return (
-    <div className={`fixed inset-0 w-full max-w-[100vw] h-full flex flex-col md:flex-row bg-slate-950 overflow-hidden font-sans`}>
+    <div className={`fixed inset-0 w-full h-full flex flex-col md:flex-row bg-slate-950 overflow-hidden font-sans`}>
       {/* API Key Warning Banner */}
       {apiWarning && (
         <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center gap-2">
@@ -462,25 +551,63 @@ export default function LogixApp() {
 
       {/* Desktop Sidebar Nav */}
       {!isMobile && (
-        <nav className="w-20 border-r border-slate-800 flex flex-col items-center py-8 gap-8 z-50 bg-slate-950">
-          <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center overflow-hidden border border-slate-800/80 shadow-[0_0_20px_rgba(0,245,255,0.1)]">
-            <Logo size="sm" />
+        <nav 
+          className={`relative h-full border-r border-slate-800 flex flex-col items-center py-8 gap-8 z-50 bg-slate-950 transition-all duration-300 ease-in-out shrink-0 ${
+            isNavbarExpanded ? 'w-60 px-4' : 'w-20 px-2'
+          }`}
+        >
+          {/* Seta no lado esquerdo que abre, expande e fecha */}
+          <button
+            onClick={() => setIsNavbarExpanded(!isNavbarExpanded)}
+            className="absolute right-[-14px] top-10 w-7 h-7 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-all shadow-lg hover:shadow-tech/15 hover:border-tech/40 cursor-pointer z-50"
+            title={isNavbarExpanded ? "Recolher Menu" : "Expandir Menu"}
+            aria-label="Toggle Navbar"
+          >
+            <ChevronRight 
+              className={`w-4 h-4 transition-transform duration-300 ${
+                isNavbarExpanded ? 'rotate-180' : 'rotate-0'
+              }`} 
+            />
+          </button>
+
+          <div className={`flex items-center gap-3 justify-center ${isNavbarExpanded ? 'w-full px-2' : ''}`}>
+            {isNavbarExpanded ? (
+              <span className="font-display font-black tracking-widest text-[#00f5ff] text-base uppercase truncate mt-2">
+                HARPIA
+              </span>
+            ) : (
+              <span className="font-display font-black tracking-widest text-[#00f5ff] text-xs uppercase truncate mt-2">
+                HP
+              </span>
+            )}
           </div>
           
-          <div className="flex flex-col gap-4">
+          <div className={`flex flex-col gap-4 ${isNavbarExpanded ? 'w-full px-1' : 'items-center'}`}>
             <NavItem 
               icon={MapIcon} 
               id="home" 
               label="Planejamento" 
               isActive={currentScreen === 'home'} 
               onClick={() => setCurrentScreen('home')} 
+              isExpanded={isNavbarExpanded}
             />
+            {routeResult && (
+              <NavItem 
+                icon={NavIcon} 
+                id="navigation-tab" 
+                label="Navegação" 
+                isActive={currentScreen === 'result' || currentScreen === 'navigation'} 
+                onClick={() => setCurrentScreen('result')} 
+                isExpanded={isNavbarExpanded}
+              />
+            )}
             <NavItem 
               icon={LayoutDashboard} 
               id="dashboard" 
               label="Métricas" 
               isActive={currentScreen === 'dashboard'} 
               onClick={() => setCurrentScreen('dashboard')} 
+              isExpanded={isNavbarExpanded}
             />
             <NavItem 
               icon={Settings} 
@@ -488,40 +615,142 @@ export default function LogixApp() {
               label="Configurações" 
               isActive={currentScreen === 'settings'} 
               onClick={() => setCurrentScreen('settings')} 
+              isExpanded={isNavbarExpanded}
             />
           </div>
         </nav>
       )}
 
-      {/* Mobile Bottom Nav */}
+      {/* Mobile Floating Menu Button */}
       {isMobile && currentScreen !== 'navigation' && (
-        <nav className="fixed bottom-0 left-0 right-0 h-20 glass z-[2000] flex justify-around items-center px-6 border-t border-white/5 pb-safe">
-          <NavItem 
-            icon={MapIcon} 
-            label="Home" 
-            isActive={currentScreen === 'home'} 
-            onClick={() => setCurrentScreen('home')} 
-            isMobile={isMobile}
-          />
-          <NavItem 
-            icon={LayoutDashboard} 
-            label="KPIs" 
-            isActive={currentScreen === 'dashboard'} 
-            onClick={() => setCurrentScreen('dashboard')} 
-            isMobile={isMobile}
-          />
-          <NavItem 
-            icon={Settings} 
-            label="Ajustes" 
-            isActive={currentScreen === 'settings'} 
-            onClick={() => setCurrentScreen('settings')} 
-            isMobile={isMobile}
-          />
-        </nav>
+        <button
+          onClick={() => setIsMobileMenuOpen(true)}
+          className="fixed left-4 top-4 w-12 h-12 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-800/80 shadow-[0_0_20px_rgba(0,245,255,0.1)] flex items-center justify-center text-tech hover:text-white transition-all duration-300 z-[3000] cursor-pointer"
+          title="Abrir Menu"
+          aria-label="Abrir Menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
+
+      {/* Mobile Left Collapsible Drawer */}
+      {isMobile && currentScreen !== 'navigation' && (
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <>
+              {/* Overlay Backdrop */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[4000]"
+              />
+
+              {/* Sidebar Panel */}
+              <motion.nav
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+                className="fixed left-0 top-0 bottom-0 w-72 bg-slate-950/95 border-r border-slate-800/85 z-[4001] px-6 py-8 flex flex-col gap-8 shadow-[10px_0_40px_rgba(0,0,0,0.85)]"
+              >
+                {/* Header within drawer */}
+                <div className="flex items-center justify-between border-b border-slate-800/60 pb-5">
+                  <div className="flex items-center justify-center w-full">
+                    <span className="font-display font-black tracking-widest text-[#00f5ff] text-xl uppercase mt-1">
+                      HARPIA
+                    </span>
+                  </div>
+                  
+                  {/* Close drawer button */}
+                  <button
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="absolute right-6 w-8 h-8 rounded-lg bg-slate-900 border border-slate-800/85 flex items-center justify-center text-slate-400 hover:text-white transition-all cursor-pointer"
+                    aria-label="Fechar Menu"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Nav Items */}
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      setCurrentScreen('home');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
+                      currentScreen === 'home'
+                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <MapIcon className="w-5 h-5 shrink-0" />
+                    Planejamento
+                  </button>
+
+                  {routeResult && (
+                    <button
+                      onClick={() => {
+                        setCurrentScreen('result');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
+                        currentScreen === 'result'
+                          ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
+                          : 'text-slate-400 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <NavIcon className="w-5 h-5 shrink-0" />
+                      Navegação
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      setCurrentScreen('dashboard');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
+                      currentScreen === 'dashboard'
+                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <LayoutDashboard className="w-5 h-5 shrink-0" />
+                    Métricas
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setCurrentScreen('settings');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
+                      currentScreen === 'settings'
+                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Settings className="w-5 h-5 shrink-0" />
+                    Configurações
+                  </button>
+                </div>
+
+                {/* Footer space showing dynamic version or visual details */}
+                <div className="mt-auto border-t border-slate-800/40 pt-4 flex flex-col gap-1 text-[10px] text-slate-500 font-mono">
+                  <p className="uppercase tracking-widest font-bold">Autonomia Inteligente</p>
+                  <p>Versão 1.5.0 • Logística Avançada</p>
+                </div>
+              </motion.nav>
+            </>
+          )}
+        </AnimatePresence>
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 relative h-full w-full max-w-[100vw] overflow-hidden ${(isMobile && currentScreen !== 'navigation') ? 'pb-20' : ''}`}>
+      <main className="flex-1 relative h-full w-full overflow-hidden">
         <AnimatePresence mode="wait">
           {currentScreen === 'home' && (
             <motion.div
@@ -530,26 +759,35 @@ export default function LogixApp() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-8 pb-32' : 'py-12'}`}
+              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-20 pb-16' : 'py-12'}`}
             >
-              <div className="w-full flex-shrink-0 flex flex-col items-center mb-10">
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.8, y: 15 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-                  className="w-20 h-20 bg-slate-900/60 backdrop-blur-md rounded-3xl flex items-center justify-center p-1.5 shadow-[0_0_50px_rgba(0,245,255,0.06)] border border-slate-800/80 mb-6"
-                >
-                  <Logo size="lg" />
-                </motion.div>
+              <div className="w-full flex-shrink-0 flex flex-col items-center justify-center mb-8 md:mb-12 relative min-h-[350px] md:min-h-[450px] overflow-hidden md:overflow-visible">
+                <div className="absolute inset-0 flex items-center justify-center -z-10 opacity-60 mix-blend-screen pointer-events-none">
+                  <RotatingEarth width={600} height={600} className="w-full max-w-[450px] md:max-w-[600px] absolute" />
+                </div>
+                
                 <motion.h1 
-                  className="font-bold font-display text-center flex flex-col items-center justify-center leading-none mb-4"
+                  className="font-bold font-display text-center flex flex-col items-center justify-center leading-none absolute inset-0 m-auto h-fit w-full px-4"
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
-                  <span className="text-5xl md:text-6xl font-black tracking-wider text-white">VOIE</span>
-                  <span className="text-xs md:text-sm font-bold tracking-[0.25em] text-tech uppercase mt-1">express</span>
+                  <div className="flex flex-col items-center w-full max-w-full px-2">
+                    {/* Centered Harpia Logo with ambient technical glowing backlight */}
+                    <div className="relative mb-3 flex items-center justify-center">
+                      <div className="absolute inset-0 bg-tech/15 blur-xl rounded-full scale-125 animate-pulse" />
+                      <Logo className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 text-tech relative z-10" />
+                    </div>
+
+                    <span className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-widest text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.2)] leading-none text-center" style={{ letterSpacing: '0.08em' }}>HARPIA</span>
+                    
+                    {/* Perfect bounding rectangular silhouette as requested to hold the slogan */}
+                    <div className="w-full max-w-xs sm:max-w-md md:max-w-lg border-t border-b border-tech/30 bg-slate-950/45 backdrop-blur-sm px-4 py-3 mt-4 text-center rounded-sm">
+                      <p className="text-[10px] sm:text-xs md:text-sm font-semibold tracking-wider text-tech uppercase leading-relaxed whitespace-normal" style={{ letterSpacing: '0.05em' }}>
+                        Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial
+                      </p>
+                    </div>
+                  </div>
                 </motion.h1>
-                <p className="text-slate-400 text-sm md:text-base text-center max-w-lg">Otimização inteligente para entregas rápidas, econômicas e seguras, adaptadas às condições locais.</p>
               </div>
 
               <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12">
@@ -558,9 +796,12 @@ export default function LogixApp() {
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
-                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4">
-                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(0,245,255,0.5)]" />
-                    Paradas de Entrega
+                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap">
+                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(0,245,255,0.5)] shrink-0" />
+                    <span>
+                      Paradas de Entrega
+                      <InfoTooltip text="Adicione o local de partida e as paradas desejadas. A plataforma traçará no mapa o melhor trajeto conectando esses pontos." />
+                    </span>
                   </h3>
                   
                   <div className="space-y-5 mb-8 relative">
@@ -589,7 +830,22 @@ export default function LogixApp() {
                             placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
                             className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10 hover:border-slate-700 font-sans"
                           />
-                          <Search className="absolute right-3.5 top-4 w-5 h-5 text-slate-600" />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setActiveSuggestionIdx(0);
+                              const text = addresses[0];
+                              if (text && text.length >= 2) {
+                                const res = await enhancedAutocomplete(text, userLocation || undefined);
+                                setSuggestions(res);
+                                setShowSuggestions(true);
+                              }
+                            }}
+                            className="absolute right-3.5 top-4 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                            title="Pesquisar local"
+                          >
+                            <Search className="w-5 h-5 text-slate-600 hover:text-tech" />
+                          </button>
                           {renderSuggestionsDropdown(0)}
                         </div>
                       </div>
@@ -622,7 +878,22 @@ export default function LogixApp() {
                                       placeholder="Empresa, hospital, praça ou rua..."
                                       className="w-full bg-slate-900/50 border border-slate-800/80 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10 hover:border-slate-700/60 font-sans"
                                     />
-                                    <Search className="absolute right-3.5 top-3.5 w-4 h-4 text-slate-600" />
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        setActiveSuggestionIdx(realIdx);
+                                        const text = addr;
+                                        if (text && text.length >= 2) {
+                                          const res = await enhancedAutocomplete(text, userLocation || undefined);
+                                          setSuggestions(res);
+                                          setShowSuggestions(true);
+                                        }
+                                      }}
+                                      className="absolute right-3.5 top-3 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                                      title="Pesquisar local"
+                                    >
+                                      <Search className="w-4 h-4 text-slate-600 hover:text-tech" />
+                                    </button>
                                     {renderSuggestionsDropdown(realIdx)}
                                   </div>
                                   <button 
@@ -690,7 +961,23 @@ export default function LogixApp() {
                               placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
                               className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10 hover:border-slate-705 font-sans"
                             />
-                            <Search className="absolute right-3.5 top-4 w-5 h-5 text-slate-600" />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const lastIdx = addresses.length - 1;
+                                setActiveSuggestionIdx(lastIdx);
+                                const text = addresses[lastIdx];
+                                if (text && text.length >= 2) {
+                                  const res = await enhancedAutocomplete(text, userLocation || undefined);
+                                  setSuggestions(res);
+                                  setShowSuggestions(true);
+                                }
+                              }}
+                              className="absolute right-3.5 top-4 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                              title="Pesquisar local"
+                            >
+                              <Search className="w-5 h-5 text-slate-600 hover:text-tech" />
+                            </button>
                             {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
                           {/* Final Destination Time Window */}
@@ -760,11 +1047,14 @@ export default function LogixApp() {
                 <div className="lg:col-span-5 flex flex-col gap-6">
                   {/* Bento Box 1: Vehicle selection */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
-                      <Truck className="w-4 h-4" />
-                      Perfil de Transporte
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Truck className="w-4 h-4 shrink-0" />
+                      <span>
+                        Perfil de Transporte
+                        <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade de ruas automaticamente." />
+                      </span>
                     </h3>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 xs:grid-cols-4 gap-2">
                       {[
                         { id: 'moto', icon: Bike, label: 'Moto' },
                         { id: 'van', icon: Car, label: 'Van' },
@@ -789,9 +1079,12 @@ export default function LogixApp() {
 
                   {/* Bento Box 2: Route optimization priority */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
-                      <Zap className="w-4 h-4" />
-                      Algoritmo de Prioridade
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Zap className="w-4 h-4 shrink-0" />
+                      <span>
+                        Algoritmo de Prioridade
+                        <InfoTooltip text="Escolha entre Tempo e Distância. Roteiros mais rápidos podem usar vias expressas, mas nem sempre são o caminho mais curto." />
+                      </span>
                     </h3>
                     <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                       {[
@@ -827,9 +1120,12 @@ export default function LogixApp() {
 
                   {/* Bento Box 3: Land & Soil constraints options (The Avoid parameters) */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2">
-                      <Shield className="w-4 h-4" />
-                      Restrições de Relevo e Solo
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Shield className="w-4 h-4 shrink-0" />
+                      <span>
+                        Restrições de Via
+                        <InfoTooltip text="Peça para evitar rodovias, pedágios ou balsas para rotas com restrições orçamentárias ou de tipo de veículo." />
+                      </span>
                     </h3>
                     <div className="flex flex-col gap-2.5">
                       {[
@@ -885,9 +1181,12 @@ export default function LogixApp() {
 
                   {/* Bento Box 4: AI Custom Prompts */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[#a855f7] mb-2.5 font-display flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-[#a855f7] animate-pulse" />
-                      Instruções da IA
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[#a855f7] mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 text-[#a855f7] animate-pulse shrink-0" />
+                      <span>
+                        Instruções da IA
+                        <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
+                      </span>
                     </h3>
                     <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
                       Adicione diretrizes customizadas para que o cérebro artificial analise a segurança física da sua equipe e do trajeto.
@@ -954,15 +1253,53 @@ export default function LogixApp() {
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} />
               </div>
-              <div className={`${isMobile ? 'z-50' : 'w-[400px] h-full z-10 shadow-2xl shrink-0'}`}>
-                <Sidebar 
-                  stops={routeResult.sequence} 
-                  summary={routeResult.summary}
-                  score={routeResult.score}
-                  aiAnalysis={routeResult.aiAnalysis}
-                  onNavigate={() => setCurrentScreen('navigation')}
-                  isLoading={false}
-                />
+              <div 
+                className={`${
+                  isMobile 
+                    ? 'z-50' 
+                    : 'relative h-full z-10 shadow-2xl shrink-0 transition-all duration-300 ease-in-out'
+                }`}
+                style={isMobile ? undefined : { width: isSidebarOpen ? '400px' : '0px' }}
+              >
+                {!isMobile && (
+                  <button
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    style={{ left: '-32px' }}
+                    className="absolute top-1/2 -translate-y-1/2 w-8 h-12 bg-slate-950 border border-slate-800 border-r-0 rounded-l-xl z-20 flex items-center justify-center text-tech hover:text-white transition-colors shadow-lg cursor-pointer"
+                    title={isSidebarOpen ? "Recolher Painel" : "Expandir Painel"}
+                  >
+                    <ChevronRight 
+                      className={`w-5 h-5 transition-transform duration-300 ${
+                        isSidebarOpen ? 'rotate-0' : 'rotate-180'
+                      }`} 
+                    />
+                  </button>
+                )}
+                <div 
+                  className={`h-full ${isMobile ? '' : 'overflow-hidden transition-all duration-300'}`} 
+                  style={isMobile ? undefined : { 
+                    width: '400px', 
+                    visibility: isSidebarOpen ? 'visible' : 'hidden', 
+                    opacity: isSidebarOpen ? 1 : 0 
+                  }}
+                >
+                  <Sidebar 
+                    stops={routeResult.sequence} 
+                    summary={routeResult.summary}
+                    score={routeResult.score}
+                    aiAnalysis={routeResult.aiAnalysis}
+                    onNavigate={() => setCurrentScreen('navigation')}
+                    isLoading={false}
+                    isSimulating={isSimulating}
+                    onStartSimulation={handleStartSimulation}
+                    onStopSimulation={handleStopSimulation}
+                    simulatedResults={simulatedResults}
+                    isCalculatingSim={isCalculatingSim}
+                    activeSimProfile={activeSimProfile}
+                    onSimulateProfile={handleSimulateProfile}
+                    onApplyRoute={handleApplySimulatedRoute}
+                  />
+                </div>
               </div>
             </motion.div>
           )}
@@ -1484,7 +1821,7 @@ export default function LogixApp() {
               animate={{ opacity: 1, y: 0 }} 
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 py-6 pb-32' : 'p-12'}`}
+              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-16' : 'p-12'}`}
             >
               <div className="max-w-2xl mx-auto w-full">
                 <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
@@ -1546,9 +1883,12 @@ export default function LogixApp() {
                   </div>
 
                   <div className="glass p-8 rounded-[32px] border-tech/10">
-                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                      <Zap className="w-5 h-5 text-tech" />
-                      Motores de Inteligência e Mapas
+                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2 flex-wrap">
+                      <Zap className="w-5 h-5 text-tech shrink-0" />
+                      <span>
+                        Motores de Inteligência e Mapas
+                        <InfoTooltip text="Verifique o status das integrações em tempo real. A inteligência usa o modelo Gemini 3.5 para inferência." />
+                      </span>
                     </h3>
                     <div className="space-y-4">
                       {/* Google Gemini */}
@@ -1592,7 +1932,12 @@ export default function LogixApp() {
                   </div>
 
                   <div className="glass p-4 sm:p-8 rounded-[32px]">
-                    <h3 className="text-xl font-bold mb-6">Unidades e Medidas</h3>
+                    <h3 className="text-xl font-bold mb-6 flex items-center flex-wrap">
+                      <span>
+                      Unidades e Medidas
+                      <InfoTooltip text="Alterna a exibição das distâncias nos resumos das viagens." />
+                      </span>
+                    </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <button className="p-4 rounded-xl bg-tech text-slate-950 font-bold text-sm">Métrico (km, m, °C)</button>
                       <button className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 font-bold text-sm">Imperial (mi, ft, °F)</button>
@@ -1600,7 +1945,12 @@ export default function LogixApp() {
                   </div>
 
                   <div className="glass p-8 rounded-[32px]">
-                    <h3 className="text-xl font-bold mb-6">Segurança dos Dados</h3>
+                    <h3 className="text-xl font-bold mb-6 flex items-center flex-wrap">
+                      <span>
+                      Segurança dos Dados
+                      <InfoTooltip text="Informações sobre a persistência dos dados e chaves do sistema." />
+                      </span>
+                    </h3>
                     <p className="text-sm text-slate-400 leading-relaxed">
                       Todas as chaves de API fornecidas estão integradas nativamente ao motor do Voie Express. 
                       Os dados de navegação e ocorrências são armazenados localmente e sincronizados de ponta-a-ponta.
@@ -1619,7 +1969,7 @@ export default function LogixApp() {
           initial={{ opacity: 0, scale: 0.8, y: 30 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-6 right-6 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(0,212,170,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
+          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(0,212,170,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
           title="Retomar Tutorial"
         >
           <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
@@ -1635,7 +1985,7 @@ export default function LogixApp() {
           id="panel-demo-assistant"
           initial={{ opacity: 0, y: 30, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-6 right-6 md:bottom-8 md:right-8 z-[10000] max-w-sm sm:max-w-md w-[calc(100vw-32px)] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(0,212,170,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
+          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[400px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(0,212,170,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
         >
           <div className="flex justify-between items-start border-b border-white/10 pb-2.5">
             <div className="flex items-center gap-2">
@@ -1861,7 +2211,7 @@ export default function LogixApp() {
               <div className="flex flex-col gap-2 mt-1">
                 <button
                   onClick={() => {
-                    const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">LOGIX ROUTE - COMPROVANTE SEGURO</text></svg>`;
+                    const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
                     setDeliveryPhoto(boxSvg);
                     setDeliveryNotes("Insumos biológicos em temperatura regulada entregues com perfeição no terminal.");
                     setShowDeliveryModal(true);
@@ -1882,7 +2232,7 @@ export default function LogixApp() {
                   </button>
                   <button
                     onClick={async () => {
-                      const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">LOGIX ROUTE - COMPROVANTE SEGURO</text></svg>`;
+                      const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
                       try {
                         const finalAddresses = [
                           'CEASA, Manaus, AM',

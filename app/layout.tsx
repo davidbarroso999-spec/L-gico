@@ -2,7 +2,7 @@ import type {Metadata} from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Voie Express | Smart Delivery Planner',
+  title: 'Harpia | Smart Delivery Planner',
   description: 'Intelligent route optimization with real-time weather and traffic analysis.',
 };
 
@@ -15,8 +15,10 @@ export const viewport = {
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" className="overflow-x-hidden">
       <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
           rel="stylesheet"
           href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"

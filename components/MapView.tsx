@@ -6,13 +6,13 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon } from 'lucide-react';
 
-// Fix Leaflet icons in Next.js
-const defaultIcon = L.icon({
+// Fix Leaflet icons in Next.js safely
+const defaultIcon = typeof window !== 'undefined' ? L.icon({
   iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
   iconSize: [25, 41],
   iconAnchor: [12, 41],
-});
+}) : null as any;
 
 interface MapProps {
   stops: any[];

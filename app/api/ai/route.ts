@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     // O ambiente do AI Studio já injeta a GEMINI_API_KEY gratuitamente para você
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.warn("GEMINI_API_KEY não configurada no ambiente. Utilizando simulador tático Logix.");
+      console.warn("GEMINI_API_KEY não configurada no ambiente. Utilizando simulador tático Voie Express.");
       return NextResponse.json({ 
         content: generateTacticalFallback(prompt)
       });
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
     });
     
     const config = {
-      systemInstruction: `Você é Logix, o analista de transporte mais crítico do mundo.
+      systemInstruction: `Você é Voie Express, o analista de transporte mais crítico do mundo.
 Sua missão é otimizar rotas baseando-se RIGOROSAMENTE nestes pilares:
 
 1. Velocidade (Rápido): Foque em economia de tempo, evite engarrafamentos, prefira fluidez mesmo com maior KM.
@@ -133,7 +133,7 @@ IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`,
       }
     }
 
-    // Se todos falharam, retorna a resposta do assistente Logix local simulada para manter a UX sem travar a navegação
+    // Se todos falharam, retorna a resposta do assistente Voie Express local simulada para manter a UX sem travar a navegação
     console.error("Todos os modelos Gemini qualificados falharam ou estão esgotados no servidor:", finalError);
     return NextResponse.json({ 
       content: generateTacticalFallback(prompt)

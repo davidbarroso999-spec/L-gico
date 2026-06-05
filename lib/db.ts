@@ -28,13 +28,13 @@ export interface CacheEntry {
   ttl: number;
 }
 
-export class LogixDatabase extends Dexie {
+export class VoieExpressDatabase extends Dexie {
   routes!: Table<Route>;
   occurrences!: Table<Occurrence>;
   cache!: Table<CacheEntry>;
 
   constructor() {
-    super('LogixRouteDB');
+    super('VoieExpressDB');
     this.version(1).stores({
       routes: '++id, date, status',
       occurrences: '++id, type, timestamp, synced',
@@ -43,4 +43,4 @@ export class LogixDatabase extends Dexie {
   }
 }
 
-export const db = new LogixDatabase();
+export const db = new VoieExpressDatabase();
