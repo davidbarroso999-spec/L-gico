@@ -2,8 +2,8 @@ import type {Metadata} from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Harpia | Smart Delivery Planner',
-  description: 'Intelligent route optimization with real-time weather and traffic analysis.',
+  title: 'HARPIA | Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial',
+  description: 'Sistema inteligente de roteirização e otimização tática para operações logísticas.',
 };
 
 export const viewport = {

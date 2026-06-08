@@ -120,6 +120,27 @@ function MapController({
     }
   }, [map, is3DMode, isDriving, mapOrientation]);
 
+  // Recenter Event Listener
+  useEffect(() => {
+    const handleRecenter = () => {
+      if (!map) return;
+      if (carCoords) {
+        const zoomLevel = is3DMode ? 18.5 : 17;
+        map.setView(carCoords, zoomLevel, { animate: true, duration: 1 });
+      } else {
+        if (geometry?.coordinates?.length > 0) {
+          const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
+          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 1 });
+        } else if (stops.length > 0) {
+          const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
+          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 1 });
+        }
+      }
+    };
+    window.addEventListener('recenter-map', handleRecenter);
+    return () => window.removeEventListener('recenter-map', handleRecenter);
+  }, [map, carCoords, geometry, stops, is3DMode]);
+
   return null;
 }
 
@@ -601,6 +622,34 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
              />
           ))}
 
+          {/* User Reported Occurrences (Waze-style markers) */}
+          {localOccurrences.map((occ, idx) => (
+            <Marker
+              key={`occ-${occ.id || idx}`}
+              position={[occ.lat, occ.lon]}
+              icon={L.divIcon({
+                html: `
+                  <div class="relative flex items-center justify-center">
+                    <div class="absolute inset-0 bg-alert animate-ping rounded-full opacity-30" style="animation-duration: 2s;"></div>
+                    <div class="w-8 h-8 bg-slate-900 border-2 border-alert rounded-xl flex items-center justify-center shadow-[0_5px_15px_rgba(239,68,68,0.3)] transform transition-transform" style="transform: ${is3DMode ? `rotateX(40deg) rotateZ(${isDriving && mapOrientation === 'track' ? smoothHeading : 0}deg)` : 'rotate(0deg)'}">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    </div>
+                  </div>
+                `,
+                className: '',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+              })}
+            >
+              <Popup className="custom-popup">
+                <div className="p-2 min-w-[120px]">
+                  <p className="text-[10px] uppercase font-bold text-alert mb-1 tracking-wider">Reporte Comunitário</p>
+                  <p className="font-bold text-slate-800 text-sm">{occ.description || occ.type}</p>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+
   {polyline.length >= 2 && (
             <>
               {/* Backlight Route Tube Glow */}
@@ -670,95 +719,116 @@ export default function MapView({ stops, geometry, isNavigationScreen = false }:
         </MapContainer>
       </div>
 
-      {/* FLOAT PILOT NAV HUD (Overlay) - Show if active route and map in navigation/navigationScreen */}
+      {/* WAZE-LIKE TOP BANNER & SPEED HUD */}
       {isNavigationScreen && (
-        <div className="absolute top-24 left-1/2 -translate-x-1/2 w-full max-w-md z-[1001] px-4">
-          <div className="glass p-3 rounded-2xl border border-tech/20 bg-slate-950/85 shadow-2xl flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center shrink-0">
-              <span className="font-mono text-lg font-black text-tech tracking-tighter leading-none">{speedHUD}</span>
-              <span className="text-[7px] uppercase font-bold text-slate-500 leading-none">km/h</span>
+        <>
+          {/* Top Instruction Banner */}
+          <div className="absolute top-0 left-0 right-0 z-[1001] bg-slate-950/95 backdrop-blur-xl border-b border-tech/30 shadow-[0_15px_50px_rgba(0,212,170,0.15)] text-white pb-4 px-4 pt-4 md:pt-6 rounded-b-[32px]">
+            <div className="max-w-2xl mx-auto flex items-center gap-4">
+              <div className="flex flex-col items-center justify-center w-16 shrink-0">
+                <Navigation className="w-8 h-8 text-tech mb-1" style={{ transform: `rotate(${heading}deg)` }} />
+                <span className="text-xl font-bold font-mono tracking-tighter text-tech">
+                  {instructionHUD.match(/\d+/) ? instructionHUD.match(/\d+/)?.[0] : "100"}<span className="text-xs ml-0.5 text-tech/70">m</span>
+                </span>
+              </div>
+              <div className="flex-1 border-l border-slate-800 pl-4 py-1">
+                <p className="text-[10px] uppercase font-black text-slate-500 mb-0.5 tracking-widest">A seguir</p>
+                <p className="text-xl md:text-2xl font-black leading-none drop-shadow-md text-white">{instructionHUD.replace(/\d+m - /, '') || 'Siga em frente'}</p>
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[8px] uppercase tracking-widest font-black text-tech flex items-center gap-1.5">
-                <Navigation className="w-3 h-3 text-tech" style={{ transform: `rotate(${heading}deg)` }} />
-                Navegação Assistida Waze
-              </p>
-              <p className="text-xs font-bold leading-tight truncate text-slate-100 mt-0.5">{instructionHUD}</p>
+            {/* Progress Bar under instruction */}
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-900 rounded-b-[32px] overflow-hidden">
+              <div className="h-full bg-tech w-[85%] transition-all duration-1000 ease-linear shadow-[0_0_10px_rgba(0,212,170,0.8)]"></div>
             </div>
           </div>
-        </div>
+
+          {/* Speed Limit & Current Speed Bubble (Bottom Left) */}
+          <div className="absolute bottom-40 md:bottom-32 left-4 z-[1001] flex flex-col items-center gap-2">
+            {/* Speed Limit Sign */}
+            <div className="w-12 h-12 bg-slate-900 rounded-full border-4 border-alert shadow-xl flex items-center justify-center">
+              <span className="text-white font-extrabold text-lg tracking-tighter">60</span>
+            </div>
+            {/* Current SpeedBubble */}
+            <div className={`w-14 h-14 rounded-full border-[3px] flex flex-col items-center justify-center shadow-2xl transition-colors ${speedHUD > 60 ? 'bg-alert/10 border-alert text-alert shadow-[0_0_20px_rgba(239,68,68,0.3)]' : 'bg-slate-900 border-tech/50 text-tech shadow-[0_0_20px_rgba(0,212,170,0.2)]'}`}>
+              <span className="font-mono text-xl font-black leading-none tracking-tighter -mb-1">{speedHUD}</span>
+              <span className="text-[8px] uppercase font-black tracking-widest opacity-80">km/h</span>
+            </div>
+          </div>
+        </>
       )}
 
       {/* PERSISTENT MAP SYSTEM CONTROLS (Floating Overlays) */}
-      <div className={`absolute ${stops.length > 0 && !isNavigationScreen ? 'bottom-[185px] md:bottom-24' : 'bottom-28 md:bottom-24'} right-4 z-[1001] flex flex-col gap-2.5`}>
-        
-        {/* Toggle Map Orientation Mode */}
-        <button
-          onClick={() => {
-            setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
-          }}
-          className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
-            mapOrientation === 'north'
-              ? 'bg-tech/20 text-tech border-tech/30'
-              : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-          }`}
-          title={mapOrientation === 'north' ? "Orientação: Norte para Cima (Super Estável)" : "Orientação: Seguir Rota (Dinâmico)"}
-        >
-          <div className="flex flex-col items-center justify-center">
-            <Navigation className={`w-4 h-4 mb-0.5 ${mapOrientation === 'track' ? 'animate-pulse text-amber-400' : 'text-tech'}`} style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.4s' }} />
-            <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-              {mapOrientation === 'north' ? 'Norte ↑' : 'Rota ↱'}
-            </span>
-          </div>
-        </button>
-
-        {/* Toggle 3D Perspective Mode */}
-        <button
-          onClick={() => {
-            setIs3DMode(!is3DMode);
-            if (!is3DMode && !carCoords && polyline.length > 0) {
-              setCarCoords(polyline[0]);
-            }
-          }}
-          className={`p-3 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
-            is3DMode 
-              ? 'bg-tech text-slate-950 border-tech shadow-tech/20 font-bold' 
-              : 'glass text-slate-400 border-white/10 hover:text-white'
-          }`}
-          title="Alternar Modo de Cabine 3D (Waze/Uber/GPS)"
-        >
-          <Compass 
-            className="w-5 h-5 transition-transform duration-500 ease-out" 
-            style={{ transform: `rotate(${-smoothHeading}deg)` }} 
-          />
-        </button>
-
-        {/* Start / Pause Interactive Auto-Pilot driving simulation */}
-        {polyline.length >= 2 && (
+      {!isNavigationScreen && (
+        <div className={`absolute ${stops.length > 0 ? 'bottom-[185px] md:bottom-24' : 'bottom-40 md:bottom-36'} right-4 z-[1001] flex flex-col gap-2.5`}>
+          
+          {/* Toggle Map Orientation Mode */}
           <button
             onClick={() => {
-              if (isDriving) {
-                setIsDriving(false);
-              } else {
-                setIsDriving(true);
-                setIs3DMode(true); // Forces 3D viewport for cinematic beauty
+              setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
+            }}
+            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+              mapOrientation === 'north'
+                ? 'bg-tech/20 text-tech border-tech/30'
+                : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+            }`}
+            title={mapOrientation === 'north' ? "Orientação: Norte para Cima (Super Estável)" : "Orientação: Seguir Rota (Dinâmico)"}
+          >
+            <div className="flex flex-col items-center justify-center">
+              <Navigation className={`w-4 h-4 mb-0.5 ${mapOrientation === 'track' ? 'animate-pulse text-amber-400' : 'text-tech'}`} style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.4s' }} />
+              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
+                {mapOrientation === 'north' ? 'Norte ↑' : 'Rota ↱'}
+              </span>
+            </div>
+          </button>
+
+          {/* Toggle 3D Perspective Mode */}
+          <button
+            onClick={() => {
+              setIs3DMode(!is3DMode);
+              if (!is3DMode && !carCoords && polyline.length > 0) {
+                setCarCoords(polyline[0]);
               }
             }}
             className={`p-3 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
-              isDriving 
-                ? 'bg-red-500 text-white border-red-500 shadow-red-500/20' 
-                : 'glass text-tech border-tech/20'
+              is3DMode 
+                ? 'bg-tech text-slate-950 border-tech shadow-tech/20 font-bold' 
+                : 'glass text-slate-400 border-white/10 hover:text-white'
             }`}
-            title={isDriving ? "Mudar piloto para Manual" : "Ligar piloto automático GPS"}
+            title="Alternar Modo de Cabine 3D (Waze/Uber/GPS)"
           >
-            {isDriving ? (
-              <Square className="w-5 h-5 fill-current" />
-            ) : (
-              <Play className="w-5 h-5 fill-tech" />
-            )}
+            <Compass 
+              className="w-5 h-5 transition-transform duration-500 ease-out" 
+              style={{ transform: `rotate(${-smoothHeading}deg)` }} 
+            />
           </button>
-        )}
-      </div>
+
+          {/* Start / Pause Interactive Auto-Pilot driving simulation */}
+          {polyline.length >= 2 && (
+            <button
+              onClick={() => {
+                if (isDriving) {
+                  setIsDriving(false);
+                } else {
+                  setIsDriving(true);
+                  setIs3DMode(true); // Forces 3D viewport for cinematic beauty
+                }
+              }}
+              className={`p-3 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+                isDriving 
+                  ? 'bg-red-500 text-white border-red-500 shadow-red-500/20' 
+                  : 'glass text-tech border-tech/20'
+              }`}
+              title={isDriving ? "Mudar piloto para Manual" : "Ligar piloto automático GPS"}
+            >
+              {isDriving ? (
+                <Square className="w-5 h-5 fill-current" />
+              ) : (
+                <Play className="w-5 h-5 fill-tech" />
+              )}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* FLUXO AO VIVO STATUS OVERLAY */}
       <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">

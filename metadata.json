@@ -1,6 +1,6 @@
 {
-  "name": "Voie Express",
-  "description": "Planejador de rotas inteligente com análise em tempo real de clima, tráfego e elevação para entregas.",
+  "name": "HARPIA",
+  "description": "Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial",
   "requestFramePermissions": ["geolocation", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

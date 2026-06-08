@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const report: any = {
     gemini: { status: 'unknown', detail: '' },
+    openai: { status: 'disabled', detail: 'Chave OPENAI_API_KEY não configurada.' },
     ors: { status: 'unknown', detail: '' },
     weather: { status: 'unknown', detail: '' },
     osrm: { status: 'unknown', detail: '' },
@@ -55,6 +56,37 @@ export async function GET() {
   } catch (e: any) {
     report.gemini.status = 'ERROR';
     report.gemini.detail = e.message;
+  }
+
+  // 1b. Test OpenAI
+  try {
+    const OPENAI_KEY = process.env.OPENAI_API_KEY;
+    const isMockKey = OPENAI_KEY && (OPENAI_KEY.includes("abcde") || OPENAI_KEY.startsWith("sk-abcde") || OPENAI_KEY.length < 20);
+    if (OPENAI_KEY && !isMockKey) {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: "Olá" }],
+          max_tokens: 5
+        })
+      });
+      if (res.ok) {
+        report.openai.status = 'SUCCESS';
+        report.openai.detail = 'OpenAI gpt-4o-mini ativa e operacional!';
+      } else {
+        const errText = await res.text();
+        report.openai.status = 'FAILED';
+        report.openai.detail = `Erro OpenAI (HTTP ${res.status}): ${errText.substring(0, 100)}`;
+      }
+    }
+  } catch (e: any) {
+    report.openai.status = 'ERROR';
+    report.openai.detail = e.message || String(e);
   }
 
   // 2. Test ORS

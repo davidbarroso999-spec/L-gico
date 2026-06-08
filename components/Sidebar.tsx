@@ -460,7 +460,7 @@ export default function Sidebar({
     ];
 
     return (
-      <div className="flex flex-col h-full bg-slate-950 font-sans p-5 select-text overflow-y-auto custom-scrollbar">
+      <div className="flex flex-col h-full bg-slate-950 font-sans p-5 select-text overflow-y-auto overflow-x-hidden custom-scrollbar">
         {/* Back header */}
         <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/5">
           <button
@@ -714,7 +714,7 @@ export default function Sidebar({
         initial={false}
         animate={{ y: activeYValue }}
         transition={{ type: "spring", damping: 28, stiffness: 220 }}
-        className="fixed bottom-0 left-0 right-0 z-[2000] flex flex-col bg-slate-950/95 border-t border-slate-800/80 rounded-t-[32px] backdrop-blur-xl shadow-[0_-15px_40px_rgba(0,0,0,0.7)] h-[75vh]"
+        className="fixed bottom-0 left-0 right-0 max-w-[100vw] overflow-x-hidden z-[2000] flex flex-col bg-slate-950/95 border-t border-slate-800/80 rounded-t-[32px] backdrop-blur-xl shadow-[0_-15px_40px_rgba(0,0,0,0.7)] h-[75vh]"
       >
         {isSimulating ? (
           <div className="flex-1 overflow-hidden">
@@ -853,7 +853,7 @@ export default function Sidebar({
                     )}
 
                     {/* Standard steps/stops overview list */}
-                    <div className="flex-1 overflow-y-auto px-6 pb-28 custom-scrollbar select-text">
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 pb-28 custom-scrollbar select-text">
                       <p className="text-[10px] font-black text-slate-500 mb-3.5 uppercase tracking-widest mt-1">
                         Mapeamento das Paradas ({stops.length})
                       </p>
@@ -1084,7 +1084,7 @@ export default function Sidebar({
       </div>
 
       {/* Stop List */}
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 custom-scrollbar">
         <AnimatePresence mode="popLayout">
           {stops.map((stop, idx) => (
             <motion.div

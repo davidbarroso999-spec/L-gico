@@ -183,7 +183,7 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     for (const entry of RICH_OFFLINE_REGISTRY) {
       const matchFound = entry.aliases.some(alias => {
         const normAlias = alias.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        return normAlias.includes(normalizedSearch) || normalizedSearch.includes(normAlias);
+        return normAlias === normalizedSearch || normAlias.includes(normalizedSearch) || normalizedSearch.includes(normAlias);
       }) || entry.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(normalizedSearch);
 
       if (matchFound) {
@@ -193,14 +193,11 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
           name: entry.name,
           context: entry.context,
           label: `${entry.name}, ${entry.context}`,
-          confidenceScore: 100,
+          confidenceScore: 98, // Let high-quality online matches compete if they are more specific
           source: 'cache',
           type: 'address'
         });
       }
-    }
-    if (offlineMatches.length > 0) {
-      return offlineMatches;
     }
   }
 
@@ -213,8 +210,11 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     let lat = proximity?.lat;
     let lon = proximity?.lon;
     
-    // Default fallback to Manaus only if we don't have proximity AND the string doesn't explicitly look like another state
-    if (lat == null || lon == null) {
+    // Check if input resembles any Brazilian Postal Code (CEP) or partial CEP
+    const isCepInput = /\b\d{5}-?\d{3}\b/.test(text) || /\b\d{8}\b/.test(text) || /\b\d{5}\b/.test(text);
+
+    // Default fallback to Manaus only if we don't have proximity AND the string doesn't look like an explicit CEP or state
+    if ((lat == null || lon == null) && !isCepInput) {
        const queryNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
        const isSearchingOutsideAmazonas = /\b(sp|sao paulo|rj|rio de janeiro|mg|minas gerais|pr|parana|rs|rio grande do sul|sc|santa catarina|df|distrito federal|ce|ceara|pe|pernambuco|ba|bahia|pa|para|go|goias|mt|mato grosso|ms|mato grosso do sul|es|espirito santo|ac|acre|al|alagoas|ap|amapa|ma|maranhao|pb|paraiba|pi|piaui|rn|rio grande do norte|ro|rondonia|rr|roraima|se|sergipe|to|tocantins|curitiba|recife|fortaleza|salvador|brasilia|goiania|belem|rio branco|macapa|maceio|vitoria|sao luis|joao pessoa|teresina|natal|aracaju|palmas)\b/.test(queryNorm);
        
@@ -288,19 +288,32 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     const seenKeys = new Set<string>();
 
     const addResult = (res: GeocodeResult) => {
-      // Auto-extract or assign CEP if not populated
-      if (!res.cep) {
-        const regexCep = /\b\d{5}-?\d{3}\b/;
-        const matchLabel = res.label?.match(regexCep);
-        if (matchLabel) {
-          res.cep = formatCep(matchLabel[0]);
-        } else if (viaCepResolved && resolvedViaCepData?.cep) {
-          res.cep = resolvedViaCepData.cep;
-        } else if (cepMatch) {
-          res.cep = formatCep(cepMatch[0]);
+      // Get the full 8-digit CEP if we resolved or detected one
+      const inputFullCep = (viaCepResolved && resolvedViaCepData?.cep) 
+        ? formatCep(resolvedViaCepData.cep) 
+        : (cepMatch ? formatCep(cepMatch[0]) : null);
+
+      if (inputFullCep && inputFullCep.replace(/\D/g, '').length === 8) {
+        // Force replace any missing or 5-digit CEP with the full 8-digit CEP
+        if (!res.cep || res.cep.replace(/\D/g, '').length < 8) {
+          res.cep = inputFullCep;
+        } else {
+          res.cep = formatCep(res.cep);
         }
       } else {
-        res.cep = formatCep(res.cep);
+        if (!res.cep) {
+          const regexCep = /\b\d{5}-?\d{3}\b/;
+          const matchLabel = res.label?.match(regexCep);
+          if (matchLabel) {
+            res.cep = formatCep(matchLabel[0]);
+          } else if (viaCepResolved && resolvedViaCepData?.cep) {
+            res.cep = resolvedViaCepData.cep;
+          } else if (cepMatch) {
+            res.cep = formatCep(cepMatch[0]);
+          }
+        } else {
+          res.cep = formatCep(res.cep);
+        }
       }
 
       const normLabel = normalizeForDedup(res.label);
@@ -330,6 +343,9 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         results.push(res);
       }
     };
+
+    // Add offline matches to results list seamlessly
+    offlineMatches.forEach(addResult);
 
     // Detect if search has numbers (likely a street/house number)
     const hasNumber = /\d+/.test(composedQuery);
@@ -678,9 +694,78 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       r.confidenceScore = Math.max(0, Math.min(100, Math.round(r.confidenceScore + boost)));
     });
 
+    // If ViaCEP successfully resolved this Brazilian CEP, let's inject a perfect, high-confidence prediction at the very top of results
+    if (viaCepResolved && resolvedViaCepData) {
+      let bestLat = 0;
+      let bestLon = 0;
+      
+      const geoResult = results.find(r => r.lat !== 0 && r.lon !== 0);
+      if (geoResult) {
+        bestLat = geoResult.lat;
+        bestLon = geoResult.lon;
+      }
+      
+      if (bestLat !== 0 && bestLon !== 0) {
+        const cepFormatted = formatCep(resolvedViaCepData.cep) || resolvedViaCepData.cep;
+        
+        // Find a house number in the typed text if any
+        let streetNumber = '';
+        const allNumbers = Array.from(text.replace(cepMatch![0], '').matchAll(/\b\d{1,5}\b/g)).map(m => m[0]);
+        for (const num of allNumbers) {
+          if (resolvedViaCepData.logradouro && !resolvedViaCepData.logradouro.toLowerCase().includes(num)) {
+            streetNumber = num;
+            break;
+          }
+        }
+        if (!streetNumber && allNumbers.length > 0) {
+          streetNumber = allNumbers[0];
+        }
+
+        const street = resolvedViaCepData.logradouro || '';
+        const streetWithNum = street ? (streetNumber ? `${street}, ${streetNumber}` : street) : '';
+        const bairro = resolvedViaCepData.bairro || '';
+        const city = resolvedViaCepData.localidade || 'Manaus';
+        const uf = resolvedViaCepData.uf || 'AM';
+        
+        const labelParts = [
+          streetWithNum,
+          bairro,
+          `${city} - ${uf}`,
+          `CEP ${cepFormatted}`
+        ].filter(Boolean);
+        
+        const exactLabel = labelParts.join(', ');
+        
+        const exactResult: GeocodeResult = {
+          lat: bestLat,
+          lon: bestLon,
+          name: streetWithNum || `CEP ${cepFormatted}`,
+          context: [bairro, `${city} - ${uf}`].filter(Boolean).join(', '),
+          label: exactLabel,
+          confidenceScore: 999, // Absolute top score
+          source: 'viacep',
+          type: 'address',
+          cep: cepFormatted
+        };
+
+        // Remove any other duplicate items with very close coordinates from the list to avoid duplicate listings
+        const filteredResults = results.filter(r => {
+          if (r.source === 'viacep') return false;
+          const latDiff = Math.abs(r.lat - bestLat);
+          const lonDiff = Math.abs(r.lon - bestLon);
+          // If coordinates are identical or within ~50 meters, deduplicate them to avoid listing the same street twice
+          return !(latDiff < 0.0005 && lonDiff < 0.0005);
+        });
+
+        // Clear and rebuild
+        results.length = 0;
+        results.push(exactResult, ...filteredResults);
+      }
+    }
+
     // Sort by confidenceScore falling
     results.sort((a, b) => b.confidenceScore - a.confidenceScore);
-    const finalResults = results.slice(0, 8);
+    const finalResults = results.slice(0, 3);
     
     if (finalResults.length > 0) {
       geoCache.set(normalizedText, finalResults);
