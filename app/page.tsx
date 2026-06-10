@@ -51,6 +51,7 @@ import { db } from '@/lib/db';
 import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
 import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
+import TruckLoader from '@/components/TruckLoader';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -1252,22 +1253,7 @@ export default function VoieExpressApp() {
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
               className="h-full flex flex-col items-center justify-center"
             >
-              <div className="relative w-32 h-32 mb-8">
-                <motion.div 
-                  className="absolute inset-0 border-4 border-tech/20 rounded-full"
-                />
-                <motion.div 
-                  className="absolute inset-0 border-4 border-t-tech rounded-full"
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <RouteIcon className="w-12 h-12 text-tech animate-pulse" />
-                </div>
-              </div>
-              <p className="text-slate-400 text-sm tracking-widest uppercase font-bold animate-pulse">
-                Otimizando Sequência Logística...
-              </p>
+              <TruckLoader />
             </motion.div>
           )}
 
