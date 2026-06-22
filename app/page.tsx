@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -42,7 +42,12 @@ import {
   Car,
   Droplets,
   Menu,
-  X
+  X,
+  FileText,
+  Upload,
+  Download,
+  FileCheck,
+  RefreshCw
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
@@ -52,6 +57,7 @@ import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
 import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 import TruckLoader from '@/components/TruckLoader';
+import { HarpiaTextEffect } from '@/components/ui/text-effect';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -119,15 +125,63 @@ import { useIsMobile } from '@/hooks/use-mobile';
 
 export default function VoieExpressApp() {
   const isMobile = useIsMobile();
+  const [isMenuBallOpen, setIsMenuBallOpen] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [addresses, setAddresses] = useState<string[]>(['']);
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
+  const [invoiceData, setInvoiceData] = useState<Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean }>>({});
+  const [previewInvoice, setPreviewInvoice] = useState<{ url: string; isImage?: boolean } | null>(null);
   
+  const updateInvoiceKey = useCallback((idx: number, key: string) => {
+    setInvoiceData(prev => ({
+      ...prev,
+      [idx]: { ...prev[idx], key }
+    }));
+  }, []);
+
+  const fetchInvoicePdf = async (idx: number) => {
+    const key = invoiceData[idx]?.key;
+    if (!key || key.length < 5) return;
+    setInvoiceData(prev => ({ ...prev, [idx]: { ...prev[idx], isFetching: true } }));
+    
+    // Simulate fetching from "Meu Danfe" or SEFAZ
+    setTimeout(() => {
+      setInvoiceData(prev => ({
+        ...prev,
+        [idx]: {
+          ...prev[idx],
+          isFetching: false,
+          pdfUrl: `https://mock-nfe.com/danfe/${key}.pdf`,
+          isImage: false
+        }
+      }));
+    }, 1500);
+  };
+
+  const triggerFileUpload = useCallback((idx: number) => {
+    const el = document.getElementById(`nfe-upload-${idx}`);
+    if (el) el.click();
+  }, []);
+
+  const handleNfeUpload = useCallback((idx: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const fakeUrl = URL.createObjectURL(file);
+      const isImage = file.type.startsWith('image/');
+      setInvoiceData(prev => ({
+        ...prev,
+        [idx]: { ...prev[idx], pdfUrl: fakeUrl, key: file.name, isImage }
+      }));
+    }
+  }, []);
+
   // Roteiro de Apresentação / Simulador de Fluxo
   const [showDemoAssistant, setShowDemoAssistant] = useState(false);
+  const [logoDrawn, setLogoDrawn] = useState(false);
+  const [showPlanet, setShowPlanet] = useState(false);
   const [demoStep, setDemoStep] = useState(0);
   const [demoMinimized, setDemoMinimized] = useState(false);
 
@@ -140,7 +194,7 @@ export default function VoieExpressApp() {
   });
   const [aiCustomPrompt, setAiCustomPrompt] = useState<string>('');
 
-  const updateTimeWindow = (idx: number, type: 'start' | 'end', val: string) => {
+  const updateTimeWindow = useCallback((idx: number, type: 'start' | 'end', val: string) => {
     setTimeWindows(prev => ({
       ...prev,
       [idx]: {
@@ -148,15 +202,15 @@ export default function VoieExpressApp() {
         [type]: val
       }
     }));
-  };
+  }, []);
 
-  const removeTimeWindow = (idx: number) => {
+  const removeTimeWindow = useCallback((idx: number) => {
     setTimeWindows(prev => {
       const next = { ...prev };
       delete next[idx];
       return next;
     });
-  };
+  }, []);
 
   const [routeResult, setRouteResult] = useState<any>(null);
 
@@ -287,9 +341,9 @@ export default function VoieExpressApp() {
     fetch('/api/diagnostic').then(r => r.json()).then(data => {
       setDiagnostic(data);
       const failedKeys = [];
-      const hasAi = data.openai?.status === 'SUCCESS' || data.gemini?.status === 'SUCCESS';
+      const hasAi = data.openai?.status === 'SUCCESS' || data.gemini?.status === 'SUCCESS' || data.anyapi?.status === 'SUCCESS' || data.anyapi?.status === 'FALLBACK_NEEDED';
       if (!hasAi) {
-        failedKeys.push('Motor de Inteligência (OpenAI / Gemini)');
+        failedKeys.push('Motor de Inteligência (OpenAI / Gemini / AnyAPI)');
       }
       if (data.ors?.status === 'FAILED') failedKeys.push('OpenRouteService (Motor de Rotas)');
       if (data.weather?.status === 'FAILED') failedKeys.push('OpenWeather (Clima)');
@@ -299,13 +353,13 @@ export default function VoieExpressApp() {
     }).catch(e => console.warn('Diagnostic fetch error:', e.message));
   }, []);
 
+  const currentActiveText = (activeSuggestionIdx !== null && activeSuggestionIdx !== undefined && activeSuggestionIdx < addresses.length) 
+    ? (addresses[activeSuggestionIdx] || '') 
+    : '';
+
   useEffect(() => {
-    const activeText = (activeSuggestionIdx !== null && activeSuggestionIdx !== undefined && activeSuggestionIdx < addresses.length) 
-      ? (addresses[activeSuggestionIdx] || '') 
-      : '';
-    
     // Condição estrita para evitar cascading renders e loops infinitos
-    if (activeText.length < 2) {
+    if (currentActiveText.length < 2) {
       const t = setTimeout(() => {
         setSuggestions([]);
       }, 0);
@@ -314,7 +368,7 @@ export default function VoieExpressApp() {
 
     const timer = setTimeout(async () => {
       try {
-        const res = await enhancedAutocomplete(activeText, userLocation || undefined);
+        const res = await enhancedAutocomplete(currentActiveText, userLocation || undefined);
         setSuggestions(res);
         setShowSuggestions(true);
       } catch (error) {
@@ -323,20 +377,53 @@ export default function VoieExpressApp() {
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [addresses, activeSuggestionIdx, userLocation]);
+  }, [currentActiveText, activeSuggestionIdx, userLocation]);
 
-  const addAddress = () => setAddresses([...addresses, '']);
-  const updateAddress = (idx: number, val: string) => {
-    const next = [...addresses];
-    next[idx] = val;
-    setAddresses(next);
-  };
-  const removeAddress = (idx: number) => setAddresses(addresses.filter((_, i) => i !== idx));
+  const addAddress = useCallback(() => setAddresses(prev => [...prev, '']), []);
+  const updateAddress = useCallback((idx: number, val: string) => {
+    setAddresses(prev => {
+      const next = [...prev];
+      next[idx] = val;
+      return next;
+    });
+  }, []);
+  const removeAddress = useCallback((idx: number) => {
+    setAddresses(prev => prev.filter((_, i) => i !== idx));
+
+    // Shift timeWindows keys left
+    setTimeWindows(prev => {
+      const next: Record<number, { start?: string; end?: string }> = {};
+      Object.keys(prev).forEach(keyStr => {
+        const k = parseInt(keyStr);
+        if (k < idx) {
+          next[k] = prev[k];
+        } else if (k > idx) {
+          next[k - 1] = prev[k];
+        }
+      });
+      return next;
+    });
+
+    // Shift invoiceData keys left
+    setInvoiceData(prev => {
+      const next: Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean }> = {};
+      Object.keys(prev).forEach(keyStr => {
+        const k = parseInt(keyStr);
+        if (k < idx) {
+          next[k] = prev[k];
+        } else if (k > idx) {
+          next[k - 1] = prev[k];
+        }
+      });
+      return next;
+    });
+  }, []);
 
   const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent) => {
-    // Map timeWindows correctly to validAddresses indices to prevent offset bugs
+    // Map timeWindows and invoices correctly to validAddresses indices to prevent offset bugs
     const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
+    const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean }> = {};
     let validCount = 0;
     const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
@@ -346,6 +433,14 @@ export default function VoieExpressApp() {
           validWithWindows[validCount] = {
             start: win.start || "00:00",
             end: win.end || "23:59"
+          };
+        }
+        const inv = invoiceData[i];
+        if (inv && (inv.key || inv.pdfUrl)) {
+          validWithInvoices[validCount] = {
+            key: inv.key,
+            pdfUrl: inv.pdfUrl,
+            isImage: inv.isImage
           };
         }
         validCount++;
@@ -358,7 +453,7 @@ export default function VoieExpressApp() {
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
     try {
-      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows);
+      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices);
       setRouteResult(result);
       
       // Save to IndexedDB (safe catch)
@@ -563,6 +658,9 @@ export default function VoieExpressApp() {
     );
   };
 
+  const enteredAddresses = addresses.filter(a => a.trim().length >= 3);
+  const hasTwoOrMoreAddresses = enteredAddresses.length >= 2;
+
   if (isMobile === undefined) {
     return (
       <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center font-sans">
@@ -573,6 +671,16 @@ export default function VoieExpressApp() {
 
   return (
     <div className={`fixed inset-0 w-full h-full max-w-[100vw] overflow-x-hidden flex flex-col md:flex-row bg-slate-950 overflow-hidden font-sans`}>
+      {/* Cinematic noise texture overlay to remove color banding */}
+      <div className="noise-overlay" />
+
+      {/* Floating high-fidelity responsive ambient blobs to create extensive depth (Three.js stylization) */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+        <div className="absolute top-[15%] left-[10%] w-[350px] md:w-[600px] h-[350px] md:h-[600px] rounded-full bg-tech/5 filter blur-[100px] md:blur-[140px] animate-orb-1 opacity-60" />
+        <div className="absolute bottom-[20%] right-[5%] w-[300px] md:w-[500px] h-[300px] md:h-[500px] rounded-full bg-[#1e1e1c]/10 filter blur-[90px] md:blur-[120px] animate-orb-2 opacity-50" />
+        <div className="absolute top-[60%] left-[45%] w-[250px] md:w-[400px] h-[250px] md:h-[400px] rounded-full bg-amber-500/3 filter blur-[100px] md:blur-[130px] animate-orb-1 opacity-30" />
+      </div>
+
       {/* API Key Warning Banner */}
       {apiWarning && (
         <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center gap-2">
@@ -586,205 +694,92 @@ export default function VoieExpressApp() {
         </div>
       )}
 
-      {/* Desktop Sidebar Nav */}
-      {!isMobile && (
-        <nav 
-          className={`relative h-full border-r border-slate-800 flex flex-col items-center py-8 gap-8 z-50 bg-slate-950 transition-all duration-300 ease-in-out shrink-0 ${
-            isNavbarExpanded ? 'w-60 px-4' : 'w-20 px-2'
-          }`}
+      {/* Dynamic Floating Menu Ball Navigation System - Unified for Desktop & Mobile */}
+      <div className="fixed top-6 left-6 z-[5000] flex flex-col items-start">
+        {/* The Menu Ball itself */}
+        <motion.button
+          onClick={() => setIsMenuBallOpen(!isMenuBallOpen)}
+          className="w-16 h-16 rounded-full bg-slate-900/95 border-2 border-tech/80 text-[#D1A054] hover:text-white shadow-[0_0_25px_rgba(209,160,84,0.3)] hover:shadow-[0_0_35px_rgba(209,160,84,0.5)] flex flex-col items-center justify-center cursor-pointer select-none transition-all duration-300 hover:scale-105 active:scale-95 group relative overflow-hidden"
+          whileTap={{ scale: 0.92 }}
         >
-          {/* Seta no lado esquerdo que abre, expande e fecha */}
-          <button
-            onClick={() => setIsNavbarExpanded(!isNavbarExpanded)}
-            className="absolute right-[-14px] top-10 w-7 h-7 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-all shadow-lg hover:shadow-tech/15 hover:border-tech/40 cursor-pointer z-50"
-            title={isNavbarExpanded ? "Recolher Menu" : "Expandir Menu"}
-            aria-label="Toggle Navbar"
+          {/* Animated Background ripple effect */}
+          <div className="absolute inset-0 bg-tech/5 group-hover:bg-tech/10 transition-colors" />
+          <motion.div 
+            className="font-mono text-[9px] font-black tracking-widest leading-none z-10 flex flex-col items-center justify-center gap-1"
+            animate={{ rotate: isMenuBallOpen ? 180 : 0 }}
+            transition={{ type: "spring", stiffness: 200, damping: 15 }}
           >
-            <ChevronRight 
-              className={`w-4 h-4 transition-transform duration-300 ${
-                isNavbarExpanded ? 'rotate-180' : 'rotate-0'
-              }`} 
-            />
-          </button>
-
-          <div className={`flex items-center gap-3 justify-center ${isNavbarExpanded ? 'w-full px-2' : ''}`}>
-            {isNavbarExpanded ? (
-              <span className="font-display font-black tracking-widest text-[#00f5ff] text-base uppercase truncate mt-2">
-                HARPIA
-              </span>
+            {isMenuBallOpen ? (
+              <X className="w-5 h-5 text-tech" />
             ) : (
-              <span className="font-display font-black tracking-widest text-[#00f5ff] text-xs uppercase truncate mt-2">
-                HP
-              </span>
+              <>
+                <Menu className="w-4 h-4 text-tech group-hover:scale-110 transition-transform" />
+                <span className="text-[8px] tracking-widest text-[#D1A054]">MENU</span>
+              </>
             )}
-          </div>
-          
-          <div className={`flex flex-col gap-4 ${isNavbarExpanded ? 'w-full px-1' : 'items-center'}`}>
-            <NavItem 
-              icon={MapIcon} 
-              id="home" 
-              label="Planejamento" 
-              isActive={currentScreen === 'home'} 
-              onClick={() => setCurrentScreen('home')} 
-              isExpanded={isNavbarExpanded}
-            />
-            {routeResult && (
-              <NavItem 
-                icon={NavIcon} 
-                id="navigation-tab" 
-                label="Navegação" 
-                isActive={currentScreen === 'result' || currentScreen === 'navigation'} 
-                onClick={() => setCurrentScreen('result')} 
-                isExpanded={isNavbarExpanded}
-              />
-            )}
-            <NavItem 
-              icon={LayoutDashboard} 
-              id="dashboard" 
-              label="Métricas" 
-              isActive={currentScreen === 'dashboard'} 
-              onClick={() => setCurrentScreen('dashboard')} 
-              isExpanded={isNavbarExpanded}
-            />
-            <NavItem 
-              icon={Settings} 
-              id="settings" 
-              label="Configurações" 
-              isActive={currentScreen === 'settings'} 
-              onClick={() => setCurrentScreen('settings')} 
-              isExpanded={isNavbarExpanded}
-            />
-          </div>
-        </nav>
-      )}
+          </motion.div>
+        </motion.button>
 
-      {/* Mobile Floating Menu Button */}
-      {isMobile && currentScreen !== 'navigation' && (
-        <button
-          onClick={() => setIsMobileMenuOpen(true)}
-          className="fixed left-4 top-4 w-12 h-12 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-800/80 shadow-[0_0_20px_rgba(0,245,255,0.1)] flex items-center justify-center text-tech hover:text-white transition-all duration-300 z-[3000] cursor-pointer"
-          title="Abrir Menu"
-          aria-label="Abrir Menu"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
-      )}
-
-      {/* Mobile Left Collapsible Drawer */}
-      {isMobile && currentScreen !== 'navigation' && (
+        {/* Expanded Rectangular Tabs container */}
         <AnimatePresence>
-          {isMobileMenuOpen && (
-            <>
-              {/* Overlay Backdrop */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[4000]"
-              />
-
-              {/* Sidebar Panel */}
-              <motion.nav
-                initial={{ x: '-100%' }}
-                animate={{ x: 0 }}
-                exit={{ x: '-100%' }}
-                transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-                className="fixed left-0 top-0 bottom-0 w-72 bg-slate-950/95 border-r border-slate-800/85 z-[4001] px-6 py-8 flex flex-col gap-8 shadow-[10px_0_40px_rgba(0,0,0,0.85)]"
-              >
-                {/* Header within drawer */}
-                <div className="flex items-center justify-between border-b border-slate-800/60 pb-5">
-                  <div className="flex items-center justify-center w-full">
-                    <span className="font-display font-black tracking-widest text-[#00f5ff] text-xl uppercase mt-1">
-                      HARPIA
-                    </span>
-                  </div>
-                  
-                  {/* Close drawer button */}
-                  <button
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="absolute right-6 w-8 h-8 rounded-lg bg-slate-900 border border-slate-800/85 flex items-center justify-center text-slate-400 hover:text-white transition-all cursor-pointer"
-                    aria-label="Fechar Menu"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Nav Items */}
-                <div className="flex flex-col gap-3">
-                  <button
-                    onClick={() => {
-                      setCurrentScreen('home');
-                      setIsMobileMenuOpen(false);
+          {isMenuBallOpen && (
+            <motion.div
+              initial="collapsed"
+              animate="expanded"
+              exit="collapsed"
+              variants={{
+                expanded: { transition: { staggerChildren: 0.08 } },
+                collapsed: { transition: { staggerChildren: 0.04, staggerDirection: -1 } }
+              }}
+              className="flex flex-col gap-3 mt-4 w-56 p-1.5 bg-slate-950/80 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] z-[2005]"
+            >
+              {[
+                { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
+                ...(routeResult ? [
+                  { id: 'result', label: 'Resumo Rota', icon: RouteIcon, desc: 'Resumos e Alternativas' },
+                  { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
+                ] : []),
+                { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
+                { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
+              ].map((tab) => {
+                const isActive = currentScreen === tab.id;
+                const Icon = tab.icon;
+                return (
+                  <motion.button
+                    key={tab.id}
+                    variants={{
+                      collapsed: { x: -30, opacity: 0, scale: 0.95 },
+                      expanded: { x: 0, opacity: 1, scale: 1 }
                     }}
-                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
-                      currentScreen === 'home'
-                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                    onClick={() => {
+                      setCurrentScreen(tab.id as any);
+                      setIsMenuBallOpen(false);
+                    }}
+                    className={`w-full p-3 border text-left flex items-center gap-3 transition-all cursor-pointer relative group ${
+                      isActive 
+                        ? 'bg-tech text-slate-950 border-tech shadow-[0_0_20px_rgba(209,160,84,0.25)] font-black' 
+                        : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-300 hover:text-white hover:border-tech/40'
                     }`}
                   >
-                    <MapIcon className="w-5 h-5 shrink-0" />
-                    Planejamento
-                  </button>
-
-                  {routeResult && (
-                    <button
-                      onClick={() => {
-                        setCurrentScreen('result');
-                        setIsMobileMenuOpen(false);
-                      }}
-                      className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
-                        currentScreen === 'result'
-                          ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
-                          : 'text-slate-400 hover:text-white hover:bg-white/5'
-                      }`}
-                    >
-                      <NavIcon className="w-5 h-5 shrink-0" />
-                      Navegação
-                    </button>
-                  )}
-
-                  <button
-                    onClick={() => {
-                      setCurrentScreen('dashboard');
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
-                      currentScreen === 'dashboard'
-                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <LayoutDashboard className="w-5 h-5 shrink-0" />
-                    Métricas
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setCurrentScreen('settings');
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className={`px-4 py-3.5 rounded-xl transition-all flex items-center gap-4 text-sm font-bold uppercase tracking-wider text-left ${
-                      currentScreen === 'settings'
-                        ? 'bg-tech text-slate-950 shadow-[0_4px_15px_rgba(0,245,255,0.2)]'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <Settings className="w-5 h-5 shrink-0" />
-                    Configurações
-                  </button>
-                </div>
-
-                {/* Footer space showing dynamic version or visual details */}
-                <div className="mt-auto border-t border-slate-800/40 pt-4 flex flex-col gap-1 text-[10px] text-slate-500 font-mono">
-                  <p className="uppercase tracking-widest font-bold">Autonomia Inteligente</p>
-                  <p>Versão 1.5.0 • Logística Avançada</p>
-                </div>
-              </motion.nav>
-            </>
+                    <div className={`p-2 rounded-lg ${isActive ? 'bg-slate-950/10' : 'bg-slate-950/50 group-hover:bg-tech/10 group-hover:text-tech transition-colors'}`}>
+                      <Icon className="w-5 h-5 shrink-0" />
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className={`text-[11px] uppercase tracking-wider font-extrabold leading-none ${isActive ? 'text-slate-950' : 'text-slate-200'}`}>
+                        {tab.label}
+                      </span>
+                      <span className={`text-[8.5px] truncate mt-0.5 font-medium ${isActive ? 'text-slate-900/70' : 'text-slate-500 group-hover:text-slate-400'}`}>
+                        {tab.desc}
+                      </span>
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </motion.div>
           )}
         </AnimatePresence>
-      )}
+      </div>
 
       {/* Main Content Area */}
       <main className="flex-1 relative h-full w-full overflow-hidden">
@@ -792,33 +787,66 @@ export default function VoieExpressApp() {
           {currentScreen === 'home' && (
             <motion.div
               key="home-ui"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+              initial={{ opacity: 0, y: 30, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.98 }}
+              transition={{ duration: 0.6, type: 'spring', stiffness: 100, damping: 20 }}
               className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-20 pb-16' : 'py-12'}`}
             >
-              <div className="w-full flex-shrink-0 flex flex-col items-center justify-center mb-8 md:mb-12 relative min-h-[350px] md:min-h-[450px] overflow-hidden md:overflow-visible">
-                <div className="absolute inset-0 flex items-center justify-center -z-10 opacity-60 mix-blend-screen pointer-events-none">
-                  <RotatingEarth width={600} height={600} className="w-full max-w-[450px] md:max-w-[600px] absolute" />
-                </div>
+              <div className="w-full flex-shrink-0 flex flex-col items-center justify-center mb-4 sm:mb-8 md:mb-12 relative min-h-[min(90vw,400px)] md:min-h-[500px] overflow-visible">
+                <AnimatePresence>
+                  {showPlanet && (
+                    <motion.div 
+                      className="absolute inset-0 flex items-center justify-center -z-10 opacity-60 mix-blend-screen pointer-events-none"
+                      initial={{ opacity: 0, scale: 0.8, rotate: -10 }}
+                      animate={{ opacity: 0.6, scale: 1, rotate: 0 }}
+                      transition={{ duration: 1.5, ease: "easeOut" }}
+                    >
+                      <RotatingEarth width={600} height={600} className="w-full max-w-[450px] md:max-w-[600px] absolute" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 
-                <motion.h1 
-                  className="font-bold font-display text-center flex flex-col items-center justify-center leading-none absolute inset-0 m-auto h-fit w-full px-1.5 sm:px-4"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                >
+                <h1 className="font-bold font-display text-center flex flex-col items-center justify-center leading-none relative z-10 w-full px-1.5 sm:px-4 py-4 sm:py-8">
                   <div className="flex flex-col items-center w-full max-w-full px-1 sm:px-2">
-                    <span className="font-black tracking-widest text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.2)] leading-none text-center" style={{ fontSize: 'clamp(4.2rem, 16vw, 10rem)', letterSpacing: '0.08em' }}>HARPIA</span>
-                    
-                    {/* Perfect bounding rectangular silhouette as requested to hold the slogan */}
-                    <div className="w-full max-w-[96vw] sm:max-w-2xl md:max-w-3xl lg:max-w-4xl border-t border-b border-tech/30 bg-slate-950/45 backdrop-blur-sm px-1.5 sm:px-4 py-2.5 sm:py-3 mt-4 text-center rounded-sm overflow-hidden">
-                      <p className="font-bold tracking-wider text-tech uppercase leading-relaxed whitespace-normal sm:whitespace-nowrap text-center" style={{ fontSize: 'clamp(8px, 2.1vw, 18px)', letterSpacing: '0.05em' }}>
-                        Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial
-                      </p>
+                    <div className="relative w-[90vw] max-w-[400px] sm:max-w-[500px] md:max-w-[650px] lg:max-w-[800px] xl:max-w-[950px] mx-auto aspect-square @container">
+                      <HarpiaTextEffect 
+                        speed={1.4} 
+                        className="w-full h-auto text-white drop-shadow-[0_0_15px_rgba(209,160,84,0.4)] z-10" 
+                        onAnimationComplete={() => {
+                          setLogoDrawn(true);
+                          setTimeout(() => setShowPlanet(true), 800);
+                        }} 
+                      />
+                      
+                      <AnimatePresence>
+                        {logoDrawn && (
+                          <motion.div 
+                            className="absolute z-20 text-center pointer-events-none"
+                            style={{ 
+                              left: '11.8%', 
+                              width: '70%', 
+                              top: '60%', // Exactly beneath the baseline of the HARPIA letters
+                            }}
+                            initial={{ opacity: 0, scale: 0.95, y: -5 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            transition={{ duration: 0.8, ease: "easeOut" }}
+                          >
+                            <p 
+                              className="font-medium text-[#D1A054] uppercase text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] leading-none whitespace-nowrap" 
+                              style={{ 
+                                fontSize: '1.7cqw', 
+                                letterSpacing: '0.08em',
+                              }}
+                            >
+                              Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial
+                            </p>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </div>
-                </motion.h1>
+                </h1>
               </div>
 
               <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12">
@@ -828,7 +856,7 @@ export default function VoieExpressApp() {
                     <MapIcon className="w-32 h-32" />
                   </div>
                   <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap">
-                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(0,245,255,0.5)] shrink-0" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(209,160,84,0.5)] shrink-0" />
                     <span>
                       Paradas de Entrega
                       <InfoTooltip text="Adicione o local de partida e as paradas desejadas. A plataforma traçará no mapa o melhor trajeto conectando esses pontos." />
@@ -962,6 +990,60 @@ export default function VoieExpressApp() {
                                     )}
                                   </div>
                                 </div>
+                                {/* NFe / Upload */}
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-1 pb-2">
+                                  <div className="flex items-center gap-2">
+                                    <FileText className="w-3.5 h-3.5 text-tech/70 shrink-0" />
+                                    <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">NFe / DANFE:</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <div className="flex bg-slate-950/80 border border-slate-800 rounded-lg overflow-hidden focus-within:border-tech focus-within:ring-1 focus-within:ring-tech/30 transition-all w-full sm:w-auto">
+                                      <input 
+                                        type="text"
+                                        placeholder="Chave de Acesso (44 dígitos)..."
+                                        value={invoiceData[realIdx]?.key || ''}
+                                        onChange={(e) => updateInvoiceKey(realIdx, e.target.value)}
+                                        className="bg-transparent text-[11px] text-slate-300 px-3 py-1 outline-none w-full sm:w-48 font-mono placeholder:text-slate-600"
+                                      />
+                                      <button 
+                                        type="button"
+                                        onClick={() => fetchInvoicePdf(realIdx)}
+                                        disabled={invoiceData[realIdx]?.isFetching || !invoiceData[realIdx]?.key}
+                                        className="bg-slate-800/80 hover:bg-slate-700 disabled:opacity-50 px-2 py-1 flex items-center justify-center transition-colors border-l border-slate-700"
+                                      >
+                                        {invoiceData[realIdx]?.isFetching ? <RefreshCw className="w-3 h-3 text-tech animate-spin" /> : <Search className="w-3 h-3 text-slate-400" />}
+                                      </button>
+                                    </div>
+                                    <input 
+                                      type="file" 
+                                      id={`nfe-upload-${realIdx}`} 
+                                      className="hidden" 
+                                      accept=".pdf,image/*" 
+                                      onChange={(e) => handleNfeUpload(realIdx, e)}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => triggerFileUpload(realIdx)}
+                                      className="text-slate-400 hover:text-white bg-slate-900/50 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
+                                    >
+                                      <Upload className="w-3 h-3" /> Upload PDF
+                                    </button>
+                                    {invoiceData[realIdx]?.pdfUrl && (
+                                      <div className="flex items-center gap-1">
+                                        <div className="flex items-center gap-1.5 text-tech text-[10px] px-2 py-1 bg-tech/10 rounded-lg border border-tech/20">
+                                          <FileCheck className="w-3 h-3" /> Anexada
+                                        </div>
+                                        <button 
+                                          type="button"
+                                          onClick={() => setPreviewInvoice(invoiceData[realIdx]?.pdfUrl ? { url: invoiceData[realIdx].pdfUrl!, isImage: invoiceData[realIdx].isImage } : null)}
+                                          className="text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
+                                        >
+                                          <FileText className="w-3 h-3" /> Visualizar
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           );
@@ -1036,6 +1118,60 @@ export default function VoieExpressApp() {
                                 >
                                   Limpar
                                 </button>
+                              )}
+                            </div>
+                          </div>
+                          {/* NFe / Upload */}
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-1 pb-2">
+                            <div className="flex items-center gap-2">
+                              <FileText className="w-3.5 h-3.5 text-tech/70 shrink-0" />
+                              <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">NFe / DANFE:</span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <div className="flex bg-slate-950/80 border border-slate-800 rounded-lg overflow-hidden focus-within:border-tech focus-within:ring-1 focus-within:ring-tech/30 transition-all w-full sm:w-auto">
+                                <input 
+                                  type="text"
+                                  placeholder="Chave de Acesso (44 dígitos)..."
+                                  value={invoiceData[addresses.length - 1]?.key || ''}
+                                  onChange={(e) => updateInvoiceKey(addresses.length - 1, e.target.value)}
+                                  className="bg-transparent text-[11px] text-slate-300 px-3 py-1 outline-none w-full sm:w-48 font-mono placeholder:text-slate-600"
+                                />
+                                <button 
+                                  type="button"
+                                  onClick={() => fetchInvoicePdf(addresses.length - 1)}
+                                  disabled={invoiceData[addresses.length - 1]?.isFetching || !invoiceData[addresses.length - 1]?.key}
+                                  className="bg-slate-800/80 hover:bg-slate-700 disabled:opacity-50 px-2 py-1 flex items-center justify-center transition-colors border-l border-slate-700"
+                                >
+                                  {invoiceData[addresses.length - 1]?.isFetching ? <RefreshCw className="w-3 h-3 text-tech animate-spin" /> : <Search className="w-3 h-3 text-slate-400" />}
+                                </button>
+                              </div>
+                              <input 
+                                type="file" 
+                                id={`nfe-upload-${addresses.length - 1}`} 
+                                className="hidden" 
+                                accept=".pdf,image/*" 
+                                onChange={(e) => handleNfeUpload(addresses.length - 1, e)}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => triggerFileUpload(addresses.length - 1)}
+                                className="text-slate-400 hover:text-white bg-slate-900/50 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
+                              >
+                                <Upload className="w-3 h-3" /> Upload PDF
+                              </button>
+                              {invoiceData[addresses.length - 1]?.pdfUrl && (
+                                <div className="flex items-center gap-1">
+                                  <div className="flex items-center gap-1.5 text-tech text-[10px] px-2 py-1 bg-tech/10 rounded-lg border border-tech/20">
+                                    <FileCheck className="w-3 h-3" /> Anexada
+                                  </div>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setPreviewInvoice(invoiceData[addresses.length - 1]?.pdfUrl ? { url: invoiceData[addresses.length - 1].pdfUrl!, isImage: invoiceData[addresses.length - 1].isImage } : null)}
+                                    className="text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
+                                  >
+                                    <FileText className="w-3 h-3" /> Visualizar
+                                  </button>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -1212,8 +1348,8 @@ export default function VoieExpressApp() {
 
                   {/* Bento Box 4: AI Custom Prompts */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[#a855f7] mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                      <Sparkles className="w-4 h-4 text-[#a855f7] animate-pulse shrink-0" />
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 text-[#D1A054] animate-pulse shrink-0" />
                       <span>
                         Instruções da IA
                         <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
@@ -1227,18 +1363,49 @@ export default function VoieExpressApp() {
                       onChange={(e) => setAiCustomPrompt(e.target.value)}
                       placeholder="Ex: 'priorizar vias com boa iluminação pública', 'informar rotas transitáveis por carretas', 'checar incidências climáticas recentes'..."
                       rows={2}
-                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#a855f7] focus:ring-1 focus:ring-[#a855f7]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
+                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
                     />
                   </div>
 
                   {/* Ultimate Execution Button */}
-                  <button 
-                    onClick={runOptimization}
-                    className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(0,212,170,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
-                  >
-                    <Play className="w-5 h-5 fill-current" />
-                    CALCULAR MELHOR ROTA
-                  </button>
+                  {!hasTwoOrMoreAddresses ? (
+                    <button 
+                      onClick={runOptimization}
+                      className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
+                    >
+                      <Play className="w-5 h-5 fill-current" />
+                      CALCULAR MELHOR ROTA
+                    </button>
+                  ) : (
+                    <>
+                      {/* Generous bottom spacing so form content doesn't get hidden behind the fixed bar */}
+                      <div className="h-32 w-full" />
+                      <motion.div
+                        initial={{ y: 80, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ type: 'spring', stiffness: 280, damping: 25 }}
+                        className="fixed bottom-0 left-0 right-0 z-[1200] bg-slate-950/95 border-t border-tech/30 p-4 md:p-6 shadow-[0_-10px_35px_rgba(209,160,84,0.15)] flex items-center justify-center backdrop-blur-xl"
+                      >
+                        <div className="w-full max-w-2xl flex items-center justify-between gap-4">
+                          <div className="hidden sm:flex flex-col text-left">
+                            <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-widest leading-none">Roteamento Ativo</span>
+                            <span className="text-sm font-black text-white mt-1.5 flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
+                              {enteredAddresses.length} endereços inseridos
+                            </span>
+                          </div>
+                          
+                          <button 
+                            onClick={runOptimization}
+                            className="w-full sm:w-auto px-8 py-3.5 bg-tech text-slate-950 font-black rounded-xl text-sm md:text-base shadow-[0_4px_20px_rgba(209,160,84,0.3)] hover:shadow-[0_4px_25px_rgba(209,160,84,0.45)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shrink-0"
+                          >
+                            <Play className="w-4 h-4 fill-current" />
+                            CALCULAR MELHOR ROTA
+                          </button>
+                        </div>
+                      </motion.div>
+                    </>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1247,10 +1414,10 @@ export default function VoieExpressApp() {
           {currentScreen === 'loading' && (
             <motion.div
               key="loading"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: -10 }}
+              transition={{ duration: 0.5, type: 'spring', stiffness: 120, damping: 20 }}
               className="h-full flex flex-col items-center justify-center"
             >
               <TruckLoader />
@@ -1260,14 +1427,14 @@ export default function VoieExpressApp() {
           {currentScreen === 'result' && routeResult && (
             <motion.div
               key="result"
-              initial={{ opacity: 0, y: 25 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -25 }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              initial={{ opacity: 0, y: 40, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.98 }}
+              transition={{ duration: 0.7, type: 'spring', stiffness: 90, damping: 20 }}
               className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} />
+                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} />
               </div>
               <div 
                 className={`${
@@ -1330,7 +1497,7 @@ export default function VoieExpressApp() {
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
-                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} isNavigationScreen={true} />
+                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} />
                  
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
@@ -1440,7 +1607,7 @@ export default function VoieExpressApp() {
                             <button
                               type="button"
                               onClick={capturePhoto}
-                              className="w-full bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_4px_16px_rgba(0,212,170,0.35)] hover:brightness-110 active:scale-95 transition-all text-xs uppercase cursor-pointer"
+                              className="w-full bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_4px_16px_rgba(209,160,84,0.35)] hover:brightness-110 active:scale-95 transition-all text-xs uppercase cursor-pointer"
                             >
                               <Camera className="w-4 h-4 text-slate-950" />
                               Capturar Foto do Pacote
@@ -1555,7 +1722,7 @@ export default function VoieExpressApp() {
                   )}
                 </AnimatePresence>
 
-                 <div className="absolute bottom-0 left-0 right-0 z-[1000] bg-slate-950/95 backdrop-blur-xl border-t border-tech/30 text-white rounded-t-[32px] shadow-[0_-15px_50px_rgba(0,212,170,0.15)] md:max-w-2xl md:mx-auto">
+                 <div className="absolute bottom-0 left-0 right-0 z-[1000] bg-slate-950/95 backdrop-blur-xl border-t border-tech/30 text-white rounded-t-[32px] shadow-[0_-15px_50px_rgba(209,160,84,0.15)] md:max-w-2xl md:mx-auto">
                     {/* Floating Controls above bottom bar */}
                     <div className="absolute right-4 -top-40 flex flex-col gap-3">
                       {/* Sound Toggle Button */}
@@ -1602,6 +1769,17 @@ export default function VoieExpressApp() {
                         <p className="text-sm font-bold text-slate-400 mt-1">
                           {Math.round(routeResult.segments?.[Math.max(navIndex - 1, 0)]?.distance / 1000) || 2.5} km • {routeResult.sequence[navIndex]?.address?.split(',')[0]}
                         </p>
+                        {routeResult.sequence[navIndex]?.invoice?.pdfUrl && (
+                          <div className="mt-1">
+                             <button 
+                               onClick={() => setPreviewInvoice(routeResult.sequence[navIndex]?.invoice?.pdfUrl ? { url: routeResult.sequence[navIndex].invoice.pdfUrl, isImage: routeResult.sequence[navIndex].invoice.isImage } : null)}
+                               className="inline-flex items-center gap-1.5 px-2 py-1 bg-tech/10 border border-tech/30 text-tech rounded uppercase font-bold text-[10px] tracking-wider hover:bg-tech/20 transition-all"
+                             >
+                                <FileText className="w-3.5 h-3.5" />
+                                NFe: {routeResult.sequence[navIndex]?.invoice?.key?.substring(0,8)}... Anexada
+                             </button>
+                          </div>
+                        )}
                       </div>
 
                       {/* Right Action buttons */}
@@ -1717,10 +1895,64 @@ export default function VoieExpressApp() {
                           window.dispatchEvent(new CustomEvent('occurrence-reported'));
                           setIsReporting(false);
                         }}
-                        className="w-full bg-tech text-slate-950 font-black py-4 rounded-2xl shadow-[0_5px_20px_rgba(0,212,170,0.3)] hover:brightness-110 active:scale-95 transition-all"
+                        className="w-full bg-tech text-slate-950 font-black py-4 rounded-2xl shadow-[0_5px_20px_rgba(209,160,84,0.3)] hover:brightness-110 active:scale-95 transition-all"
                        >
                          ENVIAR REPORTE
                        </button>
+                     </motion.div>
+                   </motion.div>
+                 )}
+               </AnimatePresence>
+
+               {/* Preview Invoice Modal */}
+               <AnimatePresence>
+                 {previewInvoice && (
+                   <motion.div 
+                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                     className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[60] flex items-center justify-center p-4 sm:p-6"
+                   >
+                     <motion.div
+                       initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+                       className="bg-slate-900 border border-slate-700/50 shadow-2xl rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+                     >
+                       <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-slate-800/20">
+                         <h3 className="text-white font-medium flex items-center gap-2 text-sm sm:text-base">
+                           <FileText className="w-4 h-4 text-tech" /> Pré-visualização do Documento
+                         </h3>
+                         <button 
+                           onClick={() => setPreviewInvoice(null)}
+                           className="w-8 h-8 flex items-center justify-center bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white rounded-full transition-colors"
+                         >
+                           <X className="w-4 h-4" />
+                         </button>
+                       </div>
+                       
+                       <div className="flex-1 bg-slate-950 flex flex-col items-center justify-center overflow-auto p-4 sm:p-8 min-h-[50vh] gap-4">
+                         {previewInvoice?.isImage ? (
+                           <div className="flex-1 max-w-full flex items-center justify-center relative rounded overflow-hidden">
+                             {/* eslint-disable-next-line @next/next/no-img-element */}
+                             <img 
+                               src={previewInvoice?.url} 
+                               alt="Visualização do Documento" 
+                               className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-xl"
+                             />
+                           </div>
+                         ) : (
+                           <iframe 
+                             src={previewInvoice?.url} 
+                             className="w-full h-[65vh] rounded shadow-lg border border-slate-800 bg-white" 
+                             title="Visualização da NFe"
+                           />
+                         )}
+                         <a 
+                           href={previewInvoice?.url}
+                           target="_blank"
+                           download="documento-anexado"
+                           className="bg-tech/20 text-tech hover:bg-tech/30 px-6 py-2.5 rounded-full font-bold uppercase tracking-wider text-xs transition-all flex items-center gap-2"
+                         >
+                           <Download className="w-4 h-4" /> Baixar ou Abrir em Nova Guia
+                         </a>
+                       </div>
                      </motion.div>
                    </motion.div>
                  )}
@@ -1842,7 +2074,7 @@ export default function VoieExpressApp() {
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className="h-full w-full"
             >
-              <KpiDashboard />
+              <KpiDashboard activeRoute={routeResult} />
             </motion.div>
           )}
 
@@ -1860,7 +2092,7 @@ export default function VoieExpressApp() {
                 
                 <div className="space-y-8">
                   {/* 🔮 APRESENTAÇÃO TÉCNICA E TUTORIAL GUIADO */}
-                  <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-tech/35 p-6 sm:p-8 rounded-[32px] shadow-[0_0_30px_rgba(0,212,170,0.1)] relative overflow-hidden">
+                  <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-tech/35 p-6 sm:p-8 rounded-[32px] shadow-[0_0_30px_rgba(209,160,84,0.1)] relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
                     
                     <div className="flex items-start gap-4 mb-5">
@@ -1907,7 +2139,7 @@ export default function VoieExpressApp() {
                         setDemoMinimized(false);
                         setCurrentScreen('home'); // Go to home to start the tour from the beginning
                       }}
-                      className="w-full sm:w-auto bg-tech text-slate-950 font-black text-xs px-6 py-4 rounded-2xl uppercase tracking-wider hover:brightness-110 hover:shadow-[0_0_15px_rgba(0,212,170,0.3)] active:scale-95 transition-all text-center cursor-pointer flex items-center justify-center gap-2"
+                      className="w-full sm:w-auto bg-tech text-slate-950 font-black text-xs px-6 py-4 rounded-2xl uppercase tracking-wider hover:brightness-110 hover:shadow-[0_0_15px_rgba(209,160,84,0.3)] active:scale-95 transition-all text-center cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Play className="w-4 h-4 fill-current" />
                       Iniciar Roteiro & Tutorial Passo a Passo
@@ -1964,7 +2196,7 @@ export default function VoieExpressApp() {
           initial={{ opacity: 0, scale: 0.8, y: 30 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(0,212,170,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
+          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
           title="Retomar Tutorial"
         >
           <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
@@ -1980,7 +2212,7 @@ export default function VoieExpressApp() {
           id="panel-demo-assistant"
           initial={{ opacity: 0, y: 30, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[400px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(0,212,170,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
+          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[400px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
         >
           <div className="flex justify-between items-start border-b border-white/10 pb-2.5">
             <div className="flex items-center gap-2">

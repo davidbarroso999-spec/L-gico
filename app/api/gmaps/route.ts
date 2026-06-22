@@ -4,6 +4,21 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, payload } = body;
+    const preference = payload?.preference || 'fastest';
+
+    let routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
+    let routeModifiers: any = {};
+
+    if (preference === 'shortest') {
+      routingPreference = 'TRAFFIC_UNAWARE';
+    } else if (preference === 'economy') {
+      routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
+      routeModifiers.avoidTolls = true;
+    } else if (preference === 'fastest') {
+      routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
+    } else if (preference === 'safety' || preference === 'balanced') {
+      routingPreference = 'TRAFFIC_AWARE_OPTIMAL';
+    }
 
     const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
     if (!API_KEY) {
@@ -27,7 +42,8 @@ export async function POST(req: NextRequest) {
           origins: origins,
           destinations: origins,
           travelMode: 'DRIVE',
-          routingPreference: 'TRAFFIC_AWARE_OPTIMAL'
+          routingPreference,
+          routeModifiers
         })
       });
 
@@ -81,8 +97,9 @@ export async function POST(req: NextRequest) {
           destination,
           ...(intermediates.length > 0 ? { intermediates } : {}),
           travelMode: 'DRIVE',
-          routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
-          computeAlternativeRoutes: false,
+          routingPreference,
+          routeModifiers,
+          computeAlternativeRoutes: preference === 'fastest',
           languageCode: 'pt-BR',
           units: 'METRIC'
         })
@@ -96,41 +113,41 @@ export async function POST(req: NextRequest) {
 
       let features: any[] = [];
       if (data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        
-        // Decode polyline to [lat, lon] then format to [lon, lat] for geojson
         const polylineLib = require('@mapbox/polyline');
-        let coordinates: number[][] = [];
-        const polylineStr = route.polyline?.encodedPolyline || route.polyline?.encodedPath;
-        if (polylineStr) {
-          const latLons = polylineLib.decode(polylineStr);
-          coordinates = latLons.map((p: number[]) => [p[1], p[0]]); // [lon, lat]
-        }
-
-        let totalDuration = 0;
-        if (route.duration) {
-           totalDuration = parseFloat(route.duration.replace('s', ''));
-        }
-
-        // Map legs to segments
-        const segments = route.legs?.map((leg: any) => ({
-          distance: leg.distanceMeters || 0,
-          duration: parseFloat((leg.duration || '0s').replace('s', '')),
-          steps: [] // We skip detailed steps mapping for brevity unless needed
-        })) || [];
-
-        features.push({
-          geometry: {
-            coordinates: coordinates,
-            type: "LineString"
-          },
-          properties: {
-            summary: {
-              distance: route.distanceMeters || 0,
-              duration: totalDuration
-            },
-            segments: segments
+        
+        data.routes.forEach((route: any) => {
+          let coordinates: number[][] = [];
+          const polylineStr = route.polyline?.encodedPolyline || route.polyline?.encodedPath;
+          if (polylineStr) {
+            const latLons = polylineLib.decode(polylineStr);
+            coordinates = latLons.map((p: number[]) => [p[1], p[0]]); // [lon, lat]
           }
+
+          let totalDuration = 0;
+          if (route.duration) {
+             totalDuration = parseFloat(route.duration.replace('s', ''));
+          }
+
+          // Map legs to segments
+          const segments = route.legs?.map((leg: any) => ({
+            distance: leg.distanceMeters || 0,
+            duration: parseFloat((leg.duration || '0s').replace('s', '')),
+            steps: [] 
+          })) || [];
+
+          features.push({
+            geometry: {
+              coordinates: coordinates,
+              type: "LineString"
+            },
+            properties: {
+              summary: {
+                distance: route.distanceMeters || 0,
+                duration: totalDuration
+              },
+              segments: segments
+            }
+          });
         });
       }
 

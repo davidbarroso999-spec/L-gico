@@ -32,7 +32,7 @@ export default function InfoTooltip({ text }: { text: string }) {
         }}
         onMouseEnter={() => setIsOpen(true)}
         onMouseLeave={() => setIsOpen(false)}
-        className="text-slate-500 hover:text-[#00f5ff] transition-colors focus:outline-none"
+        className="text-slate-500 hover:text-[#D1A054] transition-colors focus:outline-none"
         aria-label="Mais informações"
       >
         <Info className="w-4 h-4" />

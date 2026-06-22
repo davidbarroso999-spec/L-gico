@@ -44,3 +44,18 @@ export class VoieExpressDatabase extends Dexie {
 }
 
 export const db = new VoieExpressDatabase();
+
+// Elite practice: Non-blocking background Garbage Collector for expired cache entries
+if (typeof window !== 'undefined') {
+  setTimeout(() => {
+    db.cache
+      .filter(entry => entry.ttl ? entry.ttl < Date.now() : false)
+      .delete()
+      .then(numDeleted => {
+        if (numDeleted > 0) {
+          console.log(`[Cache GC] Recycled ${numDeleted} expired persistent cache entries successfully.`);
+        }
+      })
+      .catch(err => console.warn("[Cache GC] Pruning failed in background:", err));
+  }, 3000); // 3-second delay to ensure smooth main-thread hydration and page mounting
+}

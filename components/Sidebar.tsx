@@ -304,7 +304,7 @@ export default function Sidebar({
           
           <!-- NO-PRINT floating print button on top -->
           <div class="no-print absolute top-4 right-4 flex gap-2">
-            <button onclick="window.print()" class="bg-[#00f5ff] text-slate-950 font-black text-xs uppercase cursor-pointer hover:brightness-110 transition px-4 py-2.5 rounded-lg flex items-center gap-1.5 shadow-md">
+            <button onclick="window.print()" class="bg-[#D1A054] text-slate-950 font-black text-xs uppercase cursor-pointer hover:brightness-110 transition px-4 py-2.5 rounded-lg flex items-center gap-1.5 shadow-md">
               🖨️ Imprimir / Salvar como PDF
             </button>
             <button onclick="window.close()" class="bg-slate-200 text-slate-700 font-bold text-xs uppercase cursor-pointer hover:bg-slate-300 transition px-3 py-2.5 rounded-lg">
@@ -317,7 +317,7 @@ export default function Sidebar({
             <div>
               <div class="flex items-center gap-2 mb-1.5 font-sans">
                 <span class="text-xl font-extrabold text-slate-900 tracking-wider">🦅 HARPIA</span>
-                <span class="text-[9px] bg-slate-900 text-[#00f5ff] font-mono font-bold tracking-widest uppercase px-1.5 py-0.5 rounded">
+                <span class="text-[9px] bg-slate-900 text-[#D1A054] font-mono font-bold tracking-widest uppercase px-1.5 py-0.5 rounded">
                   LOGISTICS CO.
                 </span>
               </div>
@@ -500,10 +500,10 @@ export default function Sidebar({
                 <button
                   key={p.id}
                   onClick={() => onSimulateProfile?.(p.id as any)}
-                  className={`w-full p-3.5 rounded-2xl border text-left transition-all ${
+                  className={`w-full p-3.5 rounded-2xl border text-left transition-all active:scale-[0.98] ${
                     isSelected 
                       ? 'bg-slate-900 border-tech shadow-md' 
-                      : 'bg-slate-900/45 border-slate-850 hover:border-slate-755 hover:bg-slate-900/80'
+                      : 'bg-slate-900/45 border-slate-850 hover:border-slate-755 hover:bg-slate-900/80 cursor-pointer'
                   }`}
                 >
                   <div className="flex justify-between items-start mb-1">
@@ -615,7 +615,7 @@ export default function Sidebar({
 
               <button
                 onClick={() => onApplyRoute?.(activeRoute)}
-                className="w-full mt-4 bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-1.5 shadow-[0_4px_16px_rgba(0,212,170,0.35)] hover:brightness-110 active:scale-[0.98] transition-all text-xs uppercase"
+                className="w-full mt-4 bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-1.5 shadow-[0_4px_16px_rgba(209,160,84,0.35)] hover:brightness-110 active:scale-[0.98] transition-all text-xs uppercase"
               >
                 Seguir esta Rota Simulação
                 <ChevronRight className="w-4 h-4" />
@@ -801,7 +801,7 @@ export default function Sidebar({
                     <div className="flex flex-col gap-2">
                       <button 
                         onClick={onNavigate}
-                        className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_22px_rgba(0,212,170,0.35)] cursor-pointer text-xs uppercase tracking-wider"
+                        className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_22px_rgba(209,160,84,0.35)] cursor-pointer text-xs uppercase tracking-wider"
                         disabled={stops.length === 0}
                       >
                         <Navigation className="w-4 h-4 fill-current animate-pulse" />
@@ -975,7 +975,7 @@ export default function Sidebar({
                     <div className="px-6 py-4 border-t border-slate-900 bg-slate-950 shrink-0 absolute bottom-0 left-0 right-0 z-10 flex flex-col gap-2">
                       <button 
                         onClick={onNavigate}
-                        className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(0,212,170,0.3)] cursor-pointer text-xs uppercase tracking-wider font-sans font-extrabold"
+                        className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(209,160,84,0.3)] cursor-pointer text-xs uppercase tracking-wider font-sans font-extrabold"
                       >
                         <Navigation className="w-4 h-4 fill-current" />
                         Iniciar Rota ({stops.length} Paradas)
@@ -1053,7 +1053,7 @@ export default function Sidebar({
         <div className="flex flex-col gap-2.5 mt-4 md:mt-6">
           <button 
             onClick={onNavigate}
-            className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_22px_rgba(0,212,170,0.3)] text-xs uppercase tracking-wider font-extrabold cursor-pointer"
+            className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_22px_rgba(209,160,84,0.3)] text-xs uppercase tracking-wider font-extrabold cursor-pointer"
             disabled={stops.length === 0}
           >
             <Navigation className="w-4 h-4 fill-current animate-pulse" />
@@ -1090,10 +1090,10 @@ export default function Sidebar({
             <motion.div
               key={stop.id}
               layout
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
+              initial={{ opacity: 0, x: -20, scale: 0.98 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              transition={{ delay: idx * 0.05 }}
+              transition={{ delay: idx * 0.05, type: 'spring', stiffness: 120, damping: 20 }}
               className="group mb-4 bg-slate-900/50 border border-slate-800 hover:border-tech/40 p-4 rounded-2xl transition-all"
             >
               <div className="flex gap-4">

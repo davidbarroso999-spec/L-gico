@@ -197,14 +197,14 @@ export async function getTrafficIncidents(points: [number, number][]) {
   }
 }
 
-export async function getMatrix(locations: [number, number][], profile: string = 'driving-car') {
+export async function getMatrix(locations: [number, number][], profile: string = 'driving-car', preference: string = 'fastest') {
   try {
     const res = await fetch('/api/gmaps', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'matrix',
-        payload: { locations }
+        payload: { locations, preference }
       })
     });
     
@@ -259,13 +259,33 @@ export async function snapToRoad(points: [number, number][]): Promise<[number, n
 }
 
 export async function getDirections(points: [number, number][], profile: string = 'driving-car', preference: string = 'fastest') {
+  // Deduplicate consecutive identical/near-identical coordinates (under ~10 meters)
+  const cleanPoints: [number, number][] = [];
+  points.forEach(p => {
+    if (cleanPoints.length === 0) {
+      cleanPoints.push(p);
+    } else {
+      const last = cleanPoints[cleanPoints.length - 1];
+      const dist = Math.sqrt(Math.pow(last[0] - p[0], 2) + Math.pow(last[1] - p[1], 2));
+      if (dist > 0.0001) {
+        cleanPoints.push(p);
+      }
+    }
+  });
+
+  // Ensure we have at least 2 distinct points to compute a valid route, otherwise repeat the point slightly offset
+  if (cleanPoints.length < 2 && points.length > 0) {
+    const single = points[0];
+    cleanPoints.push([single[0] + 0.0001, single[1] + 0.0001]);
+  }
+
   try {
     const res = await fetch('/api/gmaps', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'directions',
-        payload: { points }
+        payload: { points: cleanPoints, preference }
       })
     });
     
@@ -281,7 +301,7 @@ export async function getDirections(points: [number, number][], profile: string 
           endpoint: `v2/directions/${profile}/geojson`,
           method: 'POST',
           body: { 
-            coordinates: points.map(p => [p[1], p[0]]),
+            coordinates: cleanPoints.map(p => [p[1], p[0]]),
             preference: preference,
             instructions: true,
             language: "pt-BR"

@@ -78,11 +78,99 @@
 }
 
 @theme {
-  --color-primary: #0B3D2E;
-  --color-accent: #D4A017;
-  --color-tech: #00D4AA;
-  --color-alert: #E63946;
-  --color-warning: #F4A261;
+  --color-primary: #D1A054;
+  --color-accent: #D1A054;
+  --color-tech: #D1A054;
+  --color-alert: #c45c47;
+  --color-warning: #D1A054;
+  
+  /* Blue/Sky/Indigo mapped to Gold Palette (#D1A054) */
+  --color-sky-300: #dfaf63;
+  --color-sky-400: #D1A054;
+  --color-sky-500: #c18536;
+  --color-sky-900: #422614;
+  --color-sky-950: #261309;
+
+  --color-blue-50: #fbf6ec;
+  --color-blue-100: #f5ebd2;
+  --color-blue-200: #ebd0a1;
+  --color-blue-300: #dfaf63;
+  --color-blue-400: #D1A054;
+  --color-blue-500: #c18536;
+  --color-blue-600: #a4672a;
+  --color-blue-900: #422614;
+  --color-blue-950: #261309;
+
+  --color-indigo-400: #D1A054;
+  --color-indigo-500: #c18536;
+
+  /* Teal/Emerald/Green mapped to Gold Palette (#D1A054) */
+  --color-green-50: #fbf6ec;
+  --color-green-200: #ebd0a1;
+  --color-green-600: #a4672a;
+  --color-green-950: #261309;
+
+  --color-teal-300: #dfaf63;
+  --color-teal-400: #D1A054;
+  --color-teal-500: #c18536;
+  
+  --color-emerald-400: #D1A054;
+  --color-emerald-500: #c18536;
+  
+  /* Amber/Yellow mapped to Gold Accent (#D1A054) */
+  --color-amber-50: #fbf6ec;
+  --color-amber-100: #f5ebd2;
+  --color-amber-200: #ebd0a1;
+  --color-amber-300: #dfaf63;
+  --color-amber-400: #D1A054;
+  --color-amber-450: #D1A054;
+  --color-amber-500: #c18536;
+  --color-amber-600: #a4672a;
+  --color-amber-900: #422614;
+  --color-amber-950: #261309;
+  
+  /* Red/Rose mapped to Terra-Cotta (for alerts) */
+  --color-rose-50: #fdf5f3;
+  --color-rose-250: #f1bab0;
+  --color-rose-455: #d67a65;
+  --color-rose-500: #c45c47;
+  --color-rose-600: #a34633;
+  --color-rose-950: #260c07;
+  
+  --color-red-300: #e89f8e;
+  --color-red-400: #d67a65;
+  --color-red-500: #c45c47;
+  --color-red-600: #a34633;
+  --color-red-650: #933e2c;
+  --color-red-900: #471910;
+  --color-red-950: #260c07;
+  
+  /* Slate/Gray/Zinc/Neutral mapped to Dark #2D2C2A background */
+  --color-gray-50: #f4f4f3;
+  --color-gray-100: #e6e5e4;
+  --color-gray-200: #cbcaca;
+  --color-gray-300: #a8a7a5;
+  --color-gray-400: #7f7e7a;
+  --color-neutral-50: #f4f4f3;
+  
+  --color-slate-50: #f4f4f3;
+  --color-slate-100: #e6e5e4;
+  --color-slate-200: #cbcaca;
+  --color-slate-300: #a8a7a5;
+  --color-slate-310: #a2a19f;
+  --color-slate-350: #93928f;
+  --color-slate-400: #7f7e7a;
+  --color-slate-450: #71706b;
+  --color-slate-500: #61605c;
+  --color-slate-600: #4e4d4a;
+  --color-slate-650: #474643;
+  --color-slate-700: #403f3d;
+  --color-slate-750: #353432;
+  --color-slate-755: #333230;
+  --color-slate-800: #2D2C2A;
+  --color-slate-850: #252422;
+  --color-slate-900: #1e1e1c;
+  --color-slate-950: #141312;
   
   --font-sans: 'Inter', sans-serif;
   --font-display: 'Space Grotesk', sans-serif;
@@ -109,6 +197,16 @@
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
   background-size: 200% 100%;
   animation: shimmer 2s infinite;
+}
+
+@keyframes map-marker-pop {
+  0% { transform: scale(0.2) translateY(20px); opacity: 0; }
+  60% { transform: scale(1.15) translateY(-2px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+.animated-marker {
+  animation: map-marker-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 @keyframes shimmer {
@@ -140,4 +238,56 @@
 @keyframes dash {
   from { stroke-dashoffset: 200; }
   to { stroke-dashoffset: 0; }
+}
+
+/* === APEX PREMIUM LUXURY ADDITIONS === */
+.noise-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='.03'/></svg>");
+  opacity: 0.35;
+  z-index: 40;
+}
+
+@keyframes orb-drift-1 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(40px, -60px) scale(1.1); }
+  66% { transform: translate(-30px, 20px) scale(0.9); }
+}
+
+@keyframes orb-drift-2 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  50% { transform: translate(-50px, 40px) scale(1.15); }
+}
+
+.animate-orb-1 {
+  animation: orb-drift-1 25s ease-in-out infinite;
+}
+
+.animate-orb-2 {
+  animation: orb-drift-2 30s ease-in-out infinite;
+}
+
+.glass-premium {
+  background: rgba(20, 19, 18, 0.5);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 
+    0 10px 40px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.03) inset;
+}
+
+/* Custom interactive premium press triggers */
+.btn-magnetic {
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.btn-magnetic:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(209, 160, 84, 0.25);
+}
+.btn-magnetic:active {
+  transform: translateY(1px) scale(0.97);
+  transition-duration: 80ms;
 }

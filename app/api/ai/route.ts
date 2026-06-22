@@ -62,10 +62,93 @@ export async function POST(req: Request) {
   try {
     const { prompt } = await req.json();
     
-    // 1. Tenta OpenAI caso a chave esteja configurada
+    const anyApiKey = process.env.ANYAPI_API_KEY;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
+
+    let skipClaudeAndOpenAI = false;
+    if (anyApiKey && geminiApiKey) {
+      if (Math.random() < 0.5) {
+        console.log("[AI Load Balancer] Sorteio 50/50: Escalonando para GEMINI para poupar tokens.");
+        skipClaudeAndOpenAI = true;
+      } else {
+        console.log("[AI Load Balancer] Sorteio 50/50: Escalonando para CLAUDE (AnyAPI).");
+      }
+    }
+    
+    // 0. Tenta AnyAPI (Anthropic Claude Sonnet 4.5 proxy via formato OpenAI)
+    if (anyApiKey && !skipClaudeAndOpenAI) {
+      console.log("[AI Engine] Chave AnyAPI encontrada. Tentando utilizar Claude Sonnet via AnyAPI.");
+      try {
+        const baseUrl = process.env.ANYAPI_BASE_URL || "https://api.anyapi.ai/v1";
+        const anyapiUrl = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+        
+        const response = await fetch(anyapiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${anyApiKey}`
+          },
+          body: JSON.stringify({
+            model: "anthropic/claude-sonnet-4.5", // Refletindo o modelo exato do dashboard do AnyAPI
+            messages: [
+              {
+                role: "system",
+                content: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`
+              },
+              {
+                role: "user",
+                content: prompt
+              }
+            ],
+            max_tokens: 150,
+            temperature: 0.7
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.choices?.[0]?.message?.content) {
+            console.log("[AI Engine] Resposta bem-sucedida do AnyAPI (Claude).");
+            return NextResponse.json({ content: data.choices[0].message.content });
+          }
+        } else {
+          // Fallback para Anthropic nativo caso o endpoint responda erro com AnyAPI/Anthropic direto
+          const text = await response.text();
+          console.error(`[AI Engine] Falha na chamada AnyAPI (OpenAI format) Status ${response.status}: ${text}`);
+          
+          if (text.includes("anthropic") || anyApiKey.startsWith("sk-ant")) {
+            console.log("[AI Engine] Tentando formato nativo da Anthropic...");
+            const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": anyApiKey,
+                "anthropic-version": "2023-06-01"
+              },
+              body: JSON.stringify({
+                model: "anthropic/claude-sonnet-4.5",
+                max_tokens: 150,
+                system: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`,
+                messages: [{ role: "user", content: prompt }]
+              })
+            });
+            if (anthropicResponse.ok) {
+              const anthData = await anthropicResponse.json();
+              return NextResponse.json({ content: anthData.content[0].text });
+            } else {
+              console.error(`[AI Engine] Falha Anthropic nativo: ${await anthropicResponse.text()}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[AI Engine] Erro ao conectar com a AnyAPI, tentando próximos...", err);
+      }
+    }
+
+    // 1. Tenta OpenAI caso a chave esteja configurada
     const isMockKey = openaiApiKey && (openaiApiKey.includes("abcde") || openaiApiKey.startsWith("sk-abcde") || openaiApiKey.length < 20);
-    if (openaiApiKey && !isMockKey) {
+    if (openaiApiKey && !isMockKey && !skipClaudeAndOpenAI) {
       console.log("[AI Engine] Chave OpenAI encontrada. Utilizando OpenAI GPT-4o-mini.");
       try {
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -79,17 +162,7 @@ export async function POST(req: Request) {
             messages: [
               {
                 role: "system",
-                content: `Você é Voie Express, o analista de transporte mais crítico do mundo.
-Sua missão é otimizar rotas baseando-se RIGOROSAMENTE nestes pilares:
-
-1. Velocidade (Rápido): Foque em economia de tempo, evite engarrafamentos, prefira fluidez mesmo com maior KM.
-2. Distância Mínima (Curto): Menor trajeto matemático ponto a ponto. Ignore trânsito ou qualidade da via.
-3. Economia (Eco): Evite frenagens bruscas e vias de alta aceleração. Mantenha velocidade constante para poupar combustível.
-4. Segurança (Seguro): Fuja de alagamentos, cruzamentos perigosos e vias de alto risco criminal/acidente. Priorize a integridade do condutor.
-5. Equilibrado: Otimização multivariável. Equilibre tempo, segurança e economia pelo melhor custo-benefício.
-
-Ao analisar, considere endereços, paradas e destino. Seja direto, técnico e executivo.
-IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`
+                content: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`
               },
               {
                 role: "user",
@@ -134,18 +207,9 @@ IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`
     });
     
     const config = {
-      systemInstruction: `Você é Voie Express, o analista de transporte mais crítico do mundo.
-Sua missão é otimizar rotas baseando-se RIGOROSAMENTE nestes pilares:
-
-1. Velocidade (Rápido): Foque em economia de tempo, evite engarrafamentos, prefira fluidez mesmo com maior KM.
-2. Distância Mínima (Curto): Menor trajeto matemático ponto a ponto. Ignore trânsito ou qualidade da via.
-3. Economia (Eco): Evite frenagens bruscas e vias de alta aceleração. Mantenha velocidade constante para poupar combustível.
-4. Segurança (Seguro): Fuja de alagamentos, cruzamentos perigosos e vias de alto risco criminal/acidente. Priorize a integridade do condutor.
-5. Equilibrado: Otimização multivariável. Equilibre tempo, segurança e economia pelo melhor custo-benefício.
-
-Ao analisar, considere endereços, paradas e destino. Seja direto, técnico e executivo.
-IMPORTANTE: RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.`,
+      systemInstruction: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`,
       temperature: 0.7,
+      maxOutputTokens: 150,
     };
 
     let result;

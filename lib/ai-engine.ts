@@ -39,8 +39,10 @@ export async function getGeminiAnalysis(input: any) {
         4. RESPONDA SEMPRE EM PORTUGUÊS DO BRASIL.
       `;
     } else {
+      const dataAtual = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
       prompt = `
         ### MISSÃO: VEREDITO HARPIA (IA ESTRATÉGICA)
+        DATA ATUAL PARA REFERÊNCIA DE SAZONALIDADE/CLIMA: ${dataAtual}
         ESTRATÉGIA APLICADA: ${input.strategy || 'N/A'}
         
         DADOS REAIS DA EXECUÇÃO FINAL DA ROTA:
@@ -72,9 +74,9 @@ export async function getGeminiAnalysis(input: any) {
         O operador solicitou com prioridade absoluta: "${input.customPrompt}"` : ''}
 
         ### DIRETRIZES IMPORTANTES PARA A IA (MÁXIMA PRECISÃO):
-        1. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente ruas, acidentes ou alagamentos fictícios. Se dados reais mostram "Nenhuma ocorrência", relate que a via está livre e segura.
-        2. ANÁLISE FIEL DA ROTA: Relate como as prioridades (${input.priority || 'N/A'}) influenciaram na escolha da ordem das paradas.
-        3. AVALIAÇÃO DOS PARÂMETROS PERSONALIZADOS: Analise se os parâmetros de restrição foram cumpridos com sucesso no trajeto de ${(input.summary.distance / 1000).toFixed(2)} km.
+        1. CONTEXTO SAZONAL E CLIMÁTICO REAL: Baseie-se estritamente nas temperaturas e descrições climáticas reais fornecidas em cada parada para dar o diagnóstico operativo (por exemplo, se a temperatura real é 28°C e o céu está limpo, nunca assuma ou mencione alagamentos ou calor extremo fora da realidade de forma estática baseando-se em meses do calendário).
+        2. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente descrições climáticas fictícias ou perigos sazonais (como alagamento do Rio Negro ou sol escaldante de 40°C no Amazonas) se as medições reais de tempo real mostrarem estabilidade e normalidade. Confie 100% no "Alerta" e na "Temperatura" reais informados na lista de paradas.
+        3. ANÁLISE FIEL DA ROTA: Relate como as prioridades e restrições influenciaram na escolha da ordem das paradas no trajeto.
         4. RESPOSTA EXECUTIVA E CURTA: Forneça um insight tático direto e realista com no máximo 2 frases explicativas. Responda em termos logísticos objetivos.
         5. EXTENSÃO E IDIOMA: Nunca ultrapasse o limite de 2 frases. Responda sempre em Português do Brasil.
       `;

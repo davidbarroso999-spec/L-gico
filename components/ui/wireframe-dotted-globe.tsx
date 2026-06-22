@@ -125,30 +125,44 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       const currentScale = Math.max(0.1, projection.scale())
       const scaleFactor = Math.max(0.1, currentScale / radius)
 
+      // 1. Back volumetric atmospheric glow mimicking sphere depth (Three.js stylization)
+      const gradBg = context.createRadialGradient(
+        containerWidth / 2, containerHeight / 2, currentScale * 0.4,
+        containerWidth / 2, containerHeight / 2, currentScale
+      )
+      gradBg.addColorStop(0, "rgba(209, 160, 84, 0.12)")
+      gradBg.addColorStop(0.6, "rgba(209, 160, 84, 0.03)")
+      gradBg.addColorStop(1, "rgba(0, 0, 0, 0.5)")
+      
       context.beginPath()
       context.arc(containerWidth / 2, containerHeight / 2, currentScale, 0, 2 * Math.PI)
-      context.fillStyle = "transparent"
+      context.fillStyle = gradBg
       context.fill()
-      context.strokeStyle = "rgba(0, 245, 255, 0.2)"
-      context.lineWidth = 1 * scaleFactor
+
+      // Subtle atmospheric outline glow
+      context.strokeStyle = "rgba(209, 160, 84, 0.25)"
+      context.lineWidth = 1.5 * scaleFactor
       context.stroke()
 
       if (landFeatures) {
+        // Graticule lines
         const graticule = d3.geoGraticule()
         context.beginPath()
         path(graticule())
-        context.strokeStyle = "rgba(255,255,255,0.05)"
-        context.lineWidth = 1 * scaleFactor
+        context.strokeStyle = "rgba(255, 255, 255, 0.04)"
+        context.lineWidth = 0.5 * scaleFactor
         context.stroke()
 
+        // Land boundaries
         context.beginPath()
         landFeatures.features.forEach((feature: any) => {
           path(feature)
         })
-        context.strokeStyle = "rgba(0, 245, 255, 0.4)"
+        context.strokeStyle = "rgba(209, 160, 84, 0.4)"
         context.lineWidth = 1 * scaleFactor
         context.stroke()
 
+        // Land dots
         allDots.forEach((dot) => {
           const projected = projection([dot.lng, dot.lat])
           if (
@@ -158,12 +172,56 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
             projected[1] >= 0 &&
             projected[1] <= containerHeight
           ) {
-            context.beginPath()
-            context.arc(projected[0], projected[1], 1 * scaleFactor, 0, 2 * Math.PI)
-            context.fillStyle = "rgba(255, 255, 255, 0.3)"
-            context.fill()
+            // Check hemisphere visibility
+            const gdist = d3.geoDistance([dot.lng, dot.lat], [-projection.rotate()[0], -projection.rotate()[1]])
+            if (gdist < Math.PI / 2) {
+              context.beginPath()
+              context.arc(projected[0], projected[1], 1 * scaleFactor, 0, 2 * Math.PI)
+              context.fillStyle = "rgba(255, 255, 255, 0.45)"
+              context.fill()
+            }
           }
         })
+
+        // 2. Interactive Pulsing Beacon precisely on Amazonas / Manaus (-60.021731, -3.119027)
+        const manausLng = -60.021731
+        const manausLat = -3.119027
+        const currentRot = projection.rotate()
+        const gdist = d3.geoDistance([manausLng, manausLat], [-currentRot[0], -currentRot[1]])
+        const isManausVisible = gdist < Math.PI / 2
+
+        if (isManausVisible) {
+          const proj = projection([manausLng, manausLat])
+          if (proj) {
+            const time = Date.now()
+            const pulse1 = (Math.sin(time / 240) + 1) / 2 // 0 to 1
+            const pulse2 = (Math.sin(time / 150 + Math.PI) + 1) / 2 // staggered
+
+            // Double pulsing ring
+            context.beginPath()
+            context.arc(proj[0], proj[1], (5 + pulse1 * 12) * scaleFactor, 0, 2 * Math.PI)
+            context.strokeStyle = `rgba(209, 160, 84, ${0.4 * (1 - pulse1)})`
+            context.lineWidth = 1.5 * scaleFactor
+            context.stroke()
+
+            context.beginPath()
+            context.arc(proj[0], proj[1], (3 + pulse2 * 8) * scaleFactor, 0, 2 * Math.PI)
+            context.strokeStyle = `rgba(209, 160, 84, ${0.5 * (1 - pulse2)})`
+            context.lineWidth = 1 * scaleFactor
+            context.stroke()
+
+            // Glowing core
+            context.beginPath()
+            context.arc(proj[0], proj[1], 4.5 * scaleFactor, 0, 2 * Math.PI)
+            context.fillStyle = "#D1A054"
+            context.fill()
+            
+            context.beginPath()
+            context.arc(proj[0], proj[1], 2 * scaleFactor, 0, 2 * Math.PI)
+            context.fillStyle = "#FFFFFF"
+            context.fill()
+          }
+        }
       }
     }
 
@@ -241,19 +299,61 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       }
     }
 
+    // Interactive inertia and elastic rotation settings
     const rotation: [number, number] = [0, 0]
     let autoRotate = true
-    const rotationSpeed = 0.3
+    const rotationSpeed = 0.28
 
-    const rotate = () => {
-      if (autoRotate) {
-        rotation[0] += rotationSpeed
-        projection.rotate(rotation)
-        render()
-      }
+    // Interactive mouse parallax variables (Three.js signature)
+    let mouseX = 0
+    let mouseY = 0
+    let targetTiltX = 0
+    let targetTiltY = 0
+    let currentTiltX = 0
+    let currentTiltY = 0
+
+    const handleCanvasMouseMove = (event: MouseEvent) => {
+       const rect = canvas.getBoundingClientRect()
+       mouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+       mouseY = ((event.clientY - rect.top) / rect.height) * 2 - 1
+       targetTiltX = mouseX * 22
+       targetTiltY = -mouseY * 12
     }
 
-    const rotationTimer = d3.timer(rotate)
+    const handleCanvasMouseLeave = () => {
+       targetTiltX = 0
+       targetTiltY = 0
+    }
+
+    canvas.addEventListener("mousemove", handleCanvasMouseMove)
+    canvas.addEventListener("mouseleave", handleCanvasMouseLeave)
+
+    // Animation Tick Loop replacing d3.timer for precise requestAnimationFrame optimization
+    let isTerminated = false
+    const tick = () => {
+      if (isTerminated) return
+
+      if (autoRotate) {
+        rotation[0] += rotationSpeed
+      }
+
+      // Smooth Lerp Spring interpolation
+      currentTiltX += (targetTiltX - currentTiltX) * 0.08
+      currentTiltY += (targetTiltY - currentTiltY) * 0.08
+
+      const finalRotation: [number, number] = [
+        rotation[0] + currentTiltX,
+        rotation[1] + currentTiltY
+      ]
+
+      projection.rotate(finalRotation)
+      render()
+
+      requestAnimationFrame(tick)
+    }
+
+    // Start tick loop
+    requestAnimationFrame(tick)
 
     const handleMouseDown = (event: MouseEvent) => {
       autoRotate = false
@@ -262,16 +362,13 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       const startRotation = [...rotation]
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        const sensitivity = 0.5
+        const sensitivity = 0.4
         const dx = moveEvent.clientX - startX
         const dy = moveEvent.clientY - startY
 
         rotation[0] = startRotation[0] + dx * sensitivity
         rotation[1] = startRotation[1] - dy * sensitivity
         rotation[1] = Math.max(-90, Math.min(90, rotation[1]))
-
-        projection.rotate(rotation)
-        render()
       }
 
       const handleMouseUp = () => {
@@ -280,7 +377,7 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
 
         setTimeout(() => {
           autoRotate = true
-        }, 3000)
+        }, 4000)
       }
 
       document.addEventListener("mousemove", handleMouseMove)
@@ -292,8 +389,10 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
     loadWorldData()
 
     return () => {
-      rotationTimer.stop()
+      isTerminated = true
       canvas.removeEventListener("mousedown", handleMouseDown)
+      canvas.removeEventListener("mousemove", handleCanvasMouseMove)
+      canvas.removeEventListener("mouseleave", handleCanvasMouseLeave)
     }
   }, [width, height])
 

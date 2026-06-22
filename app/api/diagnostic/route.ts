@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const report: any = {
+    anyapi: { status: 'disabled', detail: 'Chave ANYAPI_API_KEY não configurada.' },
     gemini: { status: 'unknown', detail: '' },
     openai: { status: 'disabled', detail: 'Chave OPENAI_API_KEY não configurada.' },
     ors: { status: 'unknown', detail: '' },
@@ -12,6 +13,44 @@ export async function GET() {
     osrm: { status: 'unknown', detail: '' },
     mapbox: { status: 'unknown', detail: '' }
   };
+
+  // 0. Test AnyAPI
+  try {
+    const ANYAPI_KEY = process.env.ANYAPI_API_KEY;
+    if (ANYAPI_KEY) {
+      const baseUrl = process.env.ANYAPI_BASE_URL || "https://api.anyapi.ai/v1";
+      const anyapiUrl = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+      
+      const res = await fetch(anyapiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${ANYAPI_KEY}`
+        },
+        body: JSON.stringify({
+          model: "anthropic/claude-sonnet-4.5",
+          messages: [{ role: "user", content: "Olá" }],
+          max_tokens: 5
+        })
+      });
+      if (res.ok) {
+        report.anyapi.status = 'SUCCESS';
+        report.anyapi.detail = 'AnyAPI (Claude Sonnet 3.5 proxy via OpenAI format) está ativo e operacional!';
+      } else {
+        const errText = await res.text();
+        if (errText.includes("anthropic") || ANYAPI_KEY.startsWith("sk-ant")) {
+           report.anyapi.status = 'FALLBACK_NEEDED';
+           report.anyapi.detail = 'AnyAPI usando o formato Anthropic direto.';
+        } else {
+           report.anyapi.status = 'FAILED';
+           report.anyapi.detail = `Erro AnyAPI (HTTP ${res.status}): ${errText.substring(0, 100)}`;
+        }
+      }
+    }
+  } catch (e: any) {
+    report.anyapi.status = 'ERROR';
+    report.anyapi.detail = e.message || String(e);
+  }
 
   // 1. Test Gemini (The 100% Free AI Engine)
   try {

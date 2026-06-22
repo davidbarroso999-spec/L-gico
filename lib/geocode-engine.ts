@@ -1,3 +1,5 @@
+import { db } from './db';
+
 export interface GeocodeResult {
   lat: number;
   lon: number;
@@ -149,6 +151,34 @@ const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
     name: 'Suframa',
     context: 'Distrito Industrial I, Manaus - AM',
     aliases: ['suframa', 'superintendencia suframa', 'distrito industrial']
+  },
+  {
+    lat: -3.0933,
+    lon: -60.1018,
+    name: 'Orla da Ponta Negra',
+    context: 'Av. Coronel Teixeira, Ponta Negra, Manaus - AM',
+    aliases: ['ponta negra', 'orla da ponta negra', 'calcadao ponta negra', 'coronel teixeira']
+  },
+  {
+    lat: -3.1444,
+    lon: -59.9431,
+    name: 'Porto Fluvial do Ceasa',
+    context: 'Vila Buriti, Distrito Industrial, Manaus - AM',
+    aliases: ['porto do ceasa', 'ceasa', 'porto ceasa', 'balsa ceasa', 'careiro balsa']
+  },
+  {
+    lat: -3.1202,
+    lon: -60.0631,
+    name: 'Ponte Rio Negro (Jornalista Phelippe Daou)',
+    context: 'Compensa / Iranduba, AM',
+    aliases: ['ponte rio negro', 'ponte de iranduba', 'ponte phelippe daou', 'ponte da compensa']
+  },
+  {
+    lat: -3.0855,
+    lon: -60.0125,
+    name: 'Parque Dez de Novembro',
+    context: 'Manaus, AM, Brasil',
+    aliases: ['parque dez', 'parque 10', 'bairro parque dez', 'parque dez de novembro', 'eldorado']
   }
 ];
 
@@ -206,6 +236,19 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     return geoCache.get(normalizedText)!;
   }
 
+  // 2.5 Check Persistent IndexedDB Cache
+  try {
+    const cachedEntry = await db.cache.get(`geo-${normalizedText}`);
+    if (cachedEntry && cachedEntry.data) {
+      console.log(`[Geocode Cache] Hit persistent cache for: "${normalizedText}"`);
+      // Update in-memory cache
+      geoCache.set(normalizedText, cachedEntry.data);
+      return cachedEntry.data;
+    }
+  } catch (err) {
+    console.warn("Persistent geo cache lookup failed:", err);
+  }
+
   try {
     let lat = proximity?.lat;
     let lon = proximity?.lon;
@@ -228,7 +271,26 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     
     let composedQuery = text;
     if (!text.toLowerCase().includes('brasil') && !text.toLowerCase().includes('br') && !text.toLowerCase().includes('brazil')) {
-      composedQuery = `${text}, Brasil`;
+      const queryLower = text.toLowerCase();
+      const hasSpecificLocation = queryLower.includes('manaus') || 
+                                  queryLower.includes('itacoatiara') || 
+                                  queryLower.includes('manacapuru') || 
+                                  queryLower.includes('iranduba') || 
+                                  queryLower.includes('careiro') || 
+                                  queryLower.includes('rio preto') || 
+                                  queryLower.includes('presidente figueiredo') ||
+                                  queryLower.includes('rio de janeiro') ||
+                                  queryLower.includes('sao paulo') ||
+                                  queryLower.includes('amazonas') ||
+                                  queryLower.includes('am -') ||
+                                  queryLower.includes('am-') ||
+                                  /\b(am|sp|rj|mg|pr|rs|sc|go|df)\b/.test(queryLower);
+      
+      if (!hasSpecificLocation) {
+        composedQuery = `${text}, Manaus, AM, Brasil`;
+      } else {
+        composedQuery = `${text}, Brasil`;
+      }
     }
 
     let viaCepResolved = false;
@@ -765,10 +827,20 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
 
     // Sort by confidenceScore falling
     results.sort((a, b) => b.confidenceScore - a.confidenceScore);
-    const finalResults = results.slice(0, 3);
+    const finalResults = results.slice(0, 8);
     
     if (finalResults.length > 0) {
       geoCache.set(normalizedText, finalResults);
+      // Save to IndexedDB persistent store (cache TTL: 14 days)
+      try {
+        db.cache.put({
+          key: `geo-${normalizedText}`,
+          data: finalResults,
+          ttl: Date.now() + 1000 * 60 * 60 * 24 * 14
+        }).catch(e => console.warn("Dexie put cache failed", e));
+      } catch (err) {
+        console.warn("Persistent geo cache saving failed:", err);
+      }
     }
     
     return finalResults;

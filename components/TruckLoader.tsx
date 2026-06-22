@@ -44,11 +44,11 @@ export default function TruckLoader() {
           position: absolute;
           width: 40px;
           height: 100%;
-          background-color: #00d4aa; /* tech color */
+          background-color: #D1A054; /* tech color */
           right: -50%;
           border-radius: 3px;
           animation: roadAnimation 1s linear infinite;
-          box-shadow: 0 0 10px rgba(0,212,170,0.5);
+          box-shadow: 0 0 10px rgba(209,160,84,0.5);
         }
         .road::after {
           content: "";
@@ -86,9 +86,9 @@ export default function TruckLoader() {
           right: -12px;
           width: 15px;
           height: 15px;
-          background: #00d4aa;
+          background: #D1A054;
           border-radius: 50%;
-          box-shadow: 0 0 20px 8px rgba(0, 212, 170, 0.4);
+          box-shadow: 0 0 20px 8px rgba(209, 160, 84, 0.4);
         }
         @keyframes roadAnimation {
           0% { transform: translateX(0px); }
@@ -101,9 +101,9 @@ export default function TruckLoader() {
           <div className="lampGlow"></div>
         </div>
         <div className="truckBody text-tech">
-          <Truck className="w-24 h-24 fill-slate-900 stroke-tech drop-shadow-[0_0_15px_rgba(0,212,170,0.3)]" strokeWidth={1.5} />
+          <Truck className="w-24 h-24 fill-slate-900 stroke-tech drop-shadow-[0_0_15px_rgba(209, 160, 84,0.3)]" strokeWidth={1.5} />
         </div>
-        <div className="road shadow-[0_0_15px_rgba(0,212,170,0.2)]"></div>
+        <div className="road shadow-[0_0_15px_rgba(209, 160, 84,0.2)]"></div>
       </div>
       <p className="text-tech text-sm tracking-widest uppercase font-black animate-pulse shadow-tech/50 drop-shadow-md">
         Calculando a Rota Mais Eficiente

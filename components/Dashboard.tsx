@@ -25,7 +25,11 @@ import {
 import { db } from '@/lib/db';
 import InfoTooltip from '@/components/InfoTooltip';
 
-export default function KpiDashboard() {
+interface KpiDashboardProps {
+  activeRoute?: any;
+}
+
+export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   const [completedRoutes, setCompletedRoutes] = useState<any[]>([]);
   const [localOccurrencesCount, setLocalOccurrencesCount] = useState(0);
 
@@ -185,10 +189,12 @@ export default function KpiDashboard() {
     document.body.removeChild(link);
   };
 
-  // Core Math Simplified:
-  // Let's use 128 km as the base mock distance plus any real route distances if they were processed
-  const basicTotalPlannedKm = completedRoutes.reduce((acc, route) => acc + (route.totalDistanceKm || 15.4), 124.8);
-  const roundedKm = Math.round(basicTotalPlannedKm * 10) / 10;
+  // Core Math - Using activeRoute summary distance if active, or base completed routes + fallback
+  const activeRouteDistance = (activeRoute && activeRoute.summary?.distance)
+    ? (activeRoute.summary.distance / 1000)
+    : completedRoutes.reduce((acc, route) => acc + (route.totalDistanceKm || 15.4), 124.8);
+
+  const roundedKm = Math.round(activeRouteDistance * 10) / 10;
 
   // Crucial Simplified Business Math:
   // Fuel consumed in liters = overall km / (how many km the car makes with 1 Liter)
@@ -395,7 +401,7 @@ export default function KpiDashboard() {
 
           <div className="mt-6 pt-4 border-t border-white/5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-550">
             <span className="flex items-center gap-1.5 text-[11px] bg-slate-900 px-3 py-1.5 rounded-lg border border-white/5">
-              💡 Qualquer mudança acima atualiza o gráfico e as previsões de custos abaixo em tempo real!
+              💡 Diferente de sistemas complexos, as atualizações financeiras acima ocorrem em tempo real!
             </span>
           </div>
         </div>
