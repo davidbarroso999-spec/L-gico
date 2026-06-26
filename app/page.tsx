@@ -53,6 +53,7 @@ import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
+import { seedHistoryIfEmpty } from '@/lib/history-analyzer';
 import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
 import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
@@ -190,7 +191,8 @@ export default function VoieExpressApp() {
     vehicle: 'van',
     avoidDirt: true,
     avoidFloods: true,
-    avoidHills: false
+    avoidHills: false,
+    engine: 'google'
   });
   const [aiCustomPrompt, setAiCustomPrompt] = useState<string>('');
 
@@ -338,6 +340,7 @@ export default function VoieExpressApp() {
   }, []);
 
   useEffect(() => {
+    seedHistoryIfEmpty();
     fetch('/api/diagnostic').then(r => r.json()).then(data => {
       setDiagnostic(data);
       const failedKeys = [];
@@ -1285,67 +1288,6 @@ export default function VoieExpressApp() {
                     </div>
                   </div>
 
-                  {/* Bento Box 3: Land & Soil constraints options (The Avoid parameters) */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
-                      <Shield className="w-4 h-4 shrink-0" />
-                      <span>
-                        Restrições de Via
-                        <InfoTooltip text="Peça para evitar rodovias, pedágios ou balsas para rotas com restrições orçamentárias ou de tipo de veículo." />
-                      </span>
-                    </h3>
-                    <div className="flex flex-col gap-2.5">
-                      {[
-                        { 
-                          id: 'avoidDirt', 
-                          icon: Leaf, 
-                          label: 'Evitar Não Pavimentado', 
-                          desc: 'Desvia de estradas de terra e vias sem asfalto' 
-                        },
-                        { 
-                          id: 'avoidFloods', 
-                          icon: Droplets, 
-                          label: 'Evitar Zonas de Alagamento', 
-                          desc: 'Evita áreas com histórico ou alerta de inundação' 
-                        },
-                        { 
-                          id: 'avoidHills', 
-                          icon: BarChart4, 
-                          label: 'Evitar Trechos com Declive', 
-                          desc: 'Contorna ruas com inclinações severas/morros' 
-                        },
-                      ].map((item) => {
-                        const active = (options as any)[item.id];
-                        return (
-                          <button
-                            key={item.id}
-                            onClick={() => setOptions({ ...options, [item.id]: !active })}
-                            className={`flex items-center gap-3.5 p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                              active
-                                ? 'bg-amber-500/10 border-amber-500/50 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.05)]'
-                                : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-400 hover:border-slate-800'
-                            }`}
-                          >
-                            <div className={`p-2 rounded-xl shrink-0 ${active ? 'bg-amber-500/10' : 'bg-slate-900'}`}>
-                              <item.icon className="w-4 h-4" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className={`text-xs font-bold leading-tight ${active ? 'text-amber-500 font-black' : 'text-slate-300'}`}>
-                                {item.label}
-                              </p>
-                              <p className="text-[10px] text-slate-500 truncate mt-0.5">{item.desc}</p>
-                            </div>
-                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                              active ? 'border-amber-500 bg-amber-500' : 'border-slate-800 bg-slate-950'
-                            }`}>
-                              {active && <span className="text-[9px] text-slate-950 font-black">✓</span>}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
                   {/* Bento Box 4: AI Custom Prompts */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
                     <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
@@ -1434,7 +1376,7 @@ export default function VoieExpressApp() {
               className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} />
+                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
               </div>
               <div 
                 className={`${
@@ -1471,6 +1413,7 @@ export default function VoieExpressApp() {
                     summary={routeResult.summary}
                     score={routeResult.score}
                     aiAnalysis={routeResult.aiAnalysis}
+                    hybridAnalysis={routeResult.hybridAnalysis}
                     onNavigate={() => setCurrentScreen('navigation')}
                     isLoading={false}
                     isSimulating={isSimulating}
@@ -1497,7 +1440,7 @@ export default function VoieExpressApp() {
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
-                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} />
+                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
                  
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
@@ -2274,7 +2217,8 @@ export default function VoieExpressApp() {
                     vehicle: 'truck',
                     avoidDirt: true,
                     avoidFloods: true,
-                    avoidHills: false
+                    avoidHills: false,
+                    engine: 'google'
                   });
                   setAiCustomPrompt('Evitar asfalto submerso próximo ao porto devido ao período de cheias fluviais amazônicas.');
                 }}

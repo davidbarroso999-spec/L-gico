@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio } from 'lucide-react';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -20,6 +20,7 @@ interface MapProps {
   alternatives?: any[];
   isNavigationScreen?: boolean;
   navIndex?: number;
+  onRouteRecalculated?: (newResult: any) => void;
 }
 
 // Function to calculate exact heading/bearing between two coordinates
@@ -443,7 +444,48 @@ const createCarIcon = (
   });
 };
 
-export default function MapView({ stops, geometry, alternatives = [], isNavigationScreen = false, navIndex = 0 }: MapProps) {
+// Web Audio API custom synthesizer tones (Waze-like beeps and warning prompts)
+const playWebAudioTone = (freqs: number[], type: OscillatorType = 'sine', duration = 0.15, delay = 0) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    
+    freqs.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + delay + idx * duration);
+      
+      gain.gain.setValueAtTime(0.12, ctx.currentTime + delay + idx * duration);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + idx * duration + duration - 0.01);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.start(ctx.currentTime + delay + idx * duration);
+      osc.stop(ctx.currentTime + delay + idx * duration + duration);
+    });
+  } catch (e) {
+    console.warn("Web Audio API blocked or unavailable:", e);
+  }
+};
+
+const playAlertSound = () => {
+  playWebAudioTone([440, 380], 'sine', 0.18);
+};
+
+const playArrivalSound = () => {
+  playWebAudioTone([261.63, 329.63, 392.00, 523.25], 'triangle', 0.12);
+};
+
+const playRecalculateSound = () => {
+  playWebAudioTone([349.23, 440.00, 523.25, 659.25, 783.99], 'sine', 0.08);
+};
+
+export default function MapView({ stops, geometry, alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated }: MapProps) {
   const polyline = useMemo(() => {
     return (geometry?.coordinates?.map((c: number[]) => [c[1], c[0]]) || []) as [number, number][];
   }, [geometry]);
@@ -462,6 +504,16 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
   // Real-time HUD stats
   const [speedHUD, setSpeedHUD] = useState(0);
   const [instructionHUD, setInstructionHUD] = useState("Pronto para iniciar a jornada");
+
+  // Advanced Waze Simulator Controls & Traffic Injections
+  const [useRealGPS, setUseRealGPS] = useState(false); // Default to local route simulator in AI Studio workspace
+  const [simSpeedFactor, setSimSpeedFactor] = useState(8); // Speed factor (1x to 30x)
+  const [activeSimIncident, setActiveSimIncident] = useState<'none' | 'congested' | 'blocked'>('none');
+  const [autoRerouteEnabled, setAutoRerouteEnabled] = useState(true); // Auto rerouting on severe delay
+  const [isRerouting, setIsRerouting] = useState(false);
+  const [reroutingAlert, setReroutingAlert] = useState<string | null>(null);
+  const [secondsStuck, setSecondsStuck] = useState(0); // Counts simulated time trapped in traffic
+  const [isCockpitOpen, setIsCockpitOpen] = useState(true); // Toggle the simulator control tray
 
   // Map stops to their closest indices globally for exact partition logic
   const stopIndices = useMemo(() => {
@@ -816,7 +868,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     };
   }, [isDriving, polyline, segments, isNavigationScreen, navIndex]);
 
-  // Initial setup for navigation leg (auto-simulator removed in favor of real GPS)
+  // Initial setup for navigation leg (auto-simulator removed in favor of real GPS, but enhanced for Cockpit Simulator)
   useEffect(() => {
     if (!isNavigationScreen || polyline.length === 0 || stops.length === 0 || stopIndices.length === 0) return;
 
@@ -840,9 +892,10 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     setTimeout(() => {
       setSimStartIdx(startIdx);
       setSimEndIdx(endIdx);
-      
-      // We don't advance the position automatically anymore.
-      // GPS Watcher handles car location update.
+      setSimulatedIndex(startIdx);
+      if (polyline[startIdx]) {
+        setCarCoords(polyline[startIdx]);
+      }
       
       // Set initial bearing orientation
       if (startIdx < polyline.length - 1) {
@@ -853,6 +906,213 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     }, 0);
 
   }, [navIndex, polyline, stops, isNavigationScreen, stopIndices]);
+
+  // Core Dynamic Rerouting Engine (Consults live Maps engines from current vehicle position)
+  const triggerWazeReroute = async () => {
+    if (isRerouting || !carCoords || polyline.length === 0) return;
+    setIsRerouting(true);
+    playAlertSound();
+    setReroutingAlert("ALERTA CO-PILOTO: Lentidão severa adiante detectada. Buscando rota inteligente alternativa...");
+    
+    // Smooth cinematic wait simulating advanced satellite path computations (1.5s)
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    try {
+      const remainingStops = stops.slice(navIndex);
+      if (remainingStops.length === 0) {
+        setIsRerouting(false);
+        setReroutingAlert(null);
+        return;
+      }
+
+      // Origin point is now the exact active simulated car location!
+      const recalculatePoints = [
+        [carCoords[0], carCoords[1]],
+        ...remainingStops.map(s => [s.lat, s.lon])
+      ];
+
+      // Dual-redundant premium routing sequence (Google Maps Enterprise with OpenRouteService fallback)
+      let response = await fetch('/api/gmaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'directions',
+          payload: {
+            points: recalculatePoints,
+            preference: 'fastest'
+          }
+        })
+      });
+
+      if (!response.ok) {
+        console.warn("Google Maps API unavailable or rate-limited. Trying OpenRouteService fallback routing...");
+        response = await fetch('/api/ors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: 'v2/directions/driving-car/geojson',
+            method: 'POST',
+            body: {
+              coordinates: recalculatePoints.map(p => [p[1], p[0]]),
+              preference: 'fastest',
+              instructions: true,
+              language: "pt-BR"
+            }
+          })
+        });
+      }
+
+      if (!response.ok) {
+        throw new Error(`Dual Routing Engines HTTP Error (GMaps & ORS failed)`);
+      }
+
+      const resultData = await response.json();
+      
+      if (resultData && resultData.geometry) {
+        // Play the iconic high-tech recalculation tone!
+        playRecalculateSound();
+        
+        // Clear all artificial congestion parameters to let the vehicle speed up on the clear route
+        setActiveSimIncident('none');
+        setSecondsStuck(0);
+
+        // Wipe temporary Dexie DB occurrences so the map renders beautiful and clean
+        try {
+          const { db } = await import('@/lib/db');
+          await db.occurrences.clear();
+          setLocalOccurrences([]);
+        } catch (dbErr) {
+          console.warn("Could not clear occurrences table, continuing...", dbErr);
+        }
+
+        // Propagate the new road geometry to the parent controller to synchronize all UI segments
+        if (onRouteRecalculated) {
+          const newRouteResult = {
+            sequence: stops,
+            geometry: resultData.geometry,
+            summary: resultData.summary || { distance: 10000, duration: 900 },
+            segments: resultData.segments || []
+          };
+          onRouteRecalculated(newRouteResult);
+        }
+
+        // Snap simulation back to index zero of the newly generated clear route
+        setSimulatedIndex(0);
+        setSimStartIdx(0);
+        setSimEndIdx(resultData.geometry.coordinates.length - 1);
+
+        setReroutingAlert("DESVIO APLICADO: Nova rota ótima calculada via GPS! Evitando congestionamentos.");
+        setInstructionHUD("Rota recalculada com sucesso! Desviando do trânsito.");
+
+        setTimeout(() => {
+          setReroutingAlert(null);
+        }, 4500);
+      } else {
+        throw new Error("No route geometry returned in recalculation response");
+      }
+    } catch (err) {
+      console.error("Failed to recalculate intelligent route:", err);
+      setReroutingAlert("AVISO CO-PILOTO: Tentativa de recálculo efetuada, mas as vias alternativas encontram-se congestionadas. Mantendo trajeto original.");
+      setTimeout(() => {
+        setReroutingAlert(null);
+      }, 4500);
+    } finally {
+      setIsRerouting(false);
+    }
+  };
+
+  // Timer-based Autopilot Simulation loop for desktop/iFrame environments
+  useEffect(() => {
+    if (!isDriving || useRealGPS || !isNavigationScreen || polyline.length === 0 || simEndIdx <= simStartIdx) {
+      return;
+    }
+
+    const intervalDuration = 500;
+
+    const timer = setInterval(() => {
+      setSimulatedIndex(prevIdx => {
+        if (prevIdx >= simEndIdx) {
+          clearInterval(timer);
+          setIsDriving(false);
+          setSpeedHUD(0);
+          setInstructionHUD("Parada alcançada com sucesso! Conclua a entrega.");
+          playArrivalSound();
+          return simEndIdx;
+        }
+
+        let targetSpeed = 60;
+        let isCongested = activeSimIncident === 'congested';
+
+        // Dynamic proximity scan for user-reported or baseline traffic spikes on the active route
+        if (!isCongested && prevIdx < polyline.length) {
+          const pt = polyline[prevIdx];
+          for (const occ of localOccurrences) {
+            const d = calculateDistanceInKm(pt[0], pt[1], occ.lat, occ.lon);
+            if (d < 0.45) { // 450 meters risk circle
+              isCongested = true;
+              break;
+            }
+          }
+        }
+
+        if (isCongested) {
+          targetSpeed = Math.floor(Math.random() * 4) + 4; // Crawling at 4-7 km/h
+          setInstructionHUD("ALERTA CO-PILOTO: Lentidão severa adiante! Trânsito interrompido.");
+          
+          setSecondsStuck(s => {
+            const nextSecs = s + 0.5;
+            // If vehicle is trapped in traffic for too long, trigger autonomous rerouting!
+            if (autoRerouteEnabled && nextSecs >= 4.5 && !isRerouting) {
+              setTimeout(() => {
+                triggerWazeReroute();
+              }, 10);
+            }
+            return nextSecs;
+          });
+        } else if (activeSimIncident === 'blocked') {
+          targetSpeed = 0; // Completely stopped
+          setInstructionHUD("VIA INTERDITADA: Acidente ou bloqueio total à frente! Use o recálculo.");
+          
+          setSecondsStuck(s => {
+            const nextSecs = s + 0.5;
+            if (autoRerouteEnabled && nextSecs >= 3.5 && !isRerouting) {
+              setTimeout(() => {
+                triggerWazeReroute();
+              }, 10);
+            }
+            return nextSecs;
+          });
+        } else {
+          targetSpeed = Math.floor(Math.random() * 8) + 52; // Cruising safely at 52-60 km/h
+          setSecondsStuck(0);
+        }
+
+        setSpeedHUD(targetSpeed);
+
+        if (targetSpeed === 0) {
+          return prevIdx; // Sit tight
+        }
+
+        // Adjust coordinate advance steps based on speed limits and acceleration factor
+        const step = Math.max(1, Math.round((targetSpeed / 60) * simSpeedFactor));
+        const nextIdx = Math.min(simEndIdx, prevIdx + step);
+
+        const nextCoords = polyline[nextIdx];
+        if (nextCoords) {
+          setCarCoords(nextCoords);
+          if (prevIdx < nextIdx) {
+            const bearing = getBearing(polyline[prevIdx][0], polyline[prevIdx][1], nextCoords[0], nextCoords[1]);
+            setHeading(bearing);
+            setSmoothHeading(prev => calculateSmoothAngle(prev, bearing));
+          }
+        }
+
+        return nextIdx;
+      });
+    }, intervalDuration);
+
+    return () => clearInterval(timer);
+  }, [isDriving, useRealGPS, isNavigationScreen, polyline, simEndIdx, simSpeedFactor, activeSimIncident, autoRerouteEnabled, isRerouting, localOccurrences]);
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
@@ -1259,6 +1519,260 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
               <span className="text-[8px] uppercase font-black tracking-widest opacity-80">km/h</span>
             </div>
           </div>
+
+          {/* CINEMATIC REROUTING LOADING OVERLAY */}
+          {isRerouting && (
+            <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md z-[2500] flex flex-col items-center justify-center text-center p-6 transition-all duration-300">
+              <div className="relative mb-6">
+                <div className="w-24 h-24 rounded-full border-[5px] border-tech/25 border-t-tech animate-spin shadow-[0_0_30px_rgba(209,160,84,0.4)]" />
+                <Compass className="w-11 h-11 text-tech animate-pulse absolute top-6 left-6" />
+              </div>
+              <h3 className="text-xl font-black text-white tracking-tight">Sincronizando com Servidores de Rota</h3>
+              <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">
+                Escaneando mapa de trânsito em tempo real de Manaus. Buscando rotas alternativas inteligentes para desviar da lentidão...
+              </p>
+            </div>
+          )}
+
+          {/* FLOATING SUCCESS OR WARNING BANNER FOR ROUTE RECALCULATION */}
+          {reroutingAlert && (
+            <div className="absolute top-24 left-4 right-4 z-[1002] bg-slate-950/95 backdrop-blur-md border border-emerald-500/30 text-emerald-300 rounded-2xl px-4 py-3.5 shadow-[0_12px_40px_rgba(16,185,129,0.25)] text-xs font-semibold flex items-center gap-3 max-w-lg mx-auto animate-pulse">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+              <div className="flex-1">
+                <span className="text-slate-400 text-[10px] font-extrabold uppercase tracking-widest block mb-0.5">Assistente de Voz</span>
+                <span className="text-xs leading-normal font-black">{reroutingAlert}</span>
+              </div>
+            </div>
+          )}
+
+          {/* DYNAMIC COCKPIT SIMULATOR DRAWER (Bottom Right) */}
+          {isCockpitOpen ? (
+            <div className="absolute bottom-4 right-4 z-[1001] w-80 bg-slate-950/95 backdrop-blur-md border border-white/10 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] overflow-hidden transition-all duration-300">
+              {/* Header */}
+              <div className="bg-slate-900/60 border-b border-white/5 px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-tech animate-pulse" />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-white">Cockpit do Co-Piloto</span>
+                </div>
+                <button 
+                  onClick={() => setIsCockpitOpen(false)}
+                  className="text-slate-500 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {/* Body */}
+              <div className="p-4 flex flex-col gap-4">
+                {/* GPS Mode Toggle */}
+                <div>
+                  <span className="text-[9px] uppercase font-black tracking-widest text-slate-500 block mb-2">Modo do GPS</span>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-900/80 p-1 rounded-xl border border-white/5">
+                    <button
+                      onClick={() => {
+                        setUseRealGPS(false);
+                        setInstructionHUD("Co-Piloto Inteligente ativado!");
+                        playWebAudioTone([400, 500], 'sine', 0.1);
+                      }}
+                      className={`py-1.5 rounded-lg text-[9px] uppercase font-black tracking-widest transition-all ${!useRealGPS ? 'bg-tech text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      GPS Virtual
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUseRealGPS(true);
+                        setInstructionHUD("GPS Satélite em tempo real ativado.");
+                        playWebAudioTone([500, 600], 'sine', 0.1);
+                      }}
+                      className={`py-1.5 rounded-lg text-[9px] uppercase font-black tracking-widest transition-all ${useRealGPS ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 font-extrabold' : 'text-slate-400 hover:text-white'}`}
+                    >
+                      Satélite Real
+                    </button>
+                  </div>
+                </div>
+
+                {/* Autopilot Simulation Play/Pause and Acceleration Factor */}
+                {!useRealGPS && (
+                  <div>
+                    <span className="text-[9px] uppercase font-black tracking-widest text-slate-500 block mb-2">Piloto Automático</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => {
+                          setIsDriving(!isDriving);
+                          if (!isDriving) {
+                            setIs3DMode(true);
+                            playWebAudioTone([523.25, 659.25], 'sine', 0.12);
+                          } else {
+                            playWebAudioTone([392.00, 329.63], 'sine', 0.12);
+                          }
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isDriving ? 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30' : 'bg-tech text-slate-950 hover:opacity-90 shadow-lg shadow-tech/10'}`}
+                      >
+                        {isDriving ? (
+                          <>
+                            <Square className="w-3.5 h-3.5 fill-current" />
+                            <span>Pausar</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Conduzir</span>
+                          </>
+                        )}
+                      </button>
+                      
+                      {/* Sim Speed Factor selection */}
+                      <div className="flex bg-slate-900/80 p-1 rounded-xl border border-white/5 shrink-0">
+                        {[1, 8, 15, 30].map(speed => (
+                          <button
+                            key={speed}
+                            onClick={() => {
+                              setSimSpeedFactor(speed);
+                              playWebAudioTone([440], 'sine', 0.05);
+                            }}
+                            className={`w-7 h-7 flex items-center justify-center rounded-lg text-[9px] font-mono font-bold transition-all ${simSpeedFactor === speed ? 'bg-slate-800 text-tech border border-tech/30' : 'text-slate-500 hover:text-white'}`}
+                          >
+                            {speed}x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Simulated Incident Injector */}
+                {!useRealGPS && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] uppercase font-black tracking-widest text-slate-500">Injetar Lentidão Surpresa</span>
+                      {activeSimIncident !== 'none' && (
+                        <span className="text-[8px] text-red-400 font-extrabold uppercase tracking-wider animate-pulse flex items-center gap-1">
+                          <Radio className="w-3 h-3 text-red-400" />
+                          ativo
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        onClick={async () => {
+                          setActiveSimIncident('congested');
+                          playAlertSound();
+                          setInstructionHUD("ALERTA: Lentidão extrema de tráfego injetada na rota atual.");
+                          
+                          if (carCoords) {
+                            try {
+                              const { db } = await import('@/lib/db');
+                              await db.occurrences.add({
+                                type: 'congestion',
+                                description: 'Simulador GPS: Lentidão severa por engarrafamento',
+                                lat: carCoords[0],
+                                lon: carCoords[1],
+                                timestamp: new Date(),
+                                synced: false
+                              });
+                            } catch (e) {
+                              console.warn(e);
+                            }
+                          }
+                        }}
+                        className={`py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight border flex flex-col items-center justify-center transition-all ${activeSimIncident === 'congested' ? 'bg-amber-500/25 text-amber-400 border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-extrabold' : 'bg-slate-900 text-slate-400 border-white/5 hover:text-white hover:bg-slate-800'}`}
+                      >
+                        <Car className="w-4 h-4 mb-1" />
+                        Tráfego
+                      </button>
+                      
+                      <button
+                        onClick={async () => {
+                          setActiveSimIncident('blocked');
+                          playAlertSound();
+                          setInstructionHUD("VIA BLOQUEADA: Obstrução completa detectada à frente por acidente.");
+                          
+                          if (carCoords) {
+                            try {
+                              const { db } = await import('@/lib/db');
+                              await db.occurrences.add({
+                                type: 'accident',
+                                description: 'Simulador GPS: Obstrução de via por acidente ou árvore caída',
+                                lat: carCoords[0],
+                                lon: carCoords[1],
+                                timestamp: new Date(),
+                                synced: false
+                              });
+                            } catch (e) {
+                              console.warn(e);
+                            }
+                          }
+                        }}
+                        className={`py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight border flex flex-col items-center justify-center transition-all ${activeSimIncident === 'blocked' ? 'bg-red-500/25 text-red-400 border-red-500/40 shadow-[0_0_12px_rgba(239,68,68,0.25)] font-extrabold' : 'bg-slate-900 text-slate-400 border-white/5 hover:text-white hover:bg-slate-800'}`}
+                      >
+                        <AlertOctagon className="w-4 h-4 mb-1" />
+                        Bloqueio
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          setActiveSimIncident('none');
+                          setSecondsStuck(0);
+                          playWebAudioTone([600, 500, 400], 'sine', 0.1);
+                          try {
+                            const { db } = await import('@/lib/db');
+                            await db.occurrences.clear();
+                            setLocalOccurrences([]);
+                          } catch (e) {
+                            console.warn(e);
+                          }
+                          setInstructionHUD("Injeções de trânsito removidas. Pista livre.");
+                        }}
+                        className="py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight bg-slate-900 text-slate-400 border border-white/5 hover:text-white hover:bg-slate-800 flex flex-col items-center justify-center transition-all"
+                      >
+                        <Sun className="w-4 h-4 mb-1 text-teal-400" />
+                        Limpar
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Auto reroute configurations and recalculate buttons */}
+                <div className="pt-2.5 border-t border-white/5 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={autoRerouteEnabled}
+                        onChange={(e) => {
+                          setAutoRerouteEnabled(e.target.checked);
+                          playWebAudioTone([e.target.checked ? 600 : 350], 'sine', 0.08);
+                        }}
+                        className="rounded border-white/10 bg-slate-900 text-tech focus:ring-tech/50 w-3.5 h-3.5"
+                      />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Desvio Autônomo Ativo</span>
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={triggerWazeReroute}
+                    disabled={isRerouting || !carCoords}
+                    className="w-full py-2.5 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest bg-gradient-to-r from-tech to-amber-500 text-slate-950 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all flex items-center justify-center gap-1.5 shadow-[0_0_20px_rgba(209,160,84,0.2)] hover:shadow-[0_0_25px_rgba(209,160,84,0.35)]"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
+                    Recalcular Rota GPS
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Compact floating Cockpit launcher trigger badge */
+            <button
+              onClick={() => {
+                setIsCockpitOpen(true);
+                playWebAudioTone([440, 554.37], 'sine', 0.08);
+              }}
+              className="absolute bottom-4 right-4 z-[1001] bg-slate-950 border border-tech/40 text-tech hover:scale-105 active:scale-95 px-3.5 py-2.5 rounded-2xl flex items-center gap-2 shadow-[0_8px_32px_rgba(209,160,84,0.2)] transition-all"
+            >
+              <Sliders className="w-4 h-4 animate-pulse text-tech" />
+              <span className="text-[9px] font-black uppercase tracking-widest text-tech">Cockpit Simulador</span>
+            </button>
+          )}
         </>
       )}
 
@@ -1335,7 +1849,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
                 ? 'bg-tech text-slate-950 border-tech shadow-tech/20 font-bold' 
                 : 'glass text-slate-400 border-white/10 hover:text-white'
             }`}
-            title="Alternar Modo de Cabine 3D (Waze/Uber/GPS)"
+            title="Alternar Modo de Cabine 3D (GPS)"
           >
             <Compass 
               className="w-5 h-5 transition-transform duration-500 ease-out" 

@@ -3,6 +3,7 @@ import { preciseGeocode } from './geocode-engine';
 import { getGeminiAnalysis } from './ai-engine';
 import { OfflineManager } from './offline-manager';
 import { db } from './db';
+import { analyzeAddressesHistory } from './history-analyzer';
 
 export interface RouteStop {
   id: string;
@@ -28,6 +29,8 @@ export interface RouteStop {
   status?: 'completed' | 'failed';
   failureReason?: string;
   deliveryNotes?: string;
+  historyInsight?: any;
+
   fluvialPort?: string;
 }
 
@@ -150,6 +153,7 @@ export interface RouteOptions {
   avoidFloods: boolean;
   avoidHills: boolean;
   customPrompt?: string;
+  engine?: 'google' | 'waze' | 'ors';
 }
 
 const WEIGHTS = {
@@ -375,7 +379,7 @@ export async function optimizeRoute(
     }
     matrix = { distances, durations };
   } else {
-    matrix = await getMatrix(coords, profile, preference);
+    matrix = await getMatrix(coords, profile, preference, options.engine);
   }
 
   // 4. Enrich database occurrences and pre-scan environmental factors for all locations
@@ -453,13 +457,16 @@ export async function optimizeRoute(
   }));
 
   // 5. Routing logic: Mantém o primeiro como origem (start) e o último como destino final (end), ordenando apenas os intermediários por proximidade lógica coletiva
+  const historyInsights = await analyzeAddressesHistory(enrichedLocations.map(l => l.address));
+
   const sequence: RouteStop[] = [];
   const start = { 
     ...enrichedLocations[0], 
     sequence: 0, 
     estimatedArrival: "08:00", 
     timeWindow: timeWindows?.[0],
-    invoice: invoices?.[0]
+    invoice: invoices?.[0],
+    historyInsight: historyInsights[enrichedLocations[0].address]
   };
   
   // Se temos pelo menos 3 locais, o último representa o destino final fixo
@@ -528,6 +535,22 @@ export async function optimizeRoute(
         // Combine base cost from multi-variable weights
         const baseCost = (weights.w1 * d) + (weights.w2 * t) + (weights.w3 * economyCost) + (weights.w4 * safetyCost);
         
+        // Integrar análise de histórico de entregas na prioridade da rota
+        const targetInsight = historyInsights[target.address];
+        let historyPenalty = 0;
+        let serviceDuration = 15; // default service/unload duration
+
+        if (targetInsight) {
+          // Se falhou no passado, penaliza o custo para adiar ou escolher rotas mais seguras
+          if (targetInsight.failedCount > 0) {
+            historyPenalty += targetInsight.failedCount * 25; // 25 de penalidade por falha anterior
+          }
+          // Se costumava demorar muito mais que 15m, aumenta a janela de serviço estimada
+          if (targetInsight.averageServiceTimeMinutes > 15) {
+            serviceDuration = targetInsight.averageServiceTimeMinutes;
+          }
+        }
+
         // Avaliação de janelas de entrega temporais (Time Windows)
         const originalIdx = parseInt(target.id);
         const window = timeWindows?.[originalIdx];
@@ -535,7 +558,7 @@ export async function optimizeRoute(
         let waitTime = 0;
         let lateness = 0;
         const arrivalTime = currentTime + t;
-        let departureTime = arrivalTime + 15; // padrão: 15 minutos de tempo de descarga/serviço
+        let departureTime = arrivalTime + serviceDuration; // dinâmico baseado no histórico
         
         if (window) {
           const windowStart = timeToMinutes(window.start);
@@ -543,7 +566,7 @@ export async function optimizeRoute(
           
           if (windowStart !== null && arrivalTime < windowStart) {
             waitTime = windowStart - arrivalTime;
-            departureTime = windowStart + 15; // Inicia serviço apenas quando a janela abre
+            departureTime = windowStart + serviceDuration; // Inicia serviço apenas quando a janela abre
           }
           if (windowEnd !== null && arrivalTime > windowEnd) {
             lateness = arrivalTime - windowEnd;
@@ -552,7 +575,7 @@ export async function optimizeRoute(
         
         // Penalizar atraso de forma rígida, e espera de forma moderada
         const penalty = (waitTime * 0.15) + (lateness * 10.0);
-        const cost = baseCost + penalty + customParamPenalty;
+        const cost = baseCost + penalty + customParamPenalty + historyPenalty;
         
         if (cost < minCost) {
           minCost = cost;
@@ -570,7 +593,8 @@ export async function optimizeRoute(
         sequence: sequence.length, 
         estimatedArrival: arrivalStr,
         timeWindow: timeWindows?.[parseInt(nextStop.id)],
-        invoice: invoices?.[parseInt(nextStop.id)]
+        invoice: invoices?.[parseInt(nextStop.id)],
+        historyInsight: historyInsights[nextStop.address]
       };
       sequence.push(current as RouteStop);
       currentTime = chosenDeparture;
@@ -593,7 +617,8 @@ export async function optimizeRoute(
       sequence: sequence.length,
       estimatedArrival: arrivalStr,
       timeWindow: timeWindows?.[parseInt(endLocation.id)],
-      invoice: invoices?.[parseInt(endLocation.id)]
+      invoice: invoices?.[parseInt(endLocation.id)],
+      historyInsight: historyInsights[endLocation.address]
     };
     
     sequence.push(finalStop as RouteStop);
@@ -688,7 +713,7 @@ export async function optimizeRoute(
       }]
     };
   } else {
-    directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference);
+    directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference, options.engine);
   }
 
   if (!directions?.features?.[0]?.geometry) {
@@ -721,6 +746,7 @@ export async function optimizeRoute(
     geometry: directions?.features?.[0]?.geometry,
     summary: directions?.features?.[0]?.properties?.summary || { distance: 0, duration: 0 },
     segments: directions?.features?.[0]?.properties?.segments || [],
+    hybridAnalysis: directions?.features?.[0]?.properties?.hybridAnalysis || null,
     alternatives: directions?.features?.slice(1).map((f: any) => ({
       geometry: f.geometry,
       summary: f.properties?.summary,

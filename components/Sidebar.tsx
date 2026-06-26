@@ -3,15 +3,17 @@
 import React from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
-import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation, Anchor, Sparkles, Shield, Leaf, Zap, ArrowLeft, TrendingUp, ArrowRightLeft, FileText } from 'lucide-react';
+import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation, Anchor, Sparkles, Shield, Leaf, Zap, ArrowLeft, TrendingUp, ArrowRightLeft, FileText, Fuel, Activity, ShoppingBag, DollarSign, Globe, RefreshCw } from 'lucide-react';
 import { RouteStop } from '@/lib/route-engine';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { fetchExternalScoutData } from '@/lib/api-services';
 
 interface SidebarProps {
   stops: RouteStop[];
   summary: { distance: number, duration: number };
   score: number;
   aiAnalysis?: string;
+  hybridAnalysis?: any;
   onNavigate: () => void;
   isLoading: boolean;
   
@@ -31,6 +33,7 @@ export default function Sidebar({
   summary, 
   score, 
   aiAnalysis, 
+  hybridAnalysis,
   onNavigate, 
   isLoading,
   
@@ -44,6 +47,38 @@ export default function Sidebar({
   onApplyRoute
 }: SidebarProps) {
   const isMobile = useIsMobile();
+
+  const [scoutData, setScoutData] = React.useState<any>(null);
+  const [scouting, setScouting] = React.useState<boolean>(false);
+
+  React.useEffect(() => {
+    let isMounted = true;
+    
+    if (stops.length === 0) {
+      setTimeout(() => {
+        if (isMounted) setScoutData(null);
+      }, 0);
+      return;
+    }
+    
+    const loadScout = async () => {
+      setTimeout(() => {
+        if (isMounted) setScouting(true);
+      }, 0);
+      
+      const totalDist = summary.distance / 1000;
+      const label = stops[1]?.address || 'Manaus';
+      const vehicle = stops[0]?.fluvialPort ? 'boat' : 'van';
+      const res = await fetchExternalScoutData(totalDist, 0, vehicle, label);
+      
+      if (isMounted) {
+        setScoutData(res);
+        setScouting(false);
+      }
+    };
+    loadScout();
+    return () => { isMounted = false; };
+  }, [stops, summary.distance]);
 
   const calculateTripMetrics = (route: any) => {
     if (!route || !route.summary) return { distanceKm: 0, durationStr: '0m', fuelLiters: 0, fuelCost: 0, riskPercent: 0, riskLabel: 'Mínimo' };
@@ -795,6 +830,19 @@ export default function Sidebar({
                           </p>
                         </div>
                       )}
+
+                      {/* AI Hybrid Multi-Engine routing analysis */}
+                      {hybridAnalysis && hybridAnalysis.active && (
+                        <div className="p-3 bg-gradient-to-br from-slate-950 to-slate-900 border border-tech/20 rounded-2xl relative overflow-hidden">
+                          <p className="text-[9px] uppercase tracking-widest font-black text-tech mb-1 flex items-center gap-1.5">
+                            <Sparkles className="w-3 h-3 text-tech animate-pulse" />
+                            Motor Híbrido com IA
+                          </p>
+                          <p className="text-[10px] text-slate-300 leading-relaxed line-clamp-2">
+                            {hybridAnalysis.description}
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Mobile action button for mid snapState */}
@@ -847,6 +895,21 @@ export default function Sidebar({
                           </p>
                           <p className="text-[11px] text-slate-300 leading-relaxed italic">
                             &quot;{aiAnalysis}&quot;
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AI Hybrid Multi-Engine routing analysis */}
+                    {hybridAnalysis && hybridAnalysis.active && (
+                      <div className="px-6 pt-2 pb-1 shrink-0">
+                        <div className="p-3.5 bg-gradient-to-br from-slate-950 to-slate-900 border border-tech/25 rounded-2xl relative overflow-hidden">
+                          <p className="text-[9px] uppercase tracking-widest font-black text-tech mb-1.5 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-tech animate-pulse" />
+                            Motor Híbrido com IA Ativo
+                          </p>
+                          <p className="text-[10.5px] text-slate-300 leading-relaxed">
+                            {hybridAnalysis.description}
                           </p>
                         </div>
                       </div>
@@ -1050,6 +1113,30 @@ export default function Sidebar({
           </motion.div>
         )}
 
+        {/* AI Hybrid Multi-Engine routing analysis */}
+        {hybridAnalysis && hybridAnalysis.active && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-3 p-4 bg-gradient-to-br from-slate-950 to-slate-900 border border-tech/25 rounded-2xl relative overflow-hidden group"
+          >
+            <div className="absolute top-0 right-0 p-3 opacity-5">
+              <Zap className="w-8 h-8 text-tech animate-pulse" />
+            </div>
+            <p className="text-[10px] uppercase tracking-widest font-extrabold text-tech mb-2 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-tech animate-bounce" />
+              Fusão Híbrida de IA
+            </p>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+              {hybridAnalysis.description}
+            </p>
+            <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-[9px] text-slate-500 font-mono">
+              <span>Provedor Ativo: <strong className="text-slate-350">{hybridAnalysis.primaryEngine}</strong></span>
+              <span>Google + ORS</span>
+            </div>
+          </motion.div>
+        )}
+
         <div className="flex flex-col gap-2.5 mt-4 md:mt-6">
           <button 
             onClick={onNavigate}
@@ -1085,6 +1172,114 @@ export default function Sidebar({
 
       {/* Stop List */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 custom-scrollbar">
+        {/* Radar de Combustível e Cotações do Scout Externo */}
+        {stops.length > 0 && (
+          <div className="mb-6 p-4.5 rounded-2xl border border-slate-800 bg-slate-900/40 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-3 opacity-10">
+              <Fuel className="w-10 h-10 text-tech" />
+            </div>
+            
+            <div className="flex items-center gap-2 mb-3">
+              <Fuel className="w-5 h-5 text-tech" />
+              <h3 className="text-sm font-black uppercase tracking-wider text-white">Radar de Combustível & Scout</h3>
+            </div>
+
+            {scouting ? (
+              <div className="py-4 flex flex-col items-center justify-center gap-2 text-xs text-slate-400">
+                <RefreshCw className="w-5 h-5 animate-spin text-tech" />
+                <span>Sincronizando cotações externas...</span>
+              </div>
+            ) : scoutData ? (
+              <div className="space-y-3.5">
+                {/* Consumo Calculado */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-950/60 p-3 rounded-xl border border-white/5">
+                    <span className="text-[9px] uppercase font-bold text-slate-500">Consumo Estimado</span>
+                    <p className="text-sm font-black text-white mt-0.5">{scoutData.calculatedConsumption?.liters || 0} L</p>
+                    <span className="text-[9.5px] text-slate-450 font-mono">Méd. {scoutData.baseConsumption}L/100km</span>
+                  </div>
+                  <div className="bg-slate-950/60 p-3 rounded-xl border border-white/5">
+                    <span className="text-[9px] uppercase font-bold text-slate-500">Custo Financeiro</span>
+                    <p className="text-sm font-black text-tech mt-0.5">R$ {scoutData.calculatedConsumption?.cost?.toFixed(2) || '0.00'}</p>
+                    <span className="text-[9.5px] text-slate-450 font-mono">Preço ref: R$ {scoutData.selectedPrice?.toFixed(2)}/L</span>
+                  </div>
+                </div>
+
+                {/* Inteligência de Mercado */}
+                {scoutData.intelligence && (
+                  <div className="text-[11px] leading-relaxed text-slate-300 bg-slate-950/30 p-2.5 rounded-xl border border-dashed border-slate-850">
+                    <span className="font-extrabold text-tech block mb-0.5">💡 INTELIGÊNCIA LOGÍSTICA:</span>
+                    {scoutData.intelligence}
+                  </div>
+                )}
+
+                {/* Tabela de Preços de Combustível no AM */}
+                <div className="bg-slate-950/40 p-2.5 rounded-xl border border-slate-800 text-[10px]">
+                  <span className="font-bold text-slate-400 block mb-1">Média dos Combustíveis (ANP AM):</span>
+                  <div className="grid grid-cols-4 gap-1 text-center font-mono">
+                    <div>
+                      <div className="text-slate-500">Gasolina</div>
+                      <div className="font-bold text-slate-300">R$ {scoutData.fuelPrices?.gasolina?.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Diesel</div>
+                      <div className="font-bold text-slate-300">R$ {scoutData.fuelPrices?.diesel?.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Etanol</div>
+                      <div className="font-bold text-slate-300">R$ {scoutData.fuelPrices?.etanol?.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">GNV</div>
+                      <div className="font-bold text-slate-300">R$ {scoutData.fuelPrices?.gnv?.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Comparativo com Apps de Entrega Externos */}
+                <div className="border-t border-slate-800 pt-3">
+                  <span className="text-[10px] uppercase font-black text-slate-450 block mb-2 tracking-wider flex items-center gap-1.5">
+                    <ShoppingBag className="w-3.5 h-3.5 text-tech" />
+                    Cotações de Apps de Entrega
+                  </span>
+                  
+                  <div className="space-y-2">
+                    {Object.values(scoutData.externalPlatforms || {}).map((plat: any, pIdx: number) => (
+                      <div key={pIdx} className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-850 flex items-center justify-between transition-all hover:bg-slate-950">
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-200 text-xs flex items-center gap-1">
+                            {plat.name}
+                            {!plat.available && (
+                              <span className="text-[8px] bg-red-950 text-red-400 border border-red-900 px-1 py-0.2 rounded font-normal font-sans uppercase">
+                                Indisp.
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-[10px] text-slate-500">{plat.coverage}</span>
+                        </div>
+                        
+                        <div className="text-right">
+                          {plat.available ? (
+                            <>
+                              <span className="font-mono font-black text-xs text-emerald-400">R$ {plat.estimatedCost?.toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-500 block font-mono">≈ {plat.etaMinutes} min</span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-slate-500 font-mono">—</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500 italic py-2">Nenhum dado de combustível disponível.</div>
+            )}
+          </div>
+        )}
+
+
         <AnimatePresence mode="popLayout">
           {stops.map((stop, idx) => (
             <motion.div
@@ -1192,6 +1387,43 @@ export default function Sidebar({
                       <p className="text-[10px] text-slate-450 italic leading-normal font-sans mt-0.5 border-t border-sky-500/10 pt-1">
                         <strong>Histórico:</strong> {stop.amazonasHydrology.historicalContext}
                       </p>
+                    </div>
+                  )}
+
+                  {/* Histórico de Entregas Local Sub-panel */}
+                  {stop.historyInsight && (
+                    <div className="mt-3 py-2.5 px-3.5 rounded-2xl border flex flex-col gap-1.5 bg-slate-950/60 border-tech/20 text-slate-300 text-xs">
+                      <div className="flex items-center justify-between font-bold text-[11px] text-tech border-b border-white/5 pb-1.5 mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <Activity className="w-3.5 h-3.5 text-tech" />
+                          <span>Histórico Operacional</span>
+                        </div>
+                        <div className="font-mono text-[10px] text-slate-400">
+                          {stop.historyInsight.successCount}/{stop.historyInsight.totalDeliveries} Entregues
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        <div>
+                          <span className="text-slate-500 block text-[9.5px]">Tempo de Descarga</span>
+                          <span className="font-semibold text-slate-200">{stop.historyInsight.averageServiceTimeMinutes} min</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[9.5px]">Taxa de Sucesso</span>
+                          <span className={`font-semibold ${stop.historyInsight.failedCount === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {Math.round((stop.historyInsight.successCount / stop.historyInsight.totalDeliveries) * 100)}%
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {stop.historyInsight.notes && stop.historyInsight.notes.length > 0 && (
+                        <div className="text-[10.5px] text-slate-400 italic font-sans leading-normal border-t border-white/5 pt-1 mt-1">
+                          <strong>Última nota:</strong> &quot;{stop.historyInsight.notes[0]}&quot;
+                        </div>
+                      )}
+
+                      <div className="text-[11px] text-slate-300 font-sans leading-normal bg-tech/5 border border-tech/15 rounded-xl p-2 mt-1">
+                        <strong>Recomendação:</strong> {stop.historyInsight.recommendation}
+                      </div>
                     </div>
                   )}
 
