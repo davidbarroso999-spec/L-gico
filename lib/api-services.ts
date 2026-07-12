@@ -328,19 +328,28 @@ export async function snapToRoad(points: [number, number][]): Promise<[number, n
 }
 
 export async function getDirections(points: [number, number][], profile: string = 'driving-car', preference: string = 'fastest', engine?: string) {
+  const orsPreference = (preference === 'shortest' || preference === 'fastest') ? preference : 'fastest';
   // Deduplicate consecutive identical/near-identical coordinates (under ~10 meters)
   const cleanPoints: [number, number][] = [];
   points.forEach(p => {
     if (cleanPoints.length === 0) {
       cleanPoints.push(p);
     } else {
-      const last = cleanPoints[cleanPoints.length - 1];
-      const dist = Math.sqrt(Math.pow(last[0] - p[0], 2) + Math.pow(last[1] - p[1], 2));
+      const prev = cleanPoints[cleanPoints.length - 1];
+      const dist = Math.sqrt(Math.pow(p[0] - prev[0], 2) + Math.pow(p[1] - prev[1], 2));
       if (dist > 0.0001) {
         cleanPoints.push(p);
       }
     }
   });
+
+  if (cleanPoints.length < 2) {
+    return {
+      geometry: { type: 'LineString', coordinates: points.map(p => [p[1], p[0]]) },
+      distance: 0,
+      duration: 0
+    };
+  }
 
   // Ensure we have at least 2 distinct points to compute a valid route, otherwise repeat the point slightly offset
   if (cleanPoints.length < 2 && points.length > 0) {
@@ -380,7 +389,7 @@ export async function getDirections(points: [number, number][], profile: string 
               method: 'POST',
               body: { 
                 coordinates: cleanPoints.map(p => [p[1], p[0]]),
-                preference: preference,
+                preference: orsPreference,
                 instructions: true,
                 language: "pt-BR"
               }
@@ -456,7 +465,7 @@ export async function getDirections(points: [number, number][], profile: string 
           method: 'POST',
           body: { 
             coordinates: cleanPoints.map(p => [p[1], p[0]]),
-            preference: preference,
+            preference: orsPreference,
             instructions: true,
             language: "pt-BR"
           }

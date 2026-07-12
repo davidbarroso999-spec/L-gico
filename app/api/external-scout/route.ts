@@ -33,34 +33,51 @@ export async function POST(req: NextRequest) {
     
     const client = getGeminiClient();
     if (client) {
-      try {
-        // Query Gemini to get actual localized fuel rates or general regional news about delivery systems in Amazonas
-        const response = await client.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: `Atue como um radar de preços logísticos do Amazonas. Retorne um JSON simples com a cotação real ou aproximada recente (em 2026) dos combustíveis em Manaus e uma breve linha de inteligência logística sobre a cobertura da Lalamove e Loggi em Manaus para: ${locationLabel || 'Manaus Centro'}.
-          Formato de saída estrito esperado (não adicione formatação markdown extra, apenas o JSON bruto):
-          {
-            "gasolina": 6.29,
-            "diesel": 6.45,
-            "etanol": 4.89,
-            "gnv": 5.10,
-            "intelligence": "Texto curto aqui sobre o status de tráfego/entregadores em Manaus"
-          }`,
-          config: {
-            responseMimeType: "application/json"
-          }
-        });
+      const modelSequence = [
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash"
+      ];
+      let success = false;
+      let finalError = "";
 
-        if (response.text) {
-          const parsed = JSON.parse(response.text.trim());
-          if (parsed.gasolina) fuelPrices.gasolina = Number(parsed.gasolina);
-          if (parsed.diesel) fuelPrices.diesel = Number(parsed.diesel);
-          if (parsed.etanol) fuelPrices.etanol = Number(parsed.etanol);
-          if (parsed.gnv) fuelPrices.gnv = Number(parsed.gnv);
-          if (parsed.intelligence) scoutingIntelligence = parsed.intelligence;
+      for (const modelName of modelSequence) {
+        try {
+          // Query Gemini to get actual localized fuel rates or general regional news about delivery systems in Amazonas
+          const response = await client.models.generateContent({
+            model: modelName,
+            contents: `Atue como um radar de preços logísticos do Amazonas. Retorne um JSON simples com a cotação real ou aproximada recente (em 2026) dos combustíveis em Manaus e uma breve linha de inteligência logística sobre a cobertura da Lalamove e Loggi em Manaus para: ${locationLabel || 'Manaus Centro'}.
+            Formato de saída estrito esperado (não adicione formatação markdown extra, apenas o JSON bruto):
+            {
+              "gasolina": 6.29,
+              "diesel": 6.45,
+              "etanol": 4.89,
+              "gnv": 5.10,
+              "intelligence": "Texto curto aqui sobre o status de tráfego/entregadores em Manaus"
+            }`,
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+
+          if (response.text) {
+            const parsed = JSON.parse(response.text.trim());
+            if (parsed.gasolina) fuelPrices.gasolina = Number(parsed.gasolina);
+            if (parsed.diesel) fuelPrices.diesel = Number(parsed.diesel);
+            if (parsed.etanol) fuelPrices.etanol = Number(parsed.etanol);
+            if (parsed.gnv) fuelPrices.gnv = Number(parsed.gnv);
+            if (parsed.intelligence) scoutingIntelligence = parsed.intelligence;
+            success = true;
+            break;
+          }
+        } catch (err: any) {
+          finalError = err.message || String(err);
+          console.warn(`[External Scout] Falha no modelo "${modelName}": ${finalError}`);
         }
-      } catch (err) {
-        console.warn("Gemini scout enrichment failed, using local high-fidelity fallback rates:", err);
+      }
+
+      if (!success) {
+        console.warn("Gemini scout enrichment failed on all models, using local high-fidelity fallback rates. Last error:", finalError);
       }
     }
 

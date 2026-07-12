@@ -28,10 +28,54 @@ export interface CacheEntry {
   ttl: number;
 }
 
+export interface OperationalMemory {
+  id?: number;
+  // Core Operational Data
+  date: Date;
+  time: string;
+  driverId: string;
+  vehicleId: string;
+  vehicleType: string;
+  weightKg: number;
+  volumeM3: number;
+  distributionCenter: string;
+  clientName: string;
+
+  // Geography & Location
+  lat: number;
+  lon: number;
+  fullAddress: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+
+  // Performance Metrics
+  predictedTimeMs: number;
+  actualTimeMs: number;
+  predictedDistanceKm: number;
+  actualDistanceKm: number;
+  idleTimeMs: number;
+  averageSpeedKmH: number;
+  estimatedFuelConsumptionLiters: number;
+
+  // Outcome
+  attempts: number;
+  success: boolean;
+  failureReason?: string;
+  occurrencesIds?: number[];
+  
+  // Context
+  weatherConditions?: string;
+  connectionStatus: 'online' | 'offline';
+  synced: boolean;
+  syncTimestamp?: Date;
+}
+
 export class VoieExpressDatabase extends Dexie {
   routes!: Table<Route>;
   occurrences!: Table<Occurrence>;
   cache!: Table<CacheEntry>;
+  operationalMemory!: Table<OperationalMemory>;
 
   constructor() {
     super('VoieExpressDB');
@@ -39,6 +83,11 @@ export class VoieExpressDatabase extends Dexie {
       routes: '++id, date, status',
       occurrences: '++id, type, timestamp, synced',
       cache: 'key'
+    });
+    
+    // v2: Add operationalMemory for ML/AI
+    this.version(2).stores({
+      operationalMemory: '++id, date, driverId, vehicleType, neighborhood, city, success, synced'
     });
   }
 }

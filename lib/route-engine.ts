@@ -17,7 +17,7 @@ export interface RouteStop {
   riskScore: number;
   estimatedArrival?: string;
   timeWindow?: { start: string; end: string };
-  invoice?: { key?: string; pdfUrl?: string; isImage?: boolean };
+  invoice?: { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any };
   activeOccurrences?: any[];
   amazonasHydrology?: {
     season: 'cheia' | 'vazante';
@@ -264,7 +264,7 @@ export async function optimizeRoute(
   options: RouteOptions, 
   knownCoords?: Record<string, { lat: number, lon: number }>,
   timeWindows?: Record<number, { start: string; end: string }>,
-  invoices?: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean }>
+  invoices?: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }>
 ) {
   const routeHash = btoa(encodeURIComponent(addresses.join('|') + JSON.stringify(options) + JSON.stringify(timeWindows || {}) + JSON.stringify(invoices || {})));
 

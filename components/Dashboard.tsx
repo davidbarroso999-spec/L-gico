@@ -80,6 +80,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   });
 
   const [showSavedToast, setShowSavedToast] = useState(false);
+  const [manualDistance, setManualDistance] = useState<number | null>(null);
 
   // Poll completed routes and occurrences from Dexie local database
   useEffect(() => {
@@ -189,12 +190,12 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
     document.body.removeChild(link);
   };
 
-  // Core Math - Using activeRoute summary distance if active, or base completed routes + fallback
+  // Core Math - Using manual override if set, activeRoute summary distance if active, or base completed routes + fallback
   const activeRouteDistance = (activeRoute && activeRoute.summary?.distance)
     ? (activeRoute.summary.distance / 1000)
     : completedRoutes.reduce((acc, route) => acc + (route.totalDistanceKm || 15.4), 124.8);
 
-  const roundedKm = Math.round(activeRouteDistance * 10) / 10;
+  const roundedKm = manualDistance !== null ? manualDistance : Math.round(activeRouteDistance * 10) / 10;
 
   // Crucial Simplified Business Math:
   // Fuel consumed in liters = overall km / (how many km the car makes with 1 Liter)
@@ -350,11 +351,37 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
             </div>
 
             {/* Slider direct inputs */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              
+              {/* Distance Slider */}
+              <div className="bg-slate-900/35 border border-white/5 p-4 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] text-slate-400 font-bold uppercase">Distância da Rota</span>
+                    <span className="text-xs font-bold text-white">{roundedKm} km</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="1"
+                    max="1000"
+                    step="1"
+                    value={roundedKm}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setManualDistance(val);
+                    }}
+                    className="w-full accent-white cursor-pointer h-1.5 rounded-full"
+                  />
+                </div>
+                <span className="text-[9px] text-slate-500 mt-2 block">
+                  Simule o tamanho da rota.
+                </span>
+              </div>
+
               <div className="bg-slate-900/35 border border-white/5 p-4 rounded-xl">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] text-slate-400 font-bold uppercase">Consumo do Veículo</span>
-                  <span className="text-xs font-bold text-tech">{kmPerLiter} km / Litro</span>
+                  <span className="text-xs font-bold text-tech">{kmPerLiter} km / L</span>
                 </div>
                 <input 
                   type="range"
@@ -369,14 +396,14 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                   className="w-full accent-tech cursor-pointer h-1.5 rounded-full"
                 />
                 <span className="text-[9px] text-slate-500 mt-1 block">
-                  Cálculo: quantos km o veículo roda com 1 litro de combustível.
+                  Quantos km o veículo faz com 1 litro.
                 </span>
               </div>
 
               <div className="bg-slate-900/35 border border-white/5 p-4 rounded-xl flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] text-slate-400 font-bold uppercase">Preço do Litro (Combustível)</span>
+                    <span className="text-[11px] text-slate-400 font-bold uppercase">Preço do Combustível</span>
                     <span className="text-xs font-bold text-accent">R$ {fuelPrice.toFixed(2)}</span>
                   </div>
                   <input 
@@ -393,7 +420,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                   />
                 </div>
                 <span className="text-[9px] text-slate-500 mt-2 block">
-                  Configure o preço real cobrado nos postos da sua cidade.
+                  Preço real cobrado nos postos da sua cidade.
                 </span>
               </div>
             </div>

@@ -47,7 +47,10 @@ import {
   Upload,
   Download,
   FileCheck,
-  RefreshCw
+  RefreshCw,
+  Brain,
+  Printer,
+  Code
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
@@ -65,6 +68,10 @@ const MapView = dynamic(() => import('@/components/MapView'), {
   ssr: false,
   loading: () => <div className="w-full h-full bg-slate-900 animate-pulse flex items-center justify-center">Carregando Mapa...</div>
 });
+
+import NFeSearch from '@/components/NFeSearch';
+import { NFeData } from '@/lib/nfe.types';
+import { generateDanfeHtml } from '@/lib/danfe-generator';
 
 const DEFAULT_ADDRESSES = [
   'Centro, Manaus, AM',
@@ -133,34 +140,36 @@ export default function VoieExpressApp() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [addresses, setAddresses] = useState<string[]>(['']);
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
-  const [invoiceData, setInvoiceData] = useState<Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean }>>({});
-  const [previewInvoice, setPreviewInvoice] = useState<{ url: string; isImage?: boolean } | null>(null);
+  const [invoiceData, setInvoiceData] = useState<Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean; filename?: string; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: NFeData }>>({});
+  const [previewInvoice, setPreviewInvoice] = useState<{
+    url: string;
+    isImage?: boolean;
+    htmlContent?: string;
+    filename?: string;
+    chave?: string;
+    fullData?: NFeData;
+  } | null>(null);
+  const [activeInvoiceTab, setActiveInvoiceTab] = useState<'danfe' | 'data'>('danfe');
+  const [activeNFeSearchIdx, setActiveNFeSearchIdx] = useState<number | null>(null);
   
-  const updateInvoiceKey = useCallback((idx: number, key: string) => {
-    setInvoiceData(prev => ({
-      ...prev,
-      [idx]: { ...prev[idx], key }
-    }));
-  }, []);
-
-  const fetchInvoicePdf = async (idx: number) => {
-    const key = invoiceData[idx]?.key;
-    if (!key || key.length < 5) return;
-    setInvoiceData(prev => ({ ...prev, [idx]: { ...prev[idx], isFetching: true } }));
+  const handleShowInvoice = useCallback((idx: number) => {
+    const inv = invoiceData[idx];
+    if (!inv) return;
     
-    // Simulate fetching from "Meu Danfe" or SEFAZ
-    setTimeout(() => {
-      setInvoiceData(prev => ({
-        ...prev,
-        [idx]: {
-          ...prev[idx],
-          isFetching: false,
-          pdfUrl: `https://mock-nfe.com/danfe/${key}.pdf`,
-          isImage: false
-        }
-      }));
-    }, 1500);
-  };
+    let htmlContent = "";
+    if (inv.fullData) {
+      htmlContent = generateDanfeHtml(inv.fullData);
+    }
+    
+    setPreviewInvoice({
+      url: inv.pdfUrl || "",
+      isImage: inv.isImage,
+      htmlContent: htmlContent || undefined,
+      filename: inv.filename || `NFe_${inv.key || idx}`,
+      chave: inv.key,
+      fullData: inv.fullData
+    });
+  }, [invoiceData]);
 
   const triggerFileUpload = useCallback((idx: number) => {
     const el = document.getElementById(`nfe-upload-${idx}`);
@@ -177,6 +186,35 @@ export default function VoieExpressApp() {
         [idx]: { ...prev[idx], pdfUrl: fakeUrl, key: file.name, isImage }
       }));
     }
+  }, []);
+
+  const handleNFeDataFetched = useCallback((idx: number, dados: NFeData) => {
+    // 1. Update address
+    const fullAddress = `${dados.destinatario.endereco}, ${dados.destinatario.cidade}, ${dados.destinatario.estado}`;
+    setAddresses(prev => {
+      const next = [...prev];
+      next[idx] = fullAddress;
+      return next;
+    });
+
+    // 2. Update invoice data
+    setInvoiceData(prev => ({
+      ...prev,
+      [idx]: {
+        ...prev[idx],
+        key: dados.chaveAcesso,
+        valor: dados.valor,
+        peso: dados.peso,
+        destinatario: dados.destinatario.nome,
+        dataEmissao: dados.dataEmissao,
+        descricao: dados.descricao,
+        filename: `NFe_${dados.chaveAcesso.slice(-8)}.json`,
+        fullData: dados
+      }
+    }));
+
+    // 3. Clear active search panel
+    setActiveNFeSearchIdx(null);
   }, []);
 
   // Roteiro de Apresentação / Simulador de Fluxo
@@ -215,6 +253,61 @@ export default function VoieExpressApp() {
   }, []);
 
   const [routeResult, setRouteResult] = useState<any>(null);
+
+  const recordToOperationalMemory = async (stopIndex: number, isSuccess: boolean, reason?: string) => {
+    if (!routeResult || !routeResult.sequence || !routeResult.sequence[stopIndex]) return;
+    
+    try {
+      const stop = routeResult.sequence[stopIndex];
+      const lat = stop.lat || 0;
+      const lon = stop.lng || stop.lon || 0;
+      const addressStr = stop.address || 'Desconhecido';
+      
+      let neighborhood = 'Desconhecido';
+      const parts = addressStr.split(',');
+      if (parts.length >= 2) {
+        neighborhood = parts[1].trim();
+      }
+
+      const predictedTime = 15 + Math.random() * 20; // fallback mock
+      const actualTime = isSuccess ? predictedTime * (0.8 + Math.random() * 0.4) : predictedTime * (1.2 + Math.random() * 0.8);
+      
+      const memoryData = {
+        date: new Date(),
+        time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        driverId: 'DRV-Atual',
+        vehicleId: 'VHC-Principal',
+        vehicleType: 'van' as any,
+        weightKg: Math.random() * 50 + 10,
+        volumeM3: Math.random() * 0.5 + 0.1,
+        distributionCenter: routeResult.sequence[0]?.address || 'CD Principal',
+        clientName: `Cliente ${stopIndex}`,
+        lat: lat,
+        lon: lon,
+        fullAddress: addressStr,
+        neighborhood: neighborhood,
+        city: 'Manaus',
+        state: 'AM',
+        predictedTimeMs: predictedTime * 60 * 1000,
+        actualTimeMs: actualTime * 60 * 1000,
+        predictedDistanceKm: predictedTime / 3,
+        actualDistanceKm: (predictedTime / 3) * (isSuccess ? 0.9 : 1.1),
+        idleTimeMs: Math.random() * 5 * 60 * 1000,
+        averageSpeedKmH: 25 + Math.random() * 15,
+        estimatedFuelConsumptionLiters: Math.random() * 2 + 0.5,
+        attempts: 1,
+        success: isSuccess,
+        failureReason: reason,
+        connectionStatus: (navigator.onLine ? 'online' : 'offline') as 'online' | 'offline',
+        synced: false,
+        syncTimestamp: new Date()
+      };
+      
+      await db.operationalMemory.add(memoryData);
+    } catch (err) {
+      console.error("Erro ao gravar na MOI", err);
+    }
+  };
 
   // Simulation Mode states
   const [isSimulating, setIsSimulating] = useState(false);
@@ -409,7 +502,7 @@ export default function VoieExpressApp() {
 
     // Shift invoiceData keys left
     setInvoiceData(prev => {
-      const next: Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean }> = {};
+      const next: Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean; filename?: string; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string }> = {};
       Object.keys(prev).forEach(keyStr => {
         const k = parseInt(keyStr);
         if (k < idx) {
@@ -426,7 +519,7 @@ export default function VoieExpressApp() {
     // Map timeWindows and invoices correctly to validAddresses indices to prevent offset bugs
     const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
-    const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean }> = {};
+    const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }> = {};
     let validCount = 0;
     const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
@@ -443,7 +536,13 @@ export default function VoieExpressApp() {
           validWithInvoices[validCount] = {
             key: inv.key,
             pdfUrl: inv.pdfUrl,
-            isImage: inv.isImage
+            isImage: inv.isImage,
+            valor: inv.valor,
+            peso: inv.peso,
+            destinatario: inv.destinatario,
+            dataEmissao: inv.dataEmissao,
+            descricao: inv.descricao,
+            fullData: inv.fullData
           };
         }
         validCount++;
@@ -472,7 +571,8 @@ export default function VoieExpressApp() {
         console.warn("Could not save to IndexedDB, continuing...", dbErr);
       }
 
-      setCurrentScreen('result');
+      setNavIndex(0);
+      setCurrentScreen('navigation');
     } catch (error: any) {
       console.error("Optimization failed:", error);
       const errMsg = error?.message || String(error);
@@ -642,8 +742,17 @@ export default function VoieExpressApp() {
                     })()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate">{s.name}</p>
-                    <p className="text-[10px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5">{s.label}</p>
+                    <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate" title={s.label}>
+                      {s.label}
+                    </p>
+                    {s.name && s.name !== s.label && (
+                      <p className="text-[9px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                        <span className="text-tech font-mono bg-tech/10 border border-tech/20 px-1 py-0.2 rounded text-[7.5px] uppercase tracking-wider shrink-0">
+                          {s.type === 'poi' ? 'Ponto de Interesse' : 'Local'}
+                        </span>
+                        <span className="truncate">{s.name}</span>
+                      </p>
+                    )}
                   </div>
                 </div>
               </button>
@@ -739,7 +848,6 @@ export default function VoieExpressApp() {
               {[
                 { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
                 ...(routeResult ? [
-                  { id: 'result', label: 'Resumo Rota', icon: RouteIcon, desc: 'Resumos e Alternativas' },
                   { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
                 ] : []),
                 { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
@@ -747,18 +855,19 @@ export default function VoieExpressApp() {
               ].map((tab) => {
                 const isActive = currentScreen === tab.id;
                 const Icon = tab.icon;
+
                 return (
                   <motion.button
                     key={tab.id}
+                    onClick={() => {
+                      setCurrentScreen(tab.id as any);
+                      setIsMenuBallOpen(false);
+                    }}
                     variants={{
                       collapsed: { x: -30, opacity: 0, scale: 0.95 },
                       expanded: { x: 0, opacity: 1, scale: 1 }
                     }}
                     transition={{ type: "spring", stiffness: 350, damping: 25 }}
-                    onClick={() => {
-                      setCurrentScreen(tab.id as any);
-                      setIsMenuBallOpen(false);
-                    }}
                     className={`w-full p-3 border text-left flex items-center gap-3 transition-all cursor-pointer relative group ${
                       isActive 
                         ? 'bg-tech text-slate-950 border-tech shadow-[0_0_20px_rgba(209,160,84,0.25)] font-black' 
@@ -876,10 +985,39 @@ export default function VoieExpressApp() {
                         A
                       </div>
                       <div className="flex-1 min-w-0 space-y-1">
-                        <label className="text-[10px] text-tech font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
-                          Ponto de Partida (Origem)
-                        </label>
+                        <div className="flex items-center justify-between flex-wrap gap-1">
+                          <label className="text-[10px] text-tech font-black uppercase tracking-widest px-1 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
+                            Ponto de Partida (Origem)
+                          </label>
+                          {invoiceData[0] && (invoiceData[0].key || invoiceData[0].pdfUrl) ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleShowInvoice(0)}
+                                className="text-[10px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
+                              </button>
+                              <span className="text-slate-700 text-[10px]">|</span>
+                              <button
+                                type="button"
+                                onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === 0 ? null : 0)}
+                                className="text-[10px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                Alterar
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === 0 ? null : 0)}
+                              className="text-[10px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                            </button>
+                          )}
+                        </div>
                         <div className="relative">
                           <input
                             ref={el => { inputRefs.current[0] = el; }}
@@ -910,6 +1048,40 @@ export default function VoieExpressApp() {
                           </button>
                           {renderSuggestionsDropdown(0)}
                         </div>
+                        {activeNFeSearchIdx === 0 && (
+                          <div className="mt-3 animate-fadeIn">
+                            <NFeSearch 
+                              stopIndex={0} 
+                              onDataFetched={(dados) => handleNFeDataFetched(0, dados)}
+                              onCancel={() => setActiveNFeSearchIdx(null)}
+                            />
+                          </div>
+                        )}
+                        {invoiceData[0] && (invoiceData[0].key || invoiceData[0].pdfUrl) && (
+                          <div className="flex flex-col gap-1.5 mt-2.5 bg-slate-900/30 border border-slate-800/40 p-3 rounded-xl">
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <div className="flex items-center gap-1.5">
+                                <FileCheck className="w-3.5 h-3.5 text-tech animate-pulse" />
+                                <span className="text-[10px] font-black uppercase text-tech tracking-wider">
+                                  {invoiceData[0]?.valor ? 'NFe Vinculada via API' : 'DANFE Anexada'}
+                                </span>
+                              </div>
+                              {invoiceData[0]?.valor !== undefined && (
+                                <span className="text-[10px] font-bold text-emerald-400 font-mono">
+                                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoiceData[0]?.valor || 0)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 line-clamp-1 font-medium">
+                              {invoiceData[0]?.destinatario ? `Destinatário: ${invoiceData[0]?.destinatario}` : `Chave: ${invoiceData[0]?.key}`}
+                            </div>
+                            {invoiceData[0]?.peso !== undefined && (invoiceData[0]?.peso ?? 0) > 0 && (
+                              <div className="text-[9.5px] text-slate-500 font-mono">
+                                Peso: {invoiceData[0]?.peso} kg
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -924,9 +1096,38 @@ export default function VoieExpressApp() {
                                 {idx + 1}
                               </div>
                               <div className="space-y-1">
-                                <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
-                                  Parada {idx + 1}
-                                </label>
+                                <div className="flex items-center justify-between flex-wrap gap-1">
+                                  <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
+                                    Parada {idx + 1}
+                                  </label>
+                                  {invoiceData[realIdx] && (invoiceData[realIdx].key || invoiceData[realIdx].pdfUrl) ? (
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleShowInvoice(realIdx)}
+                                        className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
+                                      </button>
+                                      <span className="text-slate-700 text-[9px]">|</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === realIdx ? null : realIdx)}
+                                        className="text-[9px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                                      >
+                                        Alterar
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === realIdx ? null : realIdx)}
+                                      className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                                    </button>
+                                  )}
+                                </div>
                                 <div className="flex gap-2 relative">
                                   <div className="flex-1 min-w-0 relative">
                                     <input
@@ -965,6 +1166,40 @@ export default function VoieExpressApp() {
                                     <Trash2 className="w-4 h-4" />
                                   </button>
                                 </div>
+                                {activeNFeSearchIdx === realIdx && (
+                                  <div className="mt-2.5 animate-fadeIn">
+                                    <NFeSearch 
+                                      stopIndex={realIdx} 
+                                      onDataFetched={(dados) => handleNFeDataFetched(realIdx, dados)}
+                                      onCancel={() => setActiveNFeSearchIdx(null)}
+                                    />
+                                  </div>
+                                )}
+                                {invoiceData[realIdx] && (invoiceData[realIdx].key || invoiceData[realIdx].pdfUrl) && (
+                                  <div className="flex flex-col gap-1.5 mt-2 bg-slate-900/30 border border-slate-800/40 p-2.5 rounded-xl">
+                                    <div className="flex items-center justify-between flex-wrap gap-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <FileCheck className="w-3.5 h-3.5 text-tech animate-pulse" />
+                                        <span className="text-[10px] font-black uppercase text-tech tracking-wider">
+                                          {invoiceData[realIdx]?.valor ? 'NFe Vinculada via API' : 'DANFE Anexada'}
+                                        </span>
+                                      </div>
+                                      {invoiceData[realIdx]?.valor !== undefined && (
+                                        <span className="text-[10px] font-bold text-emerald-400 font-mono">
+                                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoiceData[realIdx]?.valor || 0)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[9.5px] text-slate-400 line-clamp-1 font-medium">
+                                      {invoiceData[realIdx]?.destinatario ? `Destinatário: ${invoiceData[realIdx]?.destinatario}` : `Chave: ${invoiceData[realIdx]?.key}`}
+                                    </div>
+                                    {invoiceData[realIdx]?.peso !== undefined && (invoiceData[realIdx]?.peso ?? 0) > 0 && (
+                                      <div className="text-[9px] text-slate-500 font-mono">
+                                        Peso: {invoiceData[realIdx]?.peso} kg
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 {/* Stop Delivery Time Window */}
                                 <div className="flex flex-wrap items-center gap-2 mt-2 px-1 pb-1">
                                   <Clock className="w-3.5 h-3.5 text-slate-650 shrink-0" />
@@ -993,60 +1228,6 @@ export default function VoieExpressApp() {
                                     )}
                                   </div>
                                 </div>
-                                {/* NFe / Upload */}
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-1 pb-2">
-                                  <div className="flex items-center gap-2">
-                                    <FileText className="w-3.5 h-3.5 text-tech/70 shrink-0" />
-                                    <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">NFe / DANFE:</span>
-                                  </div>
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <div className="flex bg-slate-950/80 border border-slate-800 rounded-lg overflow-hidden focus-within:border-tech focus-within:ring-1 focus-within:ring-tech/30 transition-all w-full sm:w-auto">
-                                      <input 
-                                        type="text"
-                                        placeholder="Chave de Acesso (44 dígitos)..."
-                                        value={invoiceData[realIdx]?.key || ''}
-                                        onChange={(e) => updateInvoiceKey(realIdx, e.target.value)}
-                                        className="bg-transparent text-[11px] text-slate-300 px-3 py-1 outline-none w-full sm:w-48 font-mono placeholder:text-slate-600"
-                                      />
-                                      <button 
-                                        type="button"
-                                        onClick={() => fetchInvoicePdf(realIdx)}
-                                        disabled={invoiceData[realIdx]?.isFetching || !invoiceData[realIdx]?.key}
-                                        className="bg-slate-800/80 hover:bg-slate-700 disabled:opacity-50 px-2 py-1 flex items-center justify-center transition-colors border-l border-slate-700"
-                                      >
-                                        {invoiceData[realIdx]?.isFetching ? <RefreshCw className="w-3 h-3 text-tech animate-spin" /> : <Search className="w-3 h-3 text-slate-400" />}
-                                      </button>
-                                    </div>
-                                    <input 
-                                      type="file" 
-                                      id={`nfe-upload-${realIdx}`} 
-                                      className="hidden" 
-                                      accept=".pdf,image/*" 
-                                      onChange={(e) => handleNfeUpload(realIdx, e)}
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => triggerFileUpload(realIdx)}
-                                      className="text-slate-400 hover:text-white bg-slate-900/50 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
-                                    >
-                                      <Upload className="w-3 h-3" /> Upload PDF
-                                    </button>
-                                    {invoiceData[realIdx]?.pdfUrl && (
-                                      <div className="flex items-center gap-1">
-                                        <div className="flex items-center gap-1.5 text-tech text-[10px] px-2 py-1 bg-tech/10 rounded-lg border border-tech/20">
-                                          <FileCheck className="w-3 h-3" /> Anexada
-                                        </div>
-                                        <button 
-                                          type="button"
-                                          onClick={() => setPreviewInvoice(invoiceData[realIdx]?.pdfUrl ? { url: invoiceData[realIdx].pdfUrl!, isImage: invoiceData[realIdx].isImage } : null)}
-                                          className="text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
-                                        >
-                                          <FileText className="w-3 h-3" /> Visualizar
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
                               </div>
                             </div>
                           );
@@ -1061,10 +1242,39 @@ export default function VoieExpressApp() {
                           B
                         </div>
                         <div className="flex-1 min-w-0 space-y-1">
-                          <label className="text-[10px] text-alert font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-alert" />
-                            Destino Final
-                          </label>
+                          <div className="flex items-center justify-between flex-wrap gap-1">
+                            <label className="text-[10px] text-alert font-black uppercase tracking-widest px-1 flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full bg-alert" />
+                              Destino Final
+                            </label>
+                             {invoiceData[addresses.length - 1] && (invoiceData[addresses.length - 1].key || invoiceData[addresses.length - 1].pdfUrl) ? (
+                               <div className="flex items-center gap-2">
+                                 <button
+                                   type="button"
+                                   onClick={() => handleShowInvoice(addresses.length - 1)}
+                                   className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                 >
+                                   <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
+                                 </button>
+                                 <span className="text-slate-700 text-[9px]">|</span>
+                                 <button
+                                   type="button"
+                                   onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === addresses.length - 1 ? null : addresses.length - 1)}
+                                   className="text-[9px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                                 >
+                                   Alterar
+                                 </button>
+                               </div>
+                             ) : (
+                               <button
+                                 type="button"
+                                 onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === addresses.length - 1 ? null : addresses.length - 1)}
+                                 className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                               >
+                                 <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                               </button>
+                             )}
+                          </div>
                           <div className="relative">
                             <input
                               ref={el => { inputRefs.current[addresses.length - 1] = el; }}
@@ -1072,7 +1282,7 @@ export default function VoieExpressApp() {
                               onChange={(e) => updateAddress(addresses.length - 1, e.target.value)}
                               onFocus={() => setActiveSuggestionIdx(addresses.length - 1)}
                               onBlur={() => setTimeout(() => {
-                                if (activeSuggestionIdx === addresses.length - 1) setShowSuggestions(false);
+                                  if (activeSuggestionIdx === addresses.length - 1) setShowSuggestions(false);
                               }, 200)}
                               placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
                               className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10 hover:border-slate-705 font-sans"
@@ -1096,6 +1306,40 @@ export default function VoieExpressApp() {
                             </button>
                             {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
+                          {activeNFeSearchIdx === addresses.length - 1 && (
+                            <div className="mt-2.5 animate-fadeIn">
+                              <NFeSearch 
+                                stopIndex={addresses.length - 1} 
+                                onDataFetched={(dados) => handleNFeDataFetched(addresses.length - 1, dados)}
+                                onCancel={() => setActiveNFeSearchIdx(null)}
+                              />
+                            </div>
+                          )}
+                          {invoiceData[addresses.length - 1] && (invoiceData[addresses.length - 1].key || invoiceData[addresses.length - 1].pdfUrl) && (
+                            <div className="flex flex-col gap-1.5 mt-2.5 bg-slate-900/30 border border-slate-800/40 p-3 rounded-xl">
+                              <div className="flex items-center justify-between flex-wrap gap-1">
+                                <div className="flex items-center gap-1.5">
+                                  <FileCheck className="w-3.5 h-3.5 text-tech animate-pulse" />
+                                  <span className="text-[10px] font-black uppercase text-tech tracking-wider">
+                                    {invoiceData[addresses.length - 1]?.valor ? 'NFe Vinculada via API' : 'DANFE Anexada'}
+                                  </span>
+                                </div>
+                                {invoiceData[addresses.length - 1]?.valor !== undefined && (
+                                  <span className="text-[10px] font-bold text-emerald-400 font-mono">
+                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoiceData[addresses.length - 1]?.valor || 0)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 line-clamp-1 font-medium">
+                                {invoiceData[addresses.length - 1]?.destinatario ? `Destinatário: ${invoiceData[addresses.length - 1]?.destinatario}` : `Chave: ${invoiceData[addresses.length - 1]?.key}`}
+                              </div>
+                              {invoiceData[addresses.length - 1]?.peso !== undefined && (invoiceData[addresses.length - 1]?.peso ?? 0) > 0 && (
+                                <div className="text-[9.5px] text-slate-500 font-mono">
+                                  Peso: {invoiceData[addresses.length - 1]?.peso} kg
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {/* Final Destination Time Window */}
                           <div className="flex flex-wrap items-center gap-2 mt-2 px-1 pb-1">
                             <Clock className="w-3.5 h-3.5 text-slate-650 shrink-0" />
@@ -1121,60 +1365,6 @@ export default function VoieExpressApp() {
                                 >
                                   Limpar
                                 </button>
-                              )}
-                            </div>
-                          </div>
-                          {/* NFe / Upload */}
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-1 pb-2">
-                            <div className="flex items-center gap-2">
-                              <FileText className="w-3.5 h-3.5 text-tech/70 shrink-0" />
-                              <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">NFe / DANFE:</span>
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <div className="flex bg-slate-950/80 border border-slate-800 rounded-lg overflow-hidden focus-within:border-tech focus-within:ring-1 focus-within:ring-tech/30 transition-all w-full sm:w-auto">
-                                <input 
-                                  type="text"
-                                  placeholder="Chave de Acesso (44 dígitos)..."
-                                  value={invoiceData[addresses.length - 1]?.key || ''}
-                                  onChange={(e) => updateInvoiceKey(addresses.length - 1, e.target.value)}
-                                  className="bg-transparent text-[11px] text-slate-300 px-3 py-1 outline-none w-full sm:w-48 font-mono placeholder:text-slate-600"
-                                />
-                                <button 
-                                  type="button"
-                                  onClick={() => fetchInvoicePdf(addresses.length - 1)}
-                                  disabled={invoiceData[addresses.length - 1]?.isFetching || !invoiceData[addresses.length - 1]?.key}
-                                  className="bg-slate-800/80 hover:bg-slate-700 disabled:opacity-50 px-2 py-1 flex items-center justify-center transition-colors border-l border-slate-700"
-                                >
-                                  {invoiceData[addresses.length - 1]?.isFetching ? <RefreshCw className="w-3 h-3 text-tech animate-spin" /> : <Search className="w-3 h-3 text-slate-400" />}
-                                </button>
-                              </div>
-                              <input 
-                                type="file" 
-                                id={`nfe-upload-${addresses.length - 1}`} 
-                                className="hidden" 
-                                accept=".pdf,image/*" 
-                                onChange={(e) => handleNfeUpload(addresses.length - 1, e)}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => triggerFileUpload(addresses.length - 1)}
-                                className="text-slate-400 hover:text-white bg-slate-900/50 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
-                              >
-                                <Upload className="w-3 h-3" /> Upload PDF
-                              </button>
-                              {invoiceData[addresses.length - 1]?.pdfUrl && (
-                                <div className="flex items-center gap-1">
-                                  <div className="flex items-center gap-1.5 text-tech text-[10px] px-2 py-1 bg-tech/10 rounded-lg border border-tech/20">
-                                    <FileCheck className="w-3 h-3" /> Anexada
-                                  </div>
-                                  <button 
-                                    type="button"
-                                    onClick={() => setPreviewInvoice(invoiceData[addresses.length - 1]?.pdfUrl ? { url: invoiceData[addresses.length - 1].pdfUrl!, isImage: invoiceData[addresses.length - 1].isImage } : null)}
-                                    className="text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg px-2 py-1 text-[10px] flex items-center gap-1.5 transition-colors"
-                                  >
-                                    <FileText className="w-3 h-3" /> Visualizar
-                                  </button>
-                                </div>
                               )}
                             </div>
                           </div>
@@ -1376,7 +1566,7 @@ export default function VoieExpressApp() {
               className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
+                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
               </div>
               <div 
                 className={`${
@@ -1440,7 +1630,7 @@ export default function VoieExpressApp() {
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
-                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
+                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
                  
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
@@ -1623,36 +1813,50 @@ export default function VoieExpressApp() {
                             onClick={async () => {
                               if (!deliveryPhoto) return;
                               try {
-                                // Finalize route in IndexedDB with safety photo proof
+                                // Finalize stop or entire route in IndexedDB with safety photo proof
                                 const latest = await db.routes.toCollection().last();
                                 if (latest?.id) {
                                   const updatedSequence = [...routeResult.sequence];
                                   updatedSequence[navIndex] = {
                                     ...updatedSequence[navIndex],
                                     status: 'completed',
-                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso'
+                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
+                                    deliveryPhoto: deliveryPhoto
                                   };
+                                  
+                                  const isLastStop = navIndex === routeResult.sequence.length - 1;
+                                  
                                   await db.routes.update(latest.id, { 
-                                    status: 'completed',
+                                    status: isLastStop ? 'completed' : 'pending',
                                     sequence: updatedSequence,
                                     deliveryPhoto: deliveryPhoto,
                                     deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
-                                    completedAt: new Date()
+                                    completedAt: isLastStop ? new Date() : undefined
                                   });
+                                  
                                   setRouteResult((prev: any) => ({
                                     ...prev,
                                     sequence: updatedSequence
                                   }));
+                                  
+                                  if (navIndex > 0) {
+                                    await recordToOperationalMemory(navIndex, true, deliveryNotes);
+                                  }
+
+                                  // Close webcam and return or proceed
+                                  stopWebcam();
+                                  setShowDeliveryModal(false);
+
+                                  if (isLastStop) {
+                                    setNavIndex(0);
+                                    setCurrentScreen('dashboard');
+                                  } else {
+                                    setNavIndex(navIndex + 1);
+                                  }
                                 }
                               } catch (err) {
                                 console.error("Erro salvando foto no Dexie:", err);
                               }
-                              
-                              // Close webcam and return
-                              stopWebcam();
-                              setShowDeliveryModal(false);
-                              setNavIndex(0);
-                              setCurrentScreen('dashboard');
                             }}
                             className="flex-1 py-3.5 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-1 shadow-lg bg-tech text-slate-950 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer h-12"
                           >
@@ -1700,67 +1904,123 @@ export default function VoieExpressApp() {
                       </button>
                     </div>
 
-                    <div className="px-6 pt-5 pb-8 flex items-center justify-between">
-                      <div className="flex flex-col">
-                        <div className="flex items-baseline gap-2">
-                          {/* Mock ETA */}
-                          <p className="text-3xl font-black tracking-tight text-white drop-shadow-md">
-                            15:30
+                    <div className="px-6 pt-6 pb-9 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                      <div className="flex flex-col flex-1 min-w-0">
+                        {/* Dynamic, Highly Legible ETA & Stats Block */}
+                        <div className="flex items-baseline gap-2.5">
+                          {/* Dynamic ETA based on actual segment duration */}
+                          <p className="text-4xl font-extrabold tracking-tight text-emerald-400 drop-shadow-[0_4px_12px_rgba(16,185,129,0.2)]">
+                            {(() => {
+                              const durationSec = routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900;
+                              const etaDate = new Date();
+                              etaDate.setSeconds(etaDate.getSeconds() + durationSec);
+                              return etaDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                            })()}
                           </p>
-                          <p className="text-sm font-bold text-tech">15 min</p>
+                          <div className="flex items-center gap-1.5 bg-slate-900 border border-white/5 px-2.5 py-1 rounded-lg">
+                            <Clock className="w-3.5 h-3.5 text-tech animate-pulse" />
+                            <p className="text-sm font-black text-white">
+                              {Math.round((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900) / 60)} min
+                            </p>
+                          </div>
+                          <div className="text-xs font-bold text-slate-400">
+                            • {((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.distance || 2500) / 1000).toFixed(1)} km
+                          </div>
                         </div>
-                        <p className="text-sm font-bold text-slate-400 mt-1">
-                          {Math.round(routeResult.segments?.[Math.max(navIndex - 1, 0)]?.distance / 1000) || 2.5} km • {routeResult.sequence[navIndex]?.address?.split(',')[0]}
-                        </p>
+
+                        {/* Highly readable current leg target address */}
+                        <div className="mt-2.5">
+                          <span className="text-[9px] uppercase tracking-wider text-slate-500 font-extrabold flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
+                            Destino Atual: Parada #{navIndex + 1} de {routeResult.sequence.length}
+                          </span>
+                          <p className="text-base font-black text-white leading-tight mt-0.5 truncate max-w-full">
+                            {routeResult.sequence[navIndex]?.name || routeResult.sequence[navIndex]?.address?.split(',')[0]}
+                          </p>
+                        </div>
+
+                        {/* NFe Quick Button */}
                         {routeResult.sequence[navIndex]?.invoice?.pdfUrl && (
-                          <div className="mt-1">
+                          <div className="mt-3.5">
                              <button 
-                               onClick={() => setPreviewInvoice(routeResult.sequence[navIndex]?.invoice?.pdfUrl ? { url: routeResult.sequence[navIndex].invoice.pdfUrl, isImage: routeResult.sequence[navIndex].invoice.isImage } : null)}
-                               className="inline-flex items-center gap-1.5 px-2 py-1 bg-tech/10 border border-tech/30 text-tech rounded uppercase font-bold text-[10px] tracking-wider hover:bg-tech/20 transition-all"
+                               onClick={() => {
+                                 const inv = routeResult.sequence[navIndex]?.invoice;
+                                 if (!inv) return;
+                                 let htmlContent = "";
+                                 if (inv.fullData) {
+                                   htmlContent = generateDanfeHtml(inv.fullData);
+                                 }
+                                 setPreviewInvoice({
+                                   url: inv.pdfUrl || "",
+                                   isImage: inv.isImage,
+                                   htmlContent: htmlContent || undefined,
+                                   filename: `NFe_${inv.key || navIndex}`,
+                                   chave: inv.key,
+                                   fullData: inv.fullData
+                                 });
+                               }}
+                               className="inline-flex items-center gap-2 px-3 py-1.5 bg-tech/15 border border-tech/30 hover:bg-tech/25 text-tech rounded-xl uppercase font-black text-[10px] tracking-widest transition-all shadow-md cursor-pointer"
                              >
-                                <FileText className="w-3.5 h-3.5" />
+                                <FileText className="w-4 h-4 shrink-0" />
                                 NFe: {routeResult.sequence[navIndex]?.invoice?.key?.substring(0,8)}... Anexada
                              </button>
                           </div>
                         )}
                       </div>
 
-                      {/* Right Action buttons */}
-                      <div className="flex items-center gap-3">
+                      {/* Right Side Massive Tap-Target Action Buttons (Highly Accessible) */}
+                      <div className="flex items-center gap-3 shrink-0">
+                        {/* Red "Ocorrência / Ausente" Button */}
                         <button 
                           onClick={() => {
                             setFailureReason('Destinatário Ausente');
                             setFailureNotes('');
                             setShowFailureModal(true);
                           }}
-                          className="w-12 h-12 bg-alert/20 border border-alert/30 rounded-full flex items-center justify-center text-alert hover:bg-alert hover:text-white transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)]"
+                          className="h-14 w-14 sm:h-16 sm:w-16 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 hover:text-red-300 rounded-2xl flex items-center justify-center transition-all shadow-[0_4px_20px_rgba(239,68,68,0.15)] shrink-0 group active:scale-95"
+                          title="Destinatário Ausente / Falha na Entrega"
                         >
-                          <XCircle className="w-6 h-6" />
+                          <XCircle className="w-7 h-7 transition-transform group-hover:scale-110" />
                         </button>
 
+                        {/* Huge Primary Action Button (Começar / Cheguei / Finalizar) */}
                         <button 
                           onClick={async () => {
-                            if (navIndex < routeResult.sequence.length - 1) {
-                              const updatedSequence = [...routeResult.sequence];
-                              updatedSequence[navIndex] = {
-                                ...updatedSequence[navIndex],
-                                status: 'completed'
-                              };
-                              setRouteResult((prev: any) => ({
-                                ...prev,
-                                sequence: updatedSequence
-                              }));
-                              setNavIndex(navIndex + 1);
+                            if (navIndex === 0) {
+                              // Leaving warehouse/origin - start navigating immediately to first stop
+                              setNavIndex(1);
                             } else {
+                              // Any actual delivery stop requires POD (Proof of Delivery)
                               setShowDeliveryModal(true);
                               setDeliveryPhoto(null);
                               setDeliveryNotes('');
                               startWebcam();
                             }
                           }}
-                          className={`px-6 h-12 ${navIndex === 0 ? 'bg-blue-600 px-8' : 'bg-blue-600'} text-white rounded-full font-black uppercase text-sm shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all`}
+                          className={`px-8 h-14 sm:px-10 sm:h-16 rounded-2xl font-black uppercase text-sm tracking-widest shadow-2xl flex items-center justify-center gap-2.5 active:scale-95 transition-all cursor-pointer ${
+                            navIndex === 0 
+                              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_8px_30px_rgba(37,99,235,0.4)]' 
+                              : (navIndex < routeResult.sequence.length - 1 
+                                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_8px_30px_rgba(16,185,129,0.4)]' 
+                                  : 'bg-tech hover:brightness-110 text-slate-950 shadow-[0_8px_30px_rgba(209,160,84,0.4)]')
+                          }`}
                         >
-                          {navIndex === 0 ? 'Começar' : (navIndex < routeResult.sequence.length - 1 ? 'Cheguei' : 'Finalizar')}
+                          {navIndex === 0 ? (
+                            <>
+                              <Play className="w-5 h-5 fill-current" />
+                              Começar Rota
+                            </>
+                          ) : (navIndex < routeResult.sequence.length - 1 ? (
+                            <>
+                              <MapPin className="w-5 h-5 animate-bounce" />
+                              Cheguei no Local
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="w-5 h-5" />
+                              Concluir Entrega
+                            </>
+                          ))}
                         </button>
                       </div>
                     </div>
@@ -1769,7 +2029,10 @@ export default function VoieExpressApp() {
 
                {/* Mock Exit Button */}
                <button 
-                 onClick={() => setCurrentScreen('result')}
+                 onClick={() => {
+                   setNavIndex(0);
+                   setCurrentScreen('dashboard');
+                 }}
                  className="absolute top-6 right-6 z-[1002] w-10 h-10 bg-black/20 backdrop-blur-md text-white rounded-full flex items-center justify-center hover:bg-black/40 transition-colors"
                >
                  <XCircle className="w-6 h-6" />
@@ -1847,59 +2110,288 @@ export default function VoieExpressApp() {
                  )}
                </AnimatePresence>
 
-               {/* Preview Invoice Modal */}
-               <AnimatePresence>
-                 {previewInvoice && (
-                   <motion.div 
-                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                     className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[60] flex items-center justify-center p-4 sm:p-6"
-                   >
-                     <motion.div
-                       initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-                       className="bg-slate-900 border border-slate-700/50 shadow-2xl rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
-                     >
-                       <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-slate-800/20">
-                         <h3 className="text-white font-medium flex items-center gap-2 text-sm sm:text-base">
-                           <FileText className="w-4 h-4 text-tech" /> Pré-visualização do Documento
-                         </h3>
-                         <button 
-                           onClick={() => setPreviewInvoice(null)}
-                           className="w-8 h-8 flex items-center justify-center bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white rounded-full transition-colors"
-                         >
-                           <X className="w-4 h-4" />
-                         </button>
-                       </div>
-                       
-                       <div className="flex-1 bg-slate-950 flex flex-col items-center justify-center overflow-auto p-4 sm:p-8 min-h-[50vh] gap-4">
-                         {previewInvoice?.isImage ? (
-                           <div className="flex-1 max-w-full flex items-center justify-center relative rounded overflow-hidden">
-                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                             <img 
-                               src={previewInvoice?.url} 
-                               alt="Visualização do Documento" 
-                               className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-xl"
-                             />
-                           </div>
-                         ) : (
-                           <iframe 
-                             src={previewInvoice?.url} 
-                             className="w-full h-[65vh] rounded shadow-lg border border-slate-800 bg-white" 
-                             title="Visualização da NFe"
-                           />
-                         )}
-                         <a 
-                           href={previewInvoice?.url}
-                           target="_blank"
-                           download="documento-anexado"
-                           className="bg-tech/20 text-tech hover:bg-tech/30 px-6 py-2.5 rounded-full font-bold uppercase tracking-wider text-xs transition-all flex items-center gap-2"
-                         >
-                           <Download className="w-4 h-4" /> Baixar ou Abrir em Nova Guia
-                         </a>
-                       </div>
-                     </motion.div>
-                   </motion.div>
-                 )}
-               </AnimatePresence>
+                {/* Preview Invoice Modal */}
+                <AnimatePresence>
+                  {previewInvoice && (
+                    <motion.div 
+                      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                      className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-[2000] flex items-center justify-center p-3 sm:p-6"
+                    >
+                      <motion.div
+                        initial={{ scale: 0.95, opacity: 0, y: 15 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 15 }}
+                        transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                        className="bg-slate-900 border border-slate-800 shadow-2xl rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+                      >
+                        {/* Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/40 gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-tech/10 flex items-center justify-center border border-tech/20 shadow-inner">
+                              <FileText className="w-5 h-5 text-tech" />
+                            </div>
+                            <div>
+                              <h3 className="text-white font-black text-sm uppercase tracking-widest flex items-center gap-2">
+                                Detalhes do Documento Fiscal
+                              </h3>
+                              <p className="text-[10px] text-slate-500 font-mono tracking-wider truncate max-w-xs sm:max-w-md">
+                                {previewInvoice?.chave ? `Chave: ${previewInvoice.chave.replace(/(.{4})/g, '$1 ')}` : 'Documento Carregado Localmente'}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          {/* Top Navigation Tabs inside Modal (only if we have HTML/Structured content) */}
+                          {!previewInvoice?.isImage && previewInvoice?.htmlContent && (
+                            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-850 self-start sm:self-center shrink-0">
+                              <button
+                                onClick={() => setActiveInvoiceTab('danfe')}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                                  activeInvoiceTab === 'danfe' 
+                                    ? 'bg-tech text-slate-950 shadow-md font-black' 
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                DANFE Oficial (Papel)
+                              </button>
+                              <button
+                                onClick={() => setActiveInvoiceTab('data')}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                                  activeInvoiceTab === 'data' 
+                                    ? 'bg-tech text-slate-950 shadow-md font-black' 
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                Painel Digital
+                              </button>
+                            </div>
+                          )}
+
+                          <button 
+                            onClick={() => setPreviewInvoice(null)}
+                            className="absolute sm:relative top-4 right-4 sm:top-auto sm:right-auto w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full transition-colors border border-slate-700/40 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        
+                        {/* Main Body */}
+                        <div className="flex-1 bg-slate-950/90 overflow-y-auto p-4 sm:p-6 flex flex-col justify-between gap-5 min-h-[55vh]">
+                          {previewInvoice?.isImage ? (
+                            <div className="flex-1 max-w-full flex items-center justify-center relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-900 p-4">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img 
+                                src={previewInvoice?.url} 
+                                alt="Visualização do Documento" 
+                                className="max-w-full max-h-[55vh] object-contain rounded-xl shadow-2xl"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              {/* Tab Content: DANFE Clássico */}
+                              {(!previewInvoice?.htmlContent || activeInvoiceTab === 'danfe') ? (
+                                <div className="flex-1 w-full bg-slate-950 border border-slate-900 rounded-2xl overflow-hidden relative shadow-inner">
+                                  {previewInvoice?.htmlContent ? (
+                                    <iframe 
+                                      id="danfe-preview-iframe"
+                                      srcDoc={previewInvoice.htmlContent}
+                                      className="w-full h-[58vh] bg-white border-0"
+                                      title="Visualização da NFe"
+                                    />
+                                  ) : (
+                                    <iframe 
+                                      id="danfe-preview-iframe"
+                                      src={previewInvoice?.url}
+                                      className="w-full h-[58vh] bg-white border-0"
+                                      title="Visualização da NFe"
+                                    />
+                                  )}
+                                </div>
+                              ) : (
+                                /* Tab Content: Painel Digital Premium (APEX design) */
+                                <div className="flex-1 w-full space-y-4 animate-fadeIn text-xs text-slate-200">
+                                  {/* Resumo de Valores e Natureza */}
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Valor Total do Documento</span>
+                                      <span className="text-3xl font-black text-tech tracking-tight leading-none mt-2">
+                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(previewInvoice.fullData?.valor || 0)}
+                                      </span>
+                                    </div>
+                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Peso Bruto Total</span>
+                                      <span className="text-2xl font-black text-white tracking-tight mt-2 flex items-baseline gap-1">
+                                        {previewInvoice.fullData?.peso || 0} <span className="text-xs text-slate-400 font-medium">kg</span>
+                                      </span>
+                                    </div>
+                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Status do Documento</span>
+                                      <div className="mt-2 flex items-center gap-2">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        <span className="text-sm font-black uppercase text-emerald-400 tracking-wider">
+                                          {previewInvoice.fullData?.statusNfe || 'Autorizada (SEFAZ)'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Participantes (Emitente e Destinatário) */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Emitente */}
+                                    <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
+                                      <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
+                                        Emitente / Remetente
+                                      </h4>
+                                      <div className="space-y-1">
+                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
+                                        <p className="text-xs font-black text-white">{previewInvoice.fullData?.emitente.nome}</p>
+                                      </div>
+                                      <div className="space-y-1">
+                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">CNPJ / CPF</span>
+                                        <p className="text-xs font-mono text-slate-300">{previewInvoice.fullData?.emitente.cnpj}</p>
+                                      </div>
+                                    </div>
+
+                                    {/* Destinatário */}
+                                    <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
+                                      <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
+                                        Destinatário / Cliente
+                                      </h4>
+                                      <div className="space-y-1">
+                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
+                                        <p className="text-xs font-black text-white">{previewInvoice.fullData?.destinatario.nome}</p>
+                                      </div>
+                                      <div className="space-y-1">
+                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Endereço de Entrega</span>
+                                        <p className="text-xs text-slate-300 leading-normal">{previewInvoice.fullData?.destinatario.endereco}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Informações de Carga / Descrição */}
+                                  <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl space-y-2">
+                                    <h4 className="text-[10px] uppercase font-black text-slate-400 tracking-widest border-b border-slate-800 pb-1.5">
+                                      Descrição das Mercadorias
+                                    </h4>
+                                    <p className="text-xs font-medium text-slate-300 italic bg-slate-950 p-3 rounded-xl border border-slate-900 leading-relaxed">
+                                      {previewInvoice.fullData?.descricao || 'Mercadorias Gerais'}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {/* Footer Actions Panel */}
+                          <div className="border-t border-slate-800/80 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-slate-950/20 p-2 rounded-2xl">
+                            {/* Left Meta Info */}
+                            <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-tech/50" />
+                              Visualizador Multiplataforma Harpia v2.5
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                              {/* Print Button (only for DANFE HTML view) */}
+                              {!previewInvoice?.isImage && previewInvoice?.htmlContent && activeInvoiceTab === 'danfe' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
+                                    if (iframe?.contentWindow) {
+                                      iframe.contentWindow.focus();
+                                      iframe.contentWindow.print();
+                                    }
+                                  }}
+                                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
+                                >
+                                  <Printer className="w-4 h-4" /> Imprimir
+                                </button>
+                              )}
+
+                              {/* XML Download Button */}
+                              {!previewInvoice?.isImage && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    try {
+                                      let xmlStr = "";
+                                      if (previewInvoice.fullData) {
+                                        const d = previewInvoice.fullData;
+                                        xmlStr = `<?xml version="1.0" encoding="UTF-8"?>\n<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">\n  <NFe>\n    <infNFe Id="NFe${d.chaveAcesso}" versao="4.00">\n      <ide>\n        <cUF>${d.chaveAcesso.substring(0, 2)}</cUF>\n        <dhEmi>${d.dataEmissao}</dhEmi>\n      </ide>\n      <emit>\n        <CNPJ>${d.emitente.cnpj.replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.emitente.nome}</xNome>\n      </emit>\n      <dest>\n        <CNPJ>${(d.destinatario.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.destinatario.nome}</xNome>\n        <enderDest>\n          <xLgr>${(d.destinatario.endereco || '').split(',')[0]}</xLgr>\n          <xMun>${d.destinatario.cidade}</xMun>\n          <UF>${d.destinatario.estado}</UF>\n          <CEP>${(d.destinatario.cep || '69000-000')}</CEP>\n        </enderDest>\n      </dest>\n      <det nItem="1">\n        <prod>\n          <xProd>${d.descricao}</xProd>\n        </prod>\n      </det>\n      <total>\n        <ICMSTot>\n          <vNF>${d.valor}</vNF>\n        </ICMSTot>\n      </total>\n      <transp>\n        <vol>\n          <pesoB>${d.peso || 0}</pesoB>\n        </vol>\n      </transp>\n    </infNFe>\n  </NFe>\n</nfeProc>`;
+                                      } else {
+                                        xmlStr = `<?xml version="1.0" encoding="UTF-8"?><nfeProc versao="4.00"><NFe><infNFe Id="NFe${previewInvoice.chave || '0'}" versao="4.00"></infNFe></NFe></nfeProc>`;
+                                      }
+                                      
+                                      const blob = new Blob([xmlStr], { type: 'application/xml' });
+                                      const blobUrl = URL.createObjectURL(blob);
+                                      const link = document.createElement('a');
+                                      link.href = blobUrl;
+                                      link.download = `NFe_${previewInvoice.chave || previewInvoice.filename || 'xml'}.xml`;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                      URL.revokeObjectURL(blobUrl);
+                                    } catch (err) {
+                                      console.error("Falha ao baixar XML:", err);
+                                    }
+                                  }}
+                                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
+                                >
+                                  <Code className="w-4 h-4 text-tech/80" /> Baixar XML
+                                </button>
+                              )}
+
+                              {/* PDF/Image Download Button */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!previewInvoice.url) return;
+                                  try {
+                                    if (previewInvoice.isImage) {
+                                      const link = document.createElement('a');
+                                      link.href = previewInvoice.url;
+                                      link.download = `${previewInvoice.filename || 'documento'}.png`;
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                      return;
+                                    }
+
+                                    const base64Data = previewInvoice.url.includes(',') ? previewInvoice.url.split(',')[1] : previewInvoice.url;
+                                    const binaryString = window.atob(base64Data);
+                                    const len = binaryString.length;
+                                    const bytes = new Uint8Array(len);
+                                    for (let i = 0; i < len; i++) {
+                                      bytes[i] = binaryString.charCodeAt(i);
+                                    }
+                                    const blob = new Blob([bytes], { type: 'application/pdf' });
+                                    const blobUrl = URL.createObjectURL(blob);
+                                    const link = document.createElement('a');
+                                    link.href = blobUrl;
+                                    link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    URL.revokeObjectURL(blobUrl);
+                                  } catch (err) {
+                                    console.error("Falha ao decodificar e baixar PDF base64. Tentando download normal:", err);
+                                    const link = document.createElement('a');
+                                    link.href = previewInvoice.url;
+                                    link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                  }
+                                }}
+                                className="flex-1 sm:flex-none px-6 py-2.5 bg-tech text-slate-950 hover:brightness-110 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_4px_12px_rgba(0,242,255,0.25)]"
+                              >
+                                <Download className="w-4 h-4 text-slate-950" /> Baixar PDF
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                {/* Failure Registration Modal */}
                <AnimatePresence>
@@ -1975,6 +2467,8 @@ export default function VoieExpressApp() {
                                ...prev,
                                sequence: updatedSequence
                              }));
+
+                             await recordToOperationalMemory(navIndex, false, failureReason || 'Outro');
 
                              if (navIndex < routeResult.sequence.length - 1) {
                                setNavIndex(navIndex + 1);
@@ -2261,7 +2755,7 @@ export default function VoieExpressApp() {
                       'Compensa, Manaus, AM',
                       'BR-319, Manaus, AM'
                     ]);
-                    setDemoStep(2);
+                    setDemoStep(3);
                   }}
                   className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans text-ellipsis overflow-hidden whitespace-nowrap"
                 >
@@ -2345,8 +2839,8 @@ export default function VoieExpressApp() {
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
-                      setDemoStep(2);
-                      setCurrentScreen('result');
+                      setDemoStep(1);
+                      setCurrentScreen('home');
                     }}
                     className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
                   >

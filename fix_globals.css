@@ -1,0 +1,5 @@
+const fs = require('fs');
+let code = fs.readFileSync('./app/globals.css', 'utf-8');
+code = code.replace(/filter: invert\(100%\) hue-rotate\(180deg\) brightness\(95%\) contrast\(100%\) saturate\(80%\);/g, 
+`filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(60%);`);
+fs.writeFileSync('./app/globals.css', code);

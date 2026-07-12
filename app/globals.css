@@ -1,7 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@700&display=swap');
 
 @import "tailwindcss";
-@import "tw-animate-css";
 
 @theme inline {
   --font-sans: var(--font-geist-sans);
@@ -290,4 +289,19 @@
 .btn-magnetic:active {
   transform: translateY(1px) scale(0.97);
   transition-duration: 80ms;
+}
+
+/* Waze/Uber Premium Navigation CSS - Dark High-Res Tiles */
+.dark-map-tiles .leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(60%);
+}
+
+/* Smooth Marker Animation (Uber/Waze Dead Reckoning) */
+.leaflet-marker-icon {
+  transition: transform 1s linear, opacity 0.3s ease !important;
+}
+
+/* Make sure popups don't lag behind too much */
+.leaflet-popup {
+  transition: transform 1s linear !important;
 }

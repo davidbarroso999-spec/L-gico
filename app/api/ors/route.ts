@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     }
 
     if (!response.ok) {
-      console.error("ORS Proxy Error Detail:", response.status, data || text);
+      console.error("ORS Proxy Error Detail:", response.status, data || text, "Body sent:", JSON.stringify(body));
       return NextResponse.json(data || { error: text }, { status: response.status });
     }
 

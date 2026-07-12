@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles } from 'lucide-react';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -17,6 +17,7 @@ const defaultIcon = typeof window !== 'undefined' ? L.icon({
 interface MapProps {
   stops: any[];
   geometry?: any;
+  routeSegments?: any[];
   alternatives?: any[];
   isNavigationScreen?: boolean;
   navIndex?: number;
@@ -83,12 +84,12 @@ function MapController({
     if (isNavigationScreen && carCoords) {
       // Direct high-precision high-zoom lock for active navigation screens
       const zoomLevel = 20.5;
-      map.setView(carCoords, zoomLevel, { animate: false });
+      map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
     } else if (isDriving && carCoords) {
       // Direct high-precision focus on the active vehicle during cockpit simulation
       const zoomLevel = is3DMode ? 19.5 : 18.2;
       // Disable animation for frequent periodic updates (300ms) to bypass Leaflet's pan animation queue lag
-      map.setView(carCoords, zoomLevel, { animate: false });
+      map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
     } else {
       // Normal bounds fitting
       if (geometry?.coordinates?.length > 0) {
@@ -299,7 +300,7 @@ const createNumberedIcon = (
         <div class="custom-marker-wrapper" style="
           transform: ${rotationAdjustment};
           transform-origin: bottom center;
-          transition: ${isDriving ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)'};
+          transition: transform 1s linear;
           background-color: ${color};
           color: #2D2C2A;
           width: 32px;
@@ -414,7 +415,7 @@ const createCarIcon = (
     html: `
       <div style="
         transform: ${rotationAdjustment};
-        transition: ${isDriving ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)'};
+        transition: transform 1s linear;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -485,7 +486,7 @@ const playRecalculateSound = () => {
   playWebAudioTone([349.23, 440.00, 523.25, 659.25, 783.99], 'sine', 0.08);
 };
 
-export default function MapView({ stops, geometry, alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated }: MapProps) {
+export default function MapView({ stops, geometry, routeSegments = [], alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated }: MapProps) {
   const polyline = useMemo(() => {
     return (geometry?.coordinates?.map((c: number[]) => [c[1], c[0]]) || []) as [number, number][];
   }, [geometry]);
@@ -574,6 +575,51 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     const currentStopName = stops[navIndex]?.name || stops[navIndex]?.address?.split(',')[0] || "Próxima parada";
     return `Seguindo para: ${currentStopName}`;
   }, [navIndex, simulatedIndex, simEndIdx, stops]);
+
+  // Dynamic turn-by-turn navigation step tracker based on simulatedIndex relative to segments
+  const activeStep = useMemo(() => {
+    if (!routeSegments || routeSegments.length === 0) return null;
+    const currentLegIdx = Math.max(0, navIndex - 1);
+    const segment = routeSegments[currentLegIdx];
+    if (!segment || !segment.steps) return null;
+
+    // Relative index inside the active leg segment
+    const startIdx = stopIndices[currentLegIdx] || 0;
+    const relativeSimIdx = simulatedIndex - startIdx;
+
+    // Find current step based on way_points range
+    const step = segment.steps.find((s: any) => {
+      const [start, end] = s.way_points;
+      return relativeSimIdx >= start && relativeSimIdx <= end;
+    });
+
+    if (step) return step;
+
+    // Fallback: first step that starts after the current position
+    const nextStep = segment.steps.find((s: any) => s.way_points[0] > relativeSimIdx);
+    return nextStep || segment.steps[segment.steps.length - 1] || null;
+  }, [routeSegments, stopIndices, navIndex, simulatedIndex]);
+
+  // Translate step instruction text to specific directional vector indicators
+  const stepDirection = useMemo(() => {
+    if (!activeStep?.instruction) return "straight";
+    const text = activeStep.instruction.toLowerCase();
+    if (text.includes("esquerda") || text.includes("left")) {
+      if (text.includes("leve") || text.includes("slight")) return "slight-left";
+      return "left";
+    }
+    if (text.includes("direita") || text.includes("right")) {
+      if (text.includes("leve") || text.includes("slight")) return "slight-right";
+      return "right";
+    }
+    if (text.includes("retorne") || text.includes("u-turn") || text.includes("meia volta")) {
+      return "u-turn";
+    }
+    if (text.includes("rotatória") || text.includes("roundabout")) {
+      return "roundabout";
+    }
+    return "straight";
+  }, [activeStep]);
 
   // Live traffic and weather layer controls
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
@@ -741,10 +787,149 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     return clusters;
   }, [polyline, stops, localOccurrences]);
 
+// Core Dynamic Rerouting Engine (Consults live Maps engines from current vehicle position)
+  const triggerWazeReroute = React.useCallback(async (forcedOrigin?: [number, number]) => {
+    const startPoint = forcedOrigin || carCoords;
+    if (isRerouting || !startPoint || polyline.length === 0) return;
+    setIsRerouting(true);
+    playAlertSound();
+    setReroutingAlert("ALERTA CO-PILOTO: Lentidão severa adiante detectada. Buscando rota inteligente alternativa...");
+    
+    // Smooth cinematic wait simulating advanced satellite path computations (1.5s)
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    try {
+      const remainingStops = stops.slice(navIndex);
+      if (remainingStops.length === 0) {
+        setIsRerouting(false);
+        setReroutingAlert(null);
+        return;
+      }
+
+      // Origin point is now the exact active simulated car location!
+      const recalculatePoints = [
+        [startPoint[0], startPoint[1]],
+        ...remainingStops.map(s => [s.lat, s.lon])
+      ];
+      
+      // Clean points to avoid ORS 400 error on identical consecutive points
+      const cleanPoints: [number, number][] = [];
+      recalculatePoints.forEach(p => {
+        if (cleanPoints.length === 0) {
+          cleanPoints.push(p as [number, number]);
+        } else {
+          const prev = cleanPoints[cleanPoints.length - 1];
+          const dist = Math.sqrt(Math.pow(p[0] - prev[0], 2) + Math.pow(p[1] - prev[1], 2));
+          if (dist > 0.0001) { // ~10 meters
+            cleanPoints.push(p as [number, number]);
+          }
+        }
+      });
+      
+      if (cleanPoints.length < 2) {
+         setIsRerouting(false);
+         return;
+      }
+
+
+      // Dual-redundant premium routing sequence (Google Maps Enterprise with OpenRouteService fallback)
+      let response = await fetch('/api/gmaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'directions',
+          payload: {
+            points: cleanPoints,
+            preference: 'fastest'
+          }
+        })
+      });
+
+      if (!response.ok) {
+        console.warn("Google Maps API unavailable or rate-limited. Trying OpenRouteService fallback routing...");
+        response = await fetch('/api/ors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: 'v2/directions/driving-car/geojson',
+            method: 'POST',
+            body: {
+              coordinates: cleanPoints.map(p => [p[1], p[0]]),
+              preference: 'fastest',
+              instructions: true,
+              language: "pt-BR"
+            }
+          })
+        });
+      }
+
+      if (!response.ok) {
+        throw new Error(`Dual Routing Engines HTTP Error (GMaps & ORS failed)`);
+      }
+
+      const resultData = await response.json();
+      const firstFeature = resultData?.features?.[0];
+      const newGeometry = resultData?.geometry || firstFeature?.geometry;
+      const newSummary = resultData?.summary || firstFeature?.properties?.summary || { distance: 10000, duration: 900 };
+      const newSegments = resultData?.segments || firstFeature?.properties?.segments || [];
+      
+      if (resultData && newGeometry) {
+        // Play the iconic high-tech recalculation tone!
+        playRecalculateSound();
+        
+        // Clear all artificial congestion parameters to let the vehicle speed up on the clear route
+        setActiveSimIncident('none');
+        setSecondsStuck(0);
+
+        // Wipe temporary Dexie DB occurrences so the map renders beautiful and clean
+        try {
+          const { db } = await import('@/lib/db');
+          await db.occurrences.clear();
+          setLocalOccurrences([]);
+        } catch (dbErr) {
+          console.warn("Could not clear occurrences table, continuing...", dbErr);
+        }
+
+        // Propagate the new road geometry to the parent controller to synchronize all UI segments
+        if (onRouteRecalculated) {
+          const newRouteResult = {
+            sequence: stops,
+            geometry: newGeometry,
+            summary: newSummary,
+            segments: newSegments
+          };
+          onRouteRecalculated(newRouteResult);
+        }
+
+        // Snap simulation back to index zero of the newly generated clear route
+        setSimulatedIndex(0);
+        setSimStartIdx(0);
+        setSimEndIdx(newGeometry.coordinates.length - 1);
+
+        setReroutingAlert("DESVIO APLICADO: Nova rota ótima calculada via GPS! Evitando congestionamentos.");
+        setInstructionHUD("Rota recalculada com sucesso! Desviando do trânsito.");
+
+        setTimeout(() => {
+          setReroutingAlert(null);
+        }, 4500);
+      } else {
+        throw new Error("No route geometry returned in recalculation response");
+      }
+    } catch (err) {
+      console.error("Failed to recalculate intelligent route:", err);
+      setReroutingAlert("AVISO CO-PILOTO: Tentativa de recálculo efetuada, mas as vias alternativas encontram-se congestionadas. Mantendo trajeto original.");
+      setTimeout(() => {
+        setReroutingAlert(null);
+      }, 4500);
+    } finally {
+      setIsRerouting(false);
+    }
+  }, [isRerouting, carCoords, polyline, navIndex, stops, onRouteRecalculated]);
+
   // Real Geolocation Tracking System (updates only when the device actually changes geographical location)
   useEffect(() => {
     let watchId: number | undefined;
-    const shouldTrack = isDriving || (isNavigationScreen && navIndex > 0);
+    const shouldTrack = useRealGPS && (isDriving || (isNavigationScreen && navIndex > 0));
 
     if (shouldTrack) {
       if ('geolocation' in navigator) {
@@ -792,6 +977,10 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
                   } else {
                     // Usuário saiu completamente da rota, solta o snap
                     snappedCoords = [latitude, longitude];
+                    // Se desviar consideravelmente, recalcula a rota do novo ponto
+                    if (d > 0.000025 && autoRerouteEnabled && !isRerouting) {
+                      triggerWazeReroute([latitude, longitude]);
+                    }
                   }
                 }
               }
@@ -866,7 +1055,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
         navigator.geolocation.clearWatch(watchId);
       }
     };
-  }, [isDriving, polyline, segments, isNavigationScreen, navIndex]);
+  }, [isDriving, polyline, segments, isNavigationScreen, navIndex, useRealGPS]);
 
   // Initial setup for navigation leg (auto-simulator removed in favor of real GPS, but enhanced for Cockpit Simulator)
   useEffect(() => {
@@ -896,6 +1085,8 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
       if (polyline[startIdx]) {
         setCarCoords(polyline[startIdx]);
       }
+      setIsDriving(true);
+      setIs3DMode(true);
       
       // Set initial bearing orientation
       if (startIdx < polyline.length - 1) {
@@ -907,121 +1098,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
 
   }, [navIndex, polyline, stops, isNavigationScreen, stopIndices]);
 
-  // Core Dynamic Rerouting Engine (Consults live Maps engines from current vehicle position)
-  const triggerWazeReroute = async () => {
-    if (isRerouting || !carCoords || polyline.length === 0) return;
-    setIsRerouting(true);
-    playAlertSound();
-    setReroutingAlert("ALERTA CO-PILOTO: Lentidão severa adiante detectada. Buscando rota inteligente alternativa...");
-    
-    // Smooth cinematic wait simulating advanced satellite path computations (1.5s)
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    try {
-      const remainingStops = stops.slice(navIndex);
-      if (remainingStops.length === 0) {
-        setIsRerouting(false);
-        setReroutingAlert(null);
-        return;
-      }
-
-      // Origin point is now the exact active simulated car location!
-      const recalculatePoints = [
-        [carCoords[0], carCoords[1]],
-        ...remainingStops.map(s => [s.lat, s.lon])
-      ];
-
-      // Dual-redundant premium routing sequence (Google Maps Enterprise with OpenRouteService fallback)
-      let response = await fetch('/api/gmaps', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'directions',
-          payload: {
-            points: recalculatePoints,
-            preference: 'fastest'
-          }
-        })
-      });
-
-      if (!response.ok) {
-        console.warn("Google Maps API unavailable or rate-limited. Trying OpenRouteService fallback routing...");
-        response = await fetch('/api/ors', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            endpoint: 'v2/directions/driving-car/geojson',
-            method: 'POST',
-            body: {
-              coordinates: recalculatePoints.map(p => [p[1], p[0]]),
-              preference: 'fastest',
-              instructions: true,
-              language: "pt-BR"
-            }
-          })
-        });
-      }
-
-      if (!response.ok) {
-        throw new Error(`Dual Routing Engines HTTP Error (GMaps & ORS failed)`);
-      }
-
-      const resultData = await response.json();
-      
-      if (resultData && resultData.geometry) {
-        // Play the iconic high-tech recalculation tone!
-        playRecalculateSound();
-        
-        // Clear all artificial congestion parameters to let the vehicle speed up on the clear route
-        setActiveSimIncident('none');
-        setSecondsStuck(0);
-
-        // Wipe temporary Dexie DB occurrences so the map renders beautiful and clean
-        try {
-          const { db } = await import('@/lib/db');
-          await db.occurrences.clear();
-          setLocalOccurrences([]);
-        } catch (dbErr) {
-          console.warn("Could not clear occurrences table, continuing...", dbErr);
-        }
-
-        // Propagate the new road geometry to the parent controller to synchronize all UI segments
-        if (onRouteRecalculated) {
-          const newRouteResult = {
-            sequence: stops,
-            geometry: resultData.geometry,
-            summary: resultData.summary || { distance: 10000, duration: 900 },
-            segments: resultData.segments || []
-          };
-          onRouteRecalculated(newRouteResult);
-        }
-
-        // Snap simulation back to index zero of the newly generated clear route
-        setSimulatedIndex(0);
-        setSimStartIdx(0);
-        setSimEndIdx(resultData.geometry.coordinates.length - 1);
-
-        setReroutingAlert("DESVIO APLICADO: Nova rota ótima calculada via GPS! Evitando congestionamentos.");
-        setInstructionHUD("Rota recalculada com sucesso! Desviando do trânsito.");
-
-        setTimeout(() => {
-          setReroutingAlert(null);
-        }, 4500);
-      } else {
-        throw new Error("No route geometry returned in recalculation response");
-      }
-    } catch (err) {
-      console.error("Failed to recalculate intelligent route:", err);
-      setReroutingAlert("AVISO CO-PILOTO: Tentativa de recálculo efetuada, mas as vias alternativas encontram-se congestionadas. Mantendo trajeto original.");
-      setTimeout(() => {
-        setReroutingAlert(null);
-      }, 4500);
-    } finally {
-      setIsRerouting(false);
-    }
-  };
-
-  // Timer-based Autopilot Simulation loop for desktop/iFrame environments
+    // Timer-based Autopilot Simulation loop for desktop/iFrame environments
   useEffect(() => {
     if (!isDriving || useRealGPS || !isNavigationScreen || polyline.length === 0 || simEndIdx <= simStartIdx) {
       return;
@@ -1112,7 +1189,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
     }, intervalDuration);
 
     return () => clearInterval(timer);
-  }, [isDriving, useRealGPS, isNavigationScreen, polyline, simEndIdx, simSpeedFactor, activeSimIncident, autoRerouteEnabled, isRerouting, localOccurrences]);
+  }, [isDriving, useRealGPS, isNavigationScreen, polyline, simEndIdx, simSpeedFactor, activeSimIncident, autoRerouteEnabled, isRerouting, localOccurrences, simStartIdx, triggerWazeReroute]);
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
@@ -1120,7 +1197,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
   const mapTransformStyles = is3DMode ? {
     transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${isDriving && mapOrientation === 'track' ? -smoothHeading : 0}deg)`,
     transformOrigin: '50% 50%',
-    transition: isDriving ? 'none' : 'transform 1s cubic-bezier(0.16, 1, 0.3, 1)',
+    transition: 'transform 1s linear',
     height: '100%',
     width: '100%',
     background: '#2D2C2A'
@@ -1222,10 +1299,11 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
           zoomControl={false}
         >
           <TileLayer
-            attribution='&copy; CARTO'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            maxNativeZoom={19}
+            attribution='&copy; Google Maps'
+            url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"
+            maxNativeZoom={22}
             maxZoom={22}
+            className="dark-map-tiles"
           />
           
           {/* Stops Markers */}
@@ -1483,25 +1561,53 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
       {/* WAZE-LIKE PROGRESS HUD & SPEED INDICATOR */}
       {isNavigationScreen && (
         <>
-          {/* GORGEOUS FLOATING COMPACT TOP HUD BANNER */}
-          <div className="absolute top-4 left-4 right-4 z-[1001] bg-slate-950/95 backdrop-blur-md border border-tech/30 rounded-2xl shadow-[0_12px_40px_rgba(209,160,84,0.15)] p-3 max-w-2xl mx-auto flex items-center gap-3 transition-all duration-300">
-            <div className="flex flex-col items-center justify-center bg-slate-900 border border-tech/35 w-11 h-11 rounded-xl shrink-0">
-              <Navigation className="w-5 h-5 text-tech" style={{ transform: `rotate(${heading}deg)`, transition: 'transform 0.15s ease-out' }} />
+          {/* HIGHLY ACCESSIBLE, PREMIUM GPS NAVIGATION TOP HUD */}
+          <div className="absolute top-4 left-4 right-4 z-[1001] bg-slate-950/98 backdrop-blur-xl border border-tech/40 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.8)] p-4 max-w-2xl mx-auto flex items-center gap-4 transition-all duration-300 md:p-5">
+            {/* Action Arrow Icon based on next step direction */}
+            <div className="flex flex-col items-center justify-center bg-emerald-600/90 border border-emerald-400/30 w-14 h-14 rounded-2xl shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+              {stepDirection === 'left' && <ArrowLeft className="w-8 h-8 text-white stroke-[3.5px] animate-pulse" />}
+              {stepDirection === 'slight-left' && <ArrowUpLeft className="w-8 h-8 text-white stroke-[3.5px]" />}
+              {stepDirection === 'right' && <ArrowRight className="w-8 h-8 text-white stroke-[3.5px] animate-pulse" />}
+              {stepDirection === 'slight-right' && <ArrowUpRight className="w-8 h-8 text-white stroke-[3.5px]" />}
+              {stepDirection === 'u-turn' && <RotateCcw className="w-8 h-8 text-white stroke-[3.5px]" />}
+              {stepDirection === 'roundabout' && <RefreshCw className="w-8 h-8 text-white stroke-[3.5px] animate-spin-slow" />}
+              {stepDirection === 'straight' && <ArrowUp className="w-8 h-8 text-white stroke-[3.5px]" />}
             </div>
+            
+            {/* Turn-by-Turn Info Section (Optimized for visibility from distance) */}
             <div className="flex-1 min-w-0">
-              <span className="text-[9px] uppercase tracking-wider text-slate-500 font-extrabold block">Rota e Orientação</span>
-              <span className="text-xs md:text-sm font-black truncate text-white block">
-                {currentLegStatus}
-              </span>
+              {activeStep ? (
+                <>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-black">
+                      {activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}
+                    </span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  </div>
+                  <h2 className="text-sm md:text-base lg:text-lg font-black text-white leading-snug tracking-tight truncate">
+                    {activeStep.instruction || "Prossiga na via indicada"}
+                  </h2>
+                </>
+              ) : (
+                <>
+                  <span className="text-[9px] uppercase tracking-wider text-slate-500 font-extrabold block mb-0.5">Navegação Ativa</span>
+                  <h2 className="text-sm md:text-base font-black text-white leading-tight">
+                    {currentLegStatus}
+                  </h2>
+                </>
+              )}
             </div>
-            <div className="flex flex-col items-end shrink-0 pl-2">
-              <span className="text-xs font-black font-mono text-tech">{simProgress}%</span>
-              <span className="text-[7.5px] text-slate-500 font-bold uppercase tracking-widest leading-none mt-0.5">concluído</span>
+
+            {/* Simulated progress percentage */}
+            <div className="flex flex-col items-end shrink-0 pl-2 border-l border-white/10">
+              <span className="text-lg font-black font-mono text-tech leading-none">{simProgress}%</span>
+              <span className="text-[8px] text-slate-500 font-extrabold uppercase tracking-widest mt-1">concluído</span>
             </div>
-            {/* Real-time elegant progress strip */}
-            <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-slate-900 overflow-hidden rounded-full">
+
+            {/* Real-time highly prominent progress strip */}
+            <div className="absolute bottom-0 left-4 right-4 h-1 bg-slate-900 overflow-hidden rounded-full">
               <div 
-                className="h-full bg-tech transition-all duration-300 ease-out shadow-[0_0_8px_rgba(209,160,84,0.8)]" 
+                className="h-full bg-gradient-to-r from-tech to-amber-400 transition-all duration-300 ease-out shadow-[0_0_12px_rgba(209,160,84,1)]" 
                 style={{ width: `${simProgress}%` }}
               ></div>
             </div>
@@ -1750,7 +1856,7 @@ export default function MapView({ stops, geometry, alternatives = [], isNavigati
                   </div>
 
                   <button
-                    onClick={triggerWazeReroute}
+                    onClick={() => triggerWazeReroute()}
                     disabled={isRerouting || !carCoords}
                     className="w-full py-2.5 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest bg-gradient-to-r from-tech to-amber-500 text-slate-950 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all flex items-center justify-center gap-1.5 shadow-[0_0_20px_rgba(209,160,84,0.2)] hover:shadow-[0_0_25px_rgba(209,160,84,0.35)]"
                   >
