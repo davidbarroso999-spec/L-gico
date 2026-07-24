@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     }
     
     // 0. Tenta AnyAPI (Anthropic Claude Sonnet 4.5 proxy via formato OpenAI)
-    if (anyApiKey && !skipClaudeAndOpenAI) {
+    if (anyApiKey && !skipClaudeAndOpenAI && !isModelExhausted("anyapi")) {
       console.log("[AI Engine] Chave AnyAPI encontrada. Tentando utilizar Claude Sonnet via AnyAPI.");
       try {
         const baseUrl = process.env.ANYAPI_BASE_URL || "https://api.anyapi.ai/v1";
@@ -113,36 +113,16 @@ export async function POST(req: Request) {
             return NextResponse.json({ content: data.choices[0].message.content });
           }
         } else {
-          // Fallback para Anthropic nativo caso o endpoint responda erro com AnyAPI/Anthropic direto
           const text = await response.text();
-          console.error(`[AI Engine] Falha na chamada AnyAPI (OpenAI format) Status ${response.status}: ${text}`);
-          
-          if (text.includes("anthropic") || anyApiKey.startsWith("sk-ant")) {
-            console.log("[AI Engine] Tentando formato nativo da Anthropic...");
-            const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "x-api-key": anyApiKey,
-                "anthropic-version": "2023-06-01"
-              },
-              body: JSON.stringify({
-                model: "anthropic/claude-sonnet-4.5",
-                max_tokens: 150,
-                system: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`,
-                messages: [{ role: "user", content: prompt }]
-              })
-            });
-            if (anthropicResponse.ok) {
-              const anthData = await anthropicResponse.json();
-              return NextResponse.json({ content: anthData.content[0].text });
-            } else {
-              console.error(`[AI Engine] Falha Anthropic nativo: ${await anthropicResponse.text()}`);
-            }
+          if (response.status === 402 || text.includes("budget_exceeded") || text.includes("team_budget_exceeded")) {
+            console.warn("[AI Engine] Cota de saldo do AnyAPI esgotada (Status 402). Alternando permanentemente para Gemini.");
+            markModelExhausted("anyapi");
+          } else {
+            console.warn(`[AI Engine] Falha na chamada AnyAPI Status ${response.status}. Alternando para Gemini.`);
           }
         }
       } catch (err) {
-        console.error("[AI Engine] Erro ao conectar com a AnyAPI, tentando próximos...", err);
+        console.warn("[AI Engine] Erro ao conectar com a AnyAPI, tentando próximos...", err);
       }
     }
 

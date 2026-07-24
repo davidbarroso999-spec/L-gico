@@ -391,7 +391,7 @@ export async function getDirections(points: [number, number][], profile: string 
                 coordinates: cleanPoints.map(p => [p[1], p[0]]),
                 preference: orsPreference,
                 instructions: true,
-                language: "pt-BR"
+                language: "pt"
               }
             })
           });
@@ -467,7 +467,7 @@ export async function getDirections(points: [number, number][], profile: string 
             coordinates: cleanPoints.map(p => [p[1], p[0]]),
             preference: orsPreference,
             instructions: true,
-            language: "pt-BR"
+            language: "pt"
           }
         })
       });

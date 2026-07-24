@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe } from 'lucide-react';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -375,9 +375,9 @@ const createCarIcon = (
             "></div>
           </div>
           
-          <!-- Inner Navigation Compass Pointer (representing the active course heading) -->
+          <!-- Inner Navigation Compass Pointer (Apontando sempre para cima / Norte) -->
           <div style="
-            transform: rotate(${smoothHeading}deg);
+            transform: rotate(${mapOrientation === 'track' ? 0 : smoothHeading}deg);
             transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             align-items: center;
@@ -398,17 +398,20 @@ const createCarIcon = (
     });
   }
 
-  // No modo 'track' com simulação ativa, o mapa gira embaixo do carro, então mantemos o carro reto de pé.
-  // Já no modo estável 'north' (conforto de UX), o carro gira suavemente no próprio eixo de acordo com o rumo das pistas.
+  // O ponteiro do carro permanece apontando para o Norte / Pra Cima (0 deg) no modo de rotação do mapa, girando o mapa ao redor dele
   let rotationAdjustment = '';
   if (is3D) {
-    if (mapOrientation === 'track' && isDriving) {
-      rotationAdjustment = 'rotateX(-50deg)';
+    if (mapOrientation === 'track') {
+      rotationAdjustment = 'rotateX(-50deg) rotate(0deg)';
     } else {
       rotationAdjustment = `rotateX(-45deg) rotate(${smoothHeading}deg)`;
     }
   } else {
-    rotationAdjustment = `rotate(${smoothHeading}deg)`;
+    if (mapOrientation === 'track') {
+      rotationAdjustment = 'rotate(0deg)';
+    } else {
+      rotationAdjustment = `rotate(${smoothHeading}deg)`;
+    }
   }
 
   return L.divIcon({
@@ -486,10 +489,27 @@ const playRecalculateSound = () => {
   playWebAudioTone([349.23, 440.00, 523.25, 659.25, 783.99], 'sine', 0.08);
 };
 
+function getCompassCardinal(deg: number) {
+  const normalized = (deg % 360 + 360) % 360;
+  const val = Math.floor((normalized / 22.5) + 0.5);
+  const arr = ["N", "NNE", "NE", "ENE", "L", "LSE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"];
+  return arr[(val % 16)];
+}
+
 export default function MapView({ stops, geometry, routeSegments = [], alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated }: MapProps) {
   const polyline = useMemo(() => {
     return (geometry?.coordinates?.map((c: number[]) => [c[1], c[0]]) || []) as [number, number][];
   }, [geometry]);
+
+  // Map Tile Detail Style State (default: Google Padrão Vetor HD com detalhamento máximo)
+  const [tileStyle, setTileStyle] = useState<'google-streets' | 'google-hybrid' | 'google-terrain' | 'carto-voyager' | 'dark'>('google-streets');
+  const [showTileMenu, setShowTileMenu] = useState(false);
+
+  // Real Device Gyroscope & Compass Orientation States
+  const [useGyroscope, setUseGyroscope] = useState(false);
+  const [gyroHeading, setGyroHeading] = useState(0);
+  const [smoothGyroHeading, setSmoothGyroHeading] = useState(0);
+  const [gyroActive, setGyroActive] = useState(false);
 
   // 3D Navigation Simulation States
   const [is3DMode, setIs3DMode] = useState(isNavigationScreen ? false : false);
@@ -500,21 +520,83 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [simulatedIndex, setSimulatedIndex] = useState(0);
   const [simStartIdx, setSimStartIdx] = useState(0);
   const [simEndIdx, setSimEndIdx] = useState(0);
-  const [mapOrientation, setMapOrientation] = useState<'north' | 'track'>(isNavigationScreen ? 'north' : 'north'); // Padrão 'north' (Norte para cima, de altíssima estabilidade e sem trepidação)
+  const [mapOrientation, setMapOrientation] = useState<'north' | 'track'>(isNavigationScreen ? 'track' : 'track'); // Default track mode keeping cursor pointing UP to device antenna
   
   // Real-time HUD stats
   const [speedHUD, setSpeedHUD] = useState(0);
   const [instructionHUD, setInstructionHUD] = useState("Pronto para iniciar a jornada");
 
   // Advanced Waze Simulator Controls & Traffic Injections
-  const [useRealGPS, setUseRealGPS] = useState(false); // Default to local route simulator in AI Studio workspace
-  const [simSpeedFactor, setSimSpeedFactor] = useState(8); // Speed factor (1x to 30x)
+  const [useRealGPS, setUseRealGPS] = useState(true); // Default to Real GPS on device!
+  const [simSpeedFactor, setSimSpeedFactor] = useState(1); // Default to 1x realistic speed
   const [activeSimIncident, setActiveSimIncident] = useState<'none' | 'congested' | 'blocked'>('none');
   const [autoRerouteEnabled, setAutoRerouteEnabled] = useState(true); // Auto rerouting on severe delay
   const [isRerouting, setIsRerouting] = useState(false);
   const [reroutingAlert, setReroutingAlert] = useState<string | null>(null);
   const [secondsStuck, setSecondsStuck] = useState(0); // Counts simulated time trapped in traffic
-  const [isCockpitOpen, setIsCockpitOpen] = useState(true); // Toggle the simulator control tray
+  const [isCockpitOpen, setIsCockpitOpen] = useState(false); // Default drawer collapsed for clean GPS view
+
+  // Real Device Orientation (Gyroscope / Compass Sensor Listener - Always Active)
+  useEffect(() => {
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      let headingVal: number | null = null;
+      if ((e as any).webkitCompassHeading !== undefined && (e as any).webkitCompassHeading !== null) {
+        headingVal = (e as any).webkitCompassHeading;
+      } else if (e.alpha !== null && e.alpha !== undefined) {
+        headingVal = (360 - e.alpha) % 360;
+      }
+
+      if (headingVal !== null && !isNaN(headingVal)) {
+        setGyroHeading(headingVal);
+        setSmoothGyroHeading(prev => calculateSmoothAngle(prev, headingVal as number));
+        setGyroActive(true);
+      }
+    };
+
+    if (typeof window !== 'undefined' && ('DeviceOrientationEvent' in window || 'ondeviceorientation' in window)) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+      window.addEventListener('deviceorientation', handleOrientation, true);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.removeEventListener('deviceorientation', handleOrientation, true);
+      }
+    };
+  }, []);
+
+  const toggleGyroscope = async () => {
+    if (!useGyroscope) {
+      if (typeof window !== 'undefined' && typeof (DeviceOrientationEvent as any)?.requestPermission === 'function') {
+        try {
+          const permissionState = await (DeviceOrientationEvent as any).requestPermission();
+          if (permissionState === 'granted') {
+            setUseGyroscope(true);
+            setIs3DMode(true);
+            setMapOrientation('track');
+            setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
+          } else {
+            alert('Permissão para sensor de giroscópio e bússola foi recusada.');
+          }
+        } catch (err) {
+          setUseGyroscope(true);
+          setIs3DMode(true);
+          setMapOrientation('track');
+          setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
+        }
+      } else {
+        setUseGyroscope(true);
+        setIs3DMode(true);
+        setMapOrientation('track');
+        setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
+      }
+    } else {
+      setUseGyroscope(false);
+      setGyroActive(false);
+      setInstructionHUD("Bússola/Giroscópio desativado. Modo de orientação normal.");
+    }
+  };
 
   // Map stops to their closest indices globally for exact partition logic
   const stopIndices = useMemo(() => {
@@ -857,7 +939,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
               coordinates: cleanPoints.map(p => [p[1], p[0]]),
               preference: 'fastest',
               instructions: true,
-              language: "pt-BR"
+              language: "pt"
             }
           })
         });
@@ -1034,8 +1116,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             }
           },
           (error) => {
-            console.error("Erro na geolocalização:", error);
-            setInstructionHUD("Erro de GPS.");
+            console.warn("Geolocalização não disponível ou pendente de permissão:", error);
+            setInstructionHUD("Aguardando sinal GPS...");
           },
           { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
         );
@@ -1055,26 +1137,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         navigator.geolocation.clearWatch(watchId);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDriving, polyline, segments, isNavigationScreen, navIndex, useRealGPS]);
 
-  // Initial setup for navigation leg (auto-simulator removed in favor of real GPS, but enhanced for Cockpit Simulator)
+  // Initial setup for navigation leg
   useEffect(() => {
     if (!isNavigationScreen || polyline.length === 0 || stops.length === 0 || stopIndices.length === 0) return;
 
-    // If navIndex is 0 (waiting to press Começar), place car at the first stop and sit still
-    if (navIndex === 0) {
-      setTimeout(() => {
-        const firstStopIdx = stopIndices[0] || 0;
-        setCarCoords(polyline[firstStopIdx] || null);
-        setSpeedHUD(0);
-        setSimStartIdx(firstStopIdx);
-        setSimEndIdx(firstStopIdx + 1); // small dummy buffer to avoid divide-by-zero
-        setSimulatedIndex(firstStopIdx);
-      }, 0);
-      return;
-    }
-
-    // Determine bounds for active navigation leg: from stops[navIndex-1] to stops[navIndex]
+    // Determine bounds for active navigation leg: from stops[Math.max(0, navIndex - 1)] to stops[navIndex]
     const startIdx = stopIndices[Math.max(0, navIndex - 1)] || 0;
     const endIdx = stopIndices[Math.min(stops.length - 1, navIndex)] || (polyline.length - 1);
 
@@ -1085,8 +1155,15 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       if (polyline[startIdx]) {
         setCarCoords(polyline[startIdx]);
       }
-      setIsDriving(true);
-      setIs3DMode(true);
+      // If navIndex > 0 (user pressed Começar / Start), activate tracking & 3D orientation
+      if (navIndex > 0) {
+        setIs3DMode(true);
+        setInstructionHUD("Navegação ativa. Siga a rota até o destino.");
+      } else {
+        setIsDriving(false);
+        setSpeedHUD(0);
+        setInstructionHUD("Pronto para iniciar - Toque em Começar");
+      }
       
       // Set initial bearing orientation
       if (startIdx < polyline.length - 1) {
@@ -1193,18 +1270,21 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
-  // Computed transform configuration based on 3D View and active Pilot navigation heading (Track Up or North Up)
+  // Active rotation angle (uses physical device gyroscope/compass orientation when active, or route bearing when navigating)
+  const activeRotationHeading = (useGyroscope || gyroActive) ? smoothGyroHeading : smoothHeading;
+
+  // Computed transform configuration based on 3D View, device gyroscope orientation or route bearing
   const mapTransformStyles = is3DMode ? {
-    transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${isDriving && mapOrientation === 'track' ? -smoothHeading : 0}deg)`,
+    transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${(mapOrientation === 'track' || useGyroscope || gyroActive) ? -activeRotationHeading : 0}deg)`,
     transformOrigin: '50% 50%',
-    transition: 'transform 1s linear',
+    transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 1s linear',
     height: '100%',
     width: '100%',
     background: '#2D2C2A'
   } : {
-    transform: 'none',
+    transform: (mapOrientation === 'track' || useGyroscope || gyroActive) ? `rotateZ(${-activeRotationHeading}deg)` : 'none',
     transformOrigin: '50% 50%',
-    transition: 'transform 1s cubic-bezier(0.16, 1, 0.3, 1)',
+    transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
     height: '100%',
     width: '100%',
     background: '#2D2C2A'
@@ -1299,11 +1379,22 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           zoomControl={false}
         >
           <TileLayer
-            attribution='&copy; Google Maps'
-            url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"
+            key={tileStyle}
+            attribution='&copy; Google Maps HD'
+            url={
+              tileStyle === 'google-streets'
+                ? "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
+                : tileStyle === 'google-hybrid'
+                ? "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&scale=2"
+                : tileStyle === 'google-terrain'
+                ? "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&scale=2"
+                : tileStyle === 'carto-voyager'
+                ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                : "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
+            }
             maxNativeZoom={22}
             maxZoom={22}
-            className="dark-map-tiles"
+            className={tileStyle === 'dark' ? "dark-map-tiles" : ""}
           />
           
           {/* Stops Markers */}
@@ -1922,6 +2013,118 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             </div>
           </button>
 
+          {/* Camadas do Mapa & Nível de Detalhamento */}
+          <div className="relative">
+            <button
+              onClick={() => setShowTileMenu(!showTileMenu)}
+              className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+                showTileMenu || tileStyle !== 'dark'
+                  ? 'bg-tech text-slate-950 border-tech font-bold'
+                  : 'glass text-slate-400 border-white/10 hover:text-white'
+              }`}
+              title="Alternar Detalhamento e Camadas do Mapa"
+            >
+              <div className="flex flex-col items-center justify-center">
+                <Layers className="w-4 h-4 mb-0.5" />
+                <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
+                  Detalhe HD
+                </span>
+              </div>
+            </button>
+
+            {showTileMenu && (
+              <div className="absolute right-14 bottom-0 bg-slate-950/95 border border-tech/40 backdrop-blur-md rounded-2xl p-3 shadow-2xl w-56 flex flex-col gap-2 z-[10000] text-xs">
+                <div className="text-[9px] font-black uppercase text-tech tracking-wider border-b border-white/10 pb-1 flex justify-between items-center">
+                  <span>Visualização do Mapa</span>
+                  <button onClick={() => setShowTileMenu(false)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <button
+                  onClick={() => { setTileStyle('google-hybrid'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
+                    tileStyle === 'google-hybrid' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Globe className="w-4 h-4 shrink-0 text-amber-400" />
+                  <div>
+                    <div className="text-[11px] font-bold">🛰️ Satélite HD + Rótulos</div>
+                    <div className="text-[9px] text-slate-400">Google Híbrido, Bairros e Ruas</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('google-streets'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
+                    tileStyle === 'google-streets' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <MapPin className="w-4 h-4 shrink-0 text-cyan-400" />
+                  <div>
+                    <div className="text-[11px] font-bold">🗺️ Ruas & POIs</div>
+                    <div className="text-[9px] text-slate-400">Google Vetor em Alta Resolução</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('google-terrain'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
+                    tileStyle === 'google-terrain' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Sun className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <div>
+                    <div className="text-[11px] font-bold">🏔️ Relevo / Terreno</div>
+                    <div className="text-[9px] text-slate-400">Curvas de nível e Topografia</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('carto-voyager'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
+                    tileStyle === 'carto-voyager' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Layers className="w-4 h-4 shrink-0 text-purple-400" />
+                  <div>
+                    <div className="text-[11px] font-bold">🏬 Detalhe Urbano</div>
+                    <div className="text-[9px] text-slate-400">CartoDB Imóveis & Estabelecimentos</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('dark'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
+                    tileStyle === 'dark' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Compass className="w-4 h-4 shrink-0 text-slate-400" />
+                  <div>
+                    <div className="text-[11px] font-bold">🌃 Visão Noturna</div>
+                    <div className="text-[9px] text-slate-400">Modo Escuro Cyberpunk</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Toggle Device Orientation Gyroscope Tracking */}
+          <button
+            onClick={toggleGyroscope}
+            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+              useGyroscope
+                ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-black shadow-[0_0_15px_rgba(6,182,212,0.4)]'
+                : 'glass text-slate-400 border-white/10 hover:text-white'
+            }`}
+            title="Giroscópio do Dispositivo (Gira o mapa conforme o sensor)"
+          >
+            <div className="flex flex-col items-center justify-center">
+              <Smartphone className={`w-4 h-4 mb-0.5 ${useGyroscope ? 'animate-bounce text-slate-950' : 'text-slate-400'}`} />
+              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
+                Giroscópio {useGyroscope ? 'ON' : 'OFF'}
+              </span>
+            </div>
+          </button>
+
           {/* Toggle Map Orientation Mode */}
           <button
             onClick={() => {
@@ -1997,6 +2200,13 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             <div className={`w-2 h-2 rounded-full ${isDriving ? 'bg-red-500 animate-ping' : 'bg-tech animate-pulse shadow-[0_0_8px_#D1A054]'}`} />
             <span>{isDriving ? 'NAV SIMULAÇÃO' : 'FLUXO AO VIVO'}</span>
         </div>
+
+        {useGyroscope && (
+          <div className="bg-slate-950/90 border border-cyan-500/40 px-3 py-2 rounded-xl text-[10px] font-mono font-bold text-cyan-300 flex items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.25)] select-none">
+            <Smartphone className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            <span>GIROSCÓPIO: {Math.round(gyroHeading)}° {getCompassCardinal(gyroHeading)}</span>
+          </div>
+        )}
       </div>
 
       <style jsx global>{`

@@ -50,18 +50,93 @@ import {
   RefreshCw,
   Brain,
   Printer,
-  Code
+  Code,
+  Share2,
+  Calendar,
+  Anchor,
+  Waves,
+  Compass,
+  Navigation,
+  Layers,
+  ShoppingBag,
+  Store,
+  Building2,
+  PackageCheck
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
 import { seedHistoryIfEmpty } from '@/lib/history-analyzer';
-import { enhancedAutocomplete, preciseGeocode } from '@/lib/geocode-engine';
+import { enhancedAutocomplete, preciseGeocode, reverseGeocode, getNearestReferencePoint } from '@/lib/geocode-engine';
 import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 import TruckLoader from '@/components/TruckLoader';
 import { HarpiaTextEffect } from '@/components/ui/text-effect';
+
+// Pre-configured E-Commerce Pickup Hubs & Logistics Base Points (Temu, Shopee, Mercado Livre, Motoboys)
+const ECOMMERCE_PICKUP_HUBS = [
+  {
+    id: 'shopee-zs',
+    name: 'Hub Shopee - Zona Sul (Cachoeirinha)',
+    platform: 'Shopee',
+    address: 'Av. Castelo Branco, 1420 - Cachoeirinha, Manaus - AM',
+    lat: -3.1250,
+    lon: -60.0120,
+    type: 'Hub de Coleta / Last-Mile',
+    badgeColor: 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+  },
+  {
+    id: 'temu-centro',
+    name: 'Hub Temu & Express Logistics - Centro',
+    platform: 'Temu',
+    address: 'Rua Marechal Deodoro, 310 - Centro, Manaus - AM',
+    lat: -3.1380,
+    lon: -60.0270,
+    type: 'Ponto de Apoio & Triagem E-Commerce',
+    badgeColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+  },
+  {
+    id: 'meli-distrito',
+    name: 'CD Mercado Livre & Magalu - Distrito Industrial I',
+    platform: 'Mercado Livre',
+    address: 'Av. Ministro João Gonçalves de Souza, 500 - Distrito Industrial I, Manaus - AM',
+    lat: -3.1180,
+    lon: -59.9750,
+    type: 'Centro de Distribuição Principal',
+    badgeColor: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+  },
+  {
+    id: 'aliexpress-parque10',
+    name: 'Hub AliExpress & Cainiao - Parque 10',
+    platform: 'AliExpress',
+    address: 'Av. Tfe, 880 - Parque 10 de Novembro, Manaus - AM',
+    lat: -3.0850,
+    lon: -60.0100,
+    type: 'Ponto de Coleta e Consolidação',
+    badgeColor: 'bg-red-500/10 text-red-400 border-red-500/20'
+  },
+  {
+    id: 'motoboy-p10',
+    name: 'Ponto de Apoio Motoboys & Entregadores - Flores/P10',
+    platform: 'Motoboys / Express',
+    address: 'Av. Professor Nilton Lins, 3200 - Flores, Manaus - AM',
+    lat: -3.0780,
+    lon: -60.0150,
+    type: 'Estação de Transbordo Motoboy/Bike',
+    badgeColor: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+  },
+  {
+    id: 'coleta-cnova',
+    name: 'Ponto de Coleta Integrado Zona Norte (Cidade Nova)',
+    platform: 'Multi-Plataforma (Temu/Shopee/Meli)',
+    address: 'Av. Noel Nutels, 1050 - Cidade Nova, Manaus - AM',
+    lat: -3.0320,
+    lon: -59.9710,
+    type: 'Hub Bairro Norte',
+    badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+  }
+];
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -217,16 +292,24 @@ export default function VoieExpressApp() {
     setActiveNFeSearchIdx(null);
   }, []);
 
-  // Roteiro de Apresentação / Simulador de Fluxo
+  // Roteiro de Apresentação / Intro Hero State
   const [showDemoAssistant, setShowDemoAssistant] = useState(false);
-  const [logoDrawn, setLogoDrawn] = useState(false);
+  const [showSlogan, setShowSlogan] = useState(false);
   const [showPlanet, setShowPlanet] = useState(false);
+  const [showAppContent, setShowAppContent] = useState(false);
   const [demoStep, setDemoStep] = useState(0);
   const [demoMinimized, setDemoMinimized] = useState(false);
+
+  const triggerImmediateReveal = () => {
+    setShowSlogan(true);
+    setShowPlanet(true);
+    setShowAppContent(true);
+  };
 
   const [options, setOptions] = useState<RouteOptions>({
     priority: 'balanced',
     vehicle: 'van',
+    vesselType: 'express_lancha',
     avoidDirt: true,
     avoidFloods: true,
     avoidHills: false,
@@ -251,6 +334,124 @@ export default function VoieExpressApp() {
       return next;
     });
   }, []);
+
+  // Future Routing & Scheduling States
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('');
+  const [scheduledName, setScheduledName] = useState('');
+  const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
+  const [copiedRouteId, setCopiedRouteId] = useState<number | null>(null);
+
+  const loadSavedRoutes = useCallback(async () => {
+    try {
+      const allRoutes = await db.routes.toArray();
+      allRoutes.sort((a: any, b: any) => {
+        const aTime = a.scheduledDate ? new Date(a.scheduledDate).getTime() : 0;
+        const bTime = b.scheduledDate ? new Date(b.scheduledDate).getTime() : 0;
+        if (aTime !== bTime) {
+          return bTime - aTime;
+        }
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      });
+      setSavedRoutes(allRoutes);
+    } catch (err) {
+      console.error("Erro ao carregar rotas salvas:", err);
+    }
+  }, []);
+
+  const handleSaveFutureRoute = async () => {
+    const validAddresses = addresses.filter(a => a.trim().length > 3);
+    if (validAddresses.length < 2) {
+      setApiWarning("Aviso: Adicione pelo menos 2 endereços válidos para salvar uma rota.");
+      return;
+    }
+
+    try {
+      const name = scheduledName.trim() || `Rota para ${scheduledDate || 'o Futuro'}`;
+      await db.routes.add({
+        date: new Date(),
+        addresses: validAddresses,
+        sequence: validAddresses.map((addr, idx) => ({
+          address: addr,
+          lat: resolvedCoords[addr]?.lat || 0,
+          lng: resolvedCoords[addr]?.lon || 0,
+          stopIndex: idx,
+        })),
+        score: 100,
+        status: 'pending',
+        name: name,
+        scheduledDate: scheduledDate || undefined,
+        scheduledTime: scheduledTime || undefined,
+        isFutureRoute: true
+      });
+
+      setApiWarning(`Sucesso: Rota "${name}" salva com sucesso!`);
+      setScheduledName('');
+      setScheduledDate('');
+      setScheduledTime('');
+      loadSavedRoutes();
+    } catch (err) {
+      console.error("Erro ao agendar rota:", err);
+      setApiWarning("Erro: Não foi possível salvar a rota no banco de dados.");
+    }
+  };
+
+  const handleLoadSavedRoute = (route: any) => {
+    if (route.addresses && route.addresses.length > 0) {
+      setAddresses(route.addresses);
+      if (route.sequence) {
+        const newCoords: Record<string, { lat: number, lon: number }> = {};
+        route.sequence.forEach((stop: any) => {
+          const lat = stop.lat || 0;
+          const lon = stop.lng || stop.lon || 0;
+          if (lat && lon && stop.address) {
+            newCoords[stop.address] = { lat, lon };
+          }
+        });
+        setResolvedCoords(prev => ({ ...prev, ...newCoords }));
+      }
+      setApiWarning(`Rota "${route.name || 'Sem nome'}" carregada no planejador.`);
+    }
+  };
+
+  const handleDeleteSavedRoute = async (id: number) => {
+    try {
+      await db.routes.delete(id);
+      setApiWarning("Rota excluída com sucesso.");
+      loadSavedRoutes();
+    } catch (err) {
+      console.error("Erro ao excluir rota:", err);
+      setApiWarning("Erro ao excluir rota.");
+    }
+  };
+
+  const handleShareRoute = (route: any) => {
+    try {
+      const shareData = {
+        name: route.name || "Rota Compartilhada",
+        addresses: route.addresses,
+        options: options,
+        aiCustomPrompt: aiCustomPrompt || ""
+      };
+      
+      const jsonStr = JSON.stringify(shareData);
+      const utf8Bytes = new TextEncoder().encode(jsonStr);
+      const binaryStr = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('');
+      const base64 = btoa(binaryStr);
+      const origin = typeof window !== 'undefined' && (window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1'))
+        ? window.location.origin
+        : 'https://useharpia.vercel.app';
+      const shareUrl = `${origin}${window.location.pathname}?share=${encodeURIComponent(base64)}`;
+      
+      navigator.clipboard.writeText(shareUrl);
+      setCopiedRouteId(route.id || 99999);
+      setApiWarning(`Link de compartilhamento copiado! Envie para quem quiser.`);
+      setTimeout(() => setCopiedRouteId(null), 3000);
+    } catch (err) {
+      console.error("Erro ao compartilhar rota:", err);
+      setApiWarning("Erro ao gerar link de compartilhamento.");
+    }
+  };
 
   const [routeResult, setRouteResult] = useState<any>(null);
 
@@ -422,13 +623,192 @@ export default function VoieExpressApp() {
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number} | null>(null);
   const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
 
-  useEffect(() => {
-    if (navigator.geolocation) {
+  // Pickup Hubs & Location Mismatch States
+  const [locationMismatchDismissed, setLocationMismatchDismissed] = useState<string | null>(null);
+  const [showPickupHubModal, setShowPickupHubModal] = useState<boolean>(false);
+  const [customHubSearch, setCustomHubSearch] = useState<string>('');
+  const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
+
+  const handleUseCurrentGpsAsOrigin = async () => {
+    setIsLocatingGps(true);
+
+    const processCoords = async (lat: number, lon: number) => {
+      try {
+        const refResult = await getNearestReferencePoint(lat, lon);
+        const addressLabel = refResult.fullLabel;
+
+        setAddresses(prev => {
+          const next = [...prev];
+          next[0] = addressLabel;
+          return next;
+        });
+
+        setResolvedCoords(prev => ({
+          ...prev,
+          [addressLabel]: { lat, lon }
+        }));
+
+        setUserLocation({ lat, lon });
+        setLocationMismatchDismissed(addressLabel);
+        setApiWarning(`GPS Tempo Real: Partida atribuída ao ponto de referência "${refResult.landmarkName}" (${refResult.streetAddress})`);
+      } catch (err) {
+        console.error("GPS Reverse Geocode Error:", err);
+        setApiWarning("Erro ao estimar o ponto de referência do GPS.");
+      } finally {
+        setIsLocatingGps(false);
+      }
+    };
+
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-        (err) => console.warn("Geolocation failed:", err),
-        { enableHighAccuracy: true }
+        (pos) => {
+          processCoords(pos.coords.latitude, pos.coords.longitude);
+        },
+        (err) => {
+          console.warn("High accuracy GPS request failed/timeout, fallback to current userLocation:", err);
+          if (userLocation) {
+            processCoords(userLocation.lat, userLocation.lon);
+          } else {
+            alert("Localização GPS em tempo real não foi detectada. Verifique se o GPS está ativado e permitido no seu navegador.");
+            setIsLocatingGps(false);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 3000 }
       );
+    } else if (userLocation) {
+      processCoords(userLocation.lat, userLocation.lon);
+    } else {
+      alert("Seu navegador não possui suporte a geolocalização.");
+      setIsLocatingGps(false);
+    }
+  };
+
+  // Auto pre-fill departure address with GPS reference point if departure is empty
+  useEffect(() => {
+    if (!userLocation) return;
+    if (addresses[0] && addresses[0].trim().length > 0) return;
+
+    let isMounted = true;
+    getNearestReferencePoint(userLocation.lat, userLocation.lon).then(refResult => {
+      if (isMounted) {
+        setAddresses(prev => {
+          if (prev[0] && prev[0].trim().length > 0) return prev;
+          const next = [...prev];
+          next[0] = refResult.fullLabel;
+          return next;
+        });
+        setResolvedCoords(prev => ({
+          ...prev,
+          [refResult.fullLabel]: { lat: userLocation.lat, lon: userLocation.lon }
+        }));
+        setLocationMismatchDismissed(refResult.fullLabel);
+      }
+    }).catch(e => console.warn("Auto GPS prefill error:", e));
+
+    return () => { isMounted = false; };
+  }, [userLocation, addresses]);
+
+  // Continuous High-Precision Geolocation Watcher
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('geolocation' in navigator)) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      },
+      (err) => {
+        console.warn("Geolocation watch error:", err);
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
+
+  // Auto-geocode departure address to compute GPS mismatch in real-time
+  useEffect(() => {
+    const originAddr = addresses[0];
+    if (!originAddr || originAddr.trim().length < 4 || resolvedCoords[originAddr]) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await enhancedAutocomplete(originAddr, userLocation?.lat, userLocation?.lon);
+        if (res && res.length > 0 && res[0].lat !== 0) {
+          setResolvedCoords(prev => ({
+            ...prev,
+            [originAddr]: { lat: res[0].lat, lon: res[0].lon }
+          }));
+        }
+      } catch (e) {
+        console.warn("Auto-geocode departure failed:", e);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [addresses, userLocation, resolvedCoords]);
+
+  const getDistanceBetweenUserAndOrigin = () => {
+    if (!userLocation || !addresses[0] || addresses[0].trim().length < 3) return null;
+    const resolved = resolvedCoords[addresses[0]];
+    if (!resolved || (resolved.lat === 0 && resolved.lon === 0)) return null;
+
+    const R = 6371000;
+    const dLat = (resolved.lat - userLocation.lat) * Math.PI / 180;
+    const dLon = (resolved.lon - userLocation.lon) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(resolved.lat * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const meters = R * c;
+
+    if (meters < 350) return null; // Under 350 meters is considered close enough
+    const kmStr = meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+    return { meters, kmStr, resolved };
+  };
+
+  const locationMismatch = getDistanceBetweenUserAndOrigin();
+  const isMismatchActive = locationMismatch && locationMismatchDismissed !== addresses[0];
+
+  const handleSelectPickupHub = (hub: typeof ECOMMERCE_PICKUP_HUBS[0], asOrigin: boolean) => {
+    const hubLabel = `${hub.name} (${hub.platform})`;
+    setResolvedCoords(prev => ({
+      ...prev,
+      [hubLabel]: { lat: hub.lat, lon: hub.lon },
+      [hub.address]: { lat: hub.lat, lon: hub.lon }
+    }));
+
+    if (asOrigin) {
+      const updated = [...addresses];
+      updated[0] = hubLabel;
+      if (updated.length === 1) updated.push('');
+      setAddresses(updated);
+      setLocationMismatchDismissed(hubLabel);
+    } else {
+      const updated = [...addresses];
+      if (updated.length > 1) {
+        updated.splice(1, 0, hubLabel);
+      } else {
+        updated.push(hubLabel);
+      }
+      setAddresses(updated);
+    }
+    setShowPickupHubModal(false);
+  };
+
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      try {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+          (err) => console.warn("Geolocation non-critical fallback:", err.message || err),
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+        );
+      } catch (e) {
+        console.warn("Geolocation access restricted:", e);
+      }
     }
   }, []);
 
@@ -470,10 +850,23 @@ export default function VoieExpressApp() {
       } catch (error) {
         console.error("Autocomplete error:", error);
       }
-    }, 400);
+    }, 180);
 
     return () => clearTimeout(timer);
   }, [currentActiveText, activeSuggestionIdx, userLocation]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.autocomplete-container') && !target.closest('input[data-autocomplete]')) {
+        setShowSuggestions(false);
+        setSuggestions([]);
+        setActiveSuggestionIdx(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const addAddress = useCallback(() => setAddresses(prev => [...prev, '']), []);
   const updateAddress = useCallback((idx: number, val: string) => {
@@ -582,6 +975,59 @@ export default function VoieExpressApp() {
     }
   };
 
+  // Load saved routes and check for share link on mount
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      loadSavedRoutes();
+    });
+  }, [loadSavedRoutes]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const shareParam = urlParams.get('share');
+      if (shareParam) {
+        // Clear param from URL address bar silently
+        try {
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+        } catch (e) {}
+
+        Promise.resolve().then(() => {
+          try {
+            const decodedBinary = atob(decodeURIComponent(shareParam));
+            const utf8Bytes = new Uint8Array(decodedBinary.length);
+            for (let i = 0; i < decodedBinary.length; i++) {
+              utf8Bytes[i] = decodedBinary.charCodeAt(i);
+            }
+            const jsonStr = new TextDecoder().decode(utf8Bytes);
+            const data = JSON.parse(jsonStr);
+
+            if (data && data.addresses && Array.isArray(data.addresses)) {
+              setAddresses(data.addresses);
+              if (data.options) {
+                setOptions(prev => ({ ...prev, ...data.options }));
+              }
+              if (data.aiCustomPrompt) {
+                setAiCustomPrompt(data.aiCustomPrompt);
+              }
+              
+              setApiWarning(`Sucesso: Rota compartilhada "${data.name || 'Sem nome'}" carregada! Iniciando otimização...`);
+              
+              // Automatically optimize after state updates
+              setTimeout(() => {
+                runOptimization(data.addresses);
+              }, 1200);
+            }
+          } catch (err) {
+            console.error("Erro ao decodificar link de rota compartilhada:", err);
+            setApiWarning("Erro: O link de rota compartilhada está corrompido ou é inválido.");
+          }
+        });
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleStartSimulation = async () => {
     setIsSimulating(true);
     if (routeResult) {
@@ -658,14 +1104,26 @@ export default function VoieExpressApp() {
   };
 
   const renderSuggestionsDropdown = (idx: number) => {
-    if (!showSuggestions || activeSuggestionIdx !== idx) return null;
+    if (!showSuggestions || activeSuggestionIdx !== idx || suggestions.length === 0) return null;
+    
+    // Safety deduplication by normalized label
+    const uniqueSuggestions: any[] = [];
+    const seen = new Set<string>();
+    for (const item of suggestions) {
+      const key = (item.label || item.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueSuggestions.push(item);
+      }
+    }
+
     return (
       <div 
-        className="absolute left-0 right-0 z-[5000] mt-1 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[300px] flex flex-col w-full"
+        className="autocomplete-container absolute left-0 right-0 z-[5000] mt-1 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[300px] flex flex-col w-full"
       >
         <div className="overflow-y-auto custom-scrollbar flex-1">
-          {suggestions.length > 0 ? (
-            suggestions.map((s, sIdx) => (
+          {uniqueSuggestions.length > 0 ? (
+            uniqueSuggestions.map((s, sIdx) => (
               <button
                 key={sIdx}
                 type="button"
@@ -677,7 +1135,7 @@ export default function VoieExpressApp() {
                     // IMMEDIATELY BLUR to prevent native mobile horizontal scroll bug
                     // when setting a VERY long address text value.
                     try {
-                      inputRefs.current[idx]?.blur();
+                      (document.activeElement as HTMLElement)?.blur();
                     } catch(e) {}
 
                     const updatedAddresses = [...addresses];
@@ -719,7 +1177,8 @@ export default function VoieExpressApp() {
                         window.scrollTo({ left: 0, top: 0, behavior: 'instant' });
 
                         if (idx + 1 < updatedAddresses.length) {
-                          inputRefs.current[idx + 1]?.focus({ preventScroll: true });
+                          const nextInput = document.querySelectorAll('input[data-autocomplete]')[idx + 1] as HTMLElement;
+                          nextInput?.focus({ preventScroll: true });
                         }
                       } catch (e) {}
                     }, 10);
@@ -806,92 +1265,178 @@ export default function VoieExpressApp() {
         </div>
       )}
 
-      {/* Dynamic Floating Menu Ball Navigation System - Unified for Desktop & Mobile */}
-      <div className="fixed top-6 left-6 z-[5000] flex flex-col items-start">
-        {/* The Menu Ball itself */}
-        <motion.button
-          onClick={() => setIsMenuBallOpen(!isMenuBallOpen)}
-          className="w-16 h-16 rounded-full bg-slate-900/95 border-2 border-tech/80 text-[#D1A054] hover:text-white shadow-[0_0_25px_rgba(209,160,84,0.3)] hover:shadow-[0_0_35px_rgba(209,160,84,0.5)] flex flex-col items-center justify-center cursor-pointer select-none transition-all duration-300 hover:scale-105 active:scale-95 group relative overflow-hidden"
-          whileTap={{ scale: 0.92 }}
-        >
-          {/* Animated Background ripple effect */}
-          <div className="absolute inset-0 bg-tech/5 group-hover:bg-tech/10 transition-colors" />
-          <motion.div 
-            className="font-mono text-[9px] font-black tracking-widest leading-none z-10 flex flex-col items-center justify-center gap-1"
-            animate={{ rotate: isMenuBallOpen ? 180 : 0 }}
-            transition={{ type: "spring", stiffness: 200, damping: 15 }}
+      {/* Real-time GPS vs Departure Address Mismatch Global Notification Banner */}
+      <AnimatePresence>
+        {isMismatchActive && locationMismatch && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[9000] w-[92%] max-w-lg bg-slate-950/95 backdrop-blur-2xl border-2 border-amber-500/70 text-white rounded-2xl p-4 shadow-[0_15px_50px_rgba(245,158,11,0.4)] flex flex-col gap-3"
           >
-            {isMenuBallOpen ? (
-              <X className="w-5 h-5 text-tech" />
-            ) : (
-              <>
-                <Menu className="w-4 h-4 text-tech group-hover:scale-110 transition-transform" />
-                <span className="text-[8px] tracking-widest text-[#D1A054]">MENU</span>
-              </>
-            )}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 shrink-0 mt-0.5">
+                  <Navigation className="w-5 h-5 animate-bounce text-amber-400" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                    ⚠️ Ponto de Partida Diferente do seu GPS (~{locationMismatch.kmStr})
+                  </h4>
+                  <p className="text-[11px] text-amber-100/90 mt-1 leading-snug">
+                    Você inseriu &quot;{addresses[0]}&quot;, mas seu GPS indica que você está em outro local. Deseja usar sua localização em tempo real ou integrar um Ponto de Coleta (Shopee / Temu / Motoboy)?
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLocationMismatchDismissed(addresses[0])}
+                className="text-slate-400 hover:text-white font-bold p-1 rounded-lg transition-colors cursor-pointer"
+                title="Ignorar aviso"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-amber-500/30">
+              <button
+                type="button"
+                onClick={handleUseCurrentGpsAsOrigin}
+                className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+              >
+                <Navigation className="w-3.5 h-3.5 fill-current" />
+                Usar GPS Atual em Tempo Real
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPickupHubModal(true)}
+                className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
+                Ponto de Coleta (Hub)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLocationMismatchDismissed(addresses[0])}
+                className="px-2.5 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-900 border border-slate-700 text-slate-300 font-medium text-xs transition-all cursor-pointer"
+              >
+                Manter Partida Digitada
+              </button>
+            </div>
           </motion.div>
-        </motion.button>
+        )}
+      </AnimatePresence>
 
-        {/* Expanded Rectangular Tabs container */}
-        <AnimatePresence>
-          {isMenuBallOpen && (
-            <motion.div
-              initial="collapsed"
-              animate="expanded"
-              exit="collapsed"
-              variants={{
-                expanded: { transition: { staggerChildren: 0.08 } },
-                collapsed: { transition: { staggerChildren: 0.04, staggerDirection: -1 } }
-              }}
-              className="flex flex-col gap-3 mt-4 w-56 p-1.5 bg-slate-950/80 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] z-[2005]"
+      {/* Dynamic Floating Menu Ball Navigation System - Unified for Desktop & Mobile */}
+      <AnimatePresence>
+        {showAppContent && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="fixed top-6 left-6 z-[5000] flex flex-col items-start"
+          >
+            {/* The Menu Ball itself */}
+            <motion.button
+              onClick={() => setIsMenuBallOpen(!isMenuBallOpen)}
+              className="w-16 h-16 rounded-full bg-slate-900/95 border-2 border-tech/80 text-[#D1A054] hover:text-white shadow-[0_0_25px_rgba(209,160,84,0.3)] hover:shadow-[0_0_35px_rgba(209,160,84,0.5)] flex flex-col items-center justify-center cursor-pointer select-none transition-all duration-300 hover:scale-105 active:scale-95 group relative overflow-hidden"
+              whileTap={{ scale: 0.92 }}
             >
-              {[
-                { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
-                ...(routeResult ? [
-                  { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
-                ] : []),
-                { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
-                { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
-              ].map((tab) => {
-                const isActive = currentScreen === tab.id;
-                const Icon = tab.icon;
+              {/* Animated Background ripple effect */}
+              <div className="absolute inset-0 bg-tech/5 group-hover:bg-tech/10 transition-colors" />
+              <motion.div 
+                className="font-mono text-[9px] font-black tracking-widest leading-none z-10 flex flex-col items-center justify-center gap-1"
+                animate={{ rotate: isMenuBallOpen ? 180 : 0 }}
+                transition={{ type: "spring", stiffness: 200, damping: 15 }}
+              >
+                {isMenuBallOpen ? (
+                  <X className="w-5 h-5 text-tech" />
+                ) : (
+                  <>
+                    <Menu className="w-4 h-4 text-tech group-hover:scale-110 transition-transform" />
+                    <span className="text-[8px] tracking-widest text-[#D1A054]">MENU</span>
+                  </>
+                )}
+              </motion.div>
+            </motion.button>
 
-                return (
-                  <motion.button
-                    key={tab.id}
-                    onClick={() => {
-                      setCurrentScreen(tab.id as any);
-                      setIsMenuBallOpen(false);
-                    }}
-                    variants={{
-                      collapsed: { x: -30, opacity: 0, scale: 0.95 },
-                      expanded: { x: 0, opacity: 1, scale: 1 }
-                    }}
-                    transition={{ type: "spring", stiffness: 350, damping: 25 }}
-                    className={`w-full p-3 border text-left flex items-center gap-3 transition-all cursor-pointer relative group ${
-                      isActive 
-                        ? 'bg-tech text-slate-950 border-tech shadow-[0_0_20px_rgba(209,160,84,0.25)] font-black' 
-                        : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-300 hover:text-white hover:border-tech/40'
-                    }`}
-                  >
-                    <div className={`p-2 rounded-lg ${isActive ? 'bg-slate-950/10' : 'bg-slate-950/50 group-hover:bg-tech/10 group-hover:text-tech transition-colors'}`}>
-                      <Icon className="w-5 h-5 shrink-0" />
-                    </div>
-                    <div className="flex flex-col min-w-0">
-                      <span className={`text-[11px] uppercase tracking-wider font-extrabold leading-none ${isActive ? 'text-slate-950' : 'text-slate-200'}`}>
-                        {tab.label}
-                      </span>
-                      <span className={`text-[8.5px] truncate mt-0.5 font-medium ${isActive ? 'text-slate-900/70' : 'text-slate-500 group-hover:text-slate-400'}`}>
-                        {tab.desc}
-                      </span>
-                    </div>
-                  </motion.button>
-                );
-              })}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            {/* Expanded Rectangular Tabs container */}
+            <AnimatePresence>
+              {isMenuBallOpen && (
+                <motion.div
+                  initial="collapsed"
+                  animate="expanded"
+                  exit="collapsed"
+                  variants={{
+                    expanded: { transition: { staggerChildren: 0.08 } },
+                    collapsed: { transition: { staggerChildren: 0.04, staggerDirection: -1 } }
+                  }}
+                  className="flex flex-col gap-3 mt-4 w-56 p-1.5 bg-slate-950/80 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] z-[2005]"
+                >
+                  {[
+                    { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
+                    ...(routeResult ? [
+                      { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
+                    ] : []),
+                    { id: 'coleta', label: 'Pontos de Coleta', icon: ShoppingBag, desc: 'Hubs Temu, Shopee, Meli, Motoboy' },
+                    { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
+                    { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
+                    { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
+                  ].map((tab) => {
+                    const isActive = tab.id === 'tutorial' ? showDemoAssistant && !demoMinimized : currentScreen === tab.id;
+                    const Icon = tab.icon;
+
+                    return (
+                      <motion.button
+                        key={tab.id}
+                        onClick={() => {
+                          if (tab.id === 'coleta') {
+                            setShowPickupHubModal(true);
+                            setIsMenuBallOpen(false);
+                          } else if (tab.id === 'tutorial') {
+                            setShowDemoAssistant(true);
+                            setDemoStep(0);
+                            setDemoMinimized(false);
+                            setIsMenuBallOpen(false);
+                            setCurrentScreen('home');
+                          } else {
+                            setCurrentScreen(tab.id as any);
+                            setIsMenuBallOpen(false);
+                          }
+                        }}
+                        variants={{
+                          collapsed: { x: -30, opacity: 0, scale: 0.95 },
+                          expanded: { x: 0, opacity: 1, scale: 1 }
+                        }}
+                        transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                        className={`w-full p-3 border text-left flex items-center gap-3 transition-all cursor-pointer relative group ${
+                          isActive 
+                            ? 'bg-tech text-slate-950 border-tech shadow-[0_0_20px_rgba(209,160,84,0.25)] font-black' 
+                            : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-300 hover:text-white hover:border-tech/40'
+                        }`}
+                      >
+                        <div className={`p-2 rounded-lg ${isActive ? 'bg-slate-950/10' : 'bg-slate-950/50 group-hover:bg-tech/10 group-hover:text-tech transition-colors'}`}>
+                          <Icon className="w-5 h-5 shrink-0" />
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className={`text-[11px] uppercase tracking-wider font-extrabold leading-none ${isActive ? 'text-slate-950' : 'text-slate-200'}`}>
+                            {tab.label}
+                          </span>
+                          <span className={`text-[8.5px] truncate mt-0.5 font-medium ${isActive ? 'text-slate-900/70' : 'text-slate-500 group-hover:text-slate-400'}`}>
+                            {tab.desc}
+                          </span>
+                        </div>
+                      </motion.button>
+                    );
+                  })}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content Area */}
       <main className="flex-1 relative h-full w-full overflow-hidden">
@@ -905,34 +1450,47 @@ export default function VoieExpressApp() {
               transition={{ duration: 0.6, type: 'spring', stiffness: 100, damping: 20 }}
               className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-20 pb-16' : 'py-12'}`}
             >
-              <div className="w-full flex-shrink-0 flex flex-col items-center justify-center mb-4 sm:mb-8 md:mb-12 relative min-h-[min(90vw,400px)] md:min-h-[500px] overflow-visible">
+              {/* Hero Logo Animation Section */}
+              <motion.div 
+                layout="position"
+                transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                className={`w-full flex-shrink-0 flex flex-col items-center justify-center relative overflow-visible ${!showAppContent ? 'min-h-[82vh] sm:min-h-[88vh] my-auto' : 'min-h-[340px] md:min-h-[480px] mb-4 sm:mb-8 md:mb-12'}`}
+              >
                 <AnimatePresence>
                   {showPlanet && (
                     <motion.div 
                       className="absolute inset-0 flex items-center justify-center -z-10 opacity-60 mix-blend-screen pointer-events-none"
                       initial={{ opacity: 0, scale: 0.8, rotate: -10 }}
                       animate={{ opacity: 0.6, scale: 1, rotate: 0 }}
-                      transition={{ duration: 1.5, ease: "easeOut" }}
+                      transition={{ duration: 1.0, ease: [0.16, 1, 0.3, 1] }}
                     >
                       <RotatingEarth width={600} height={600} className="w-full max-w-[450px] md:max-w-[600px] absolute" />
                     </motion.div>
                   )}
                 </AnimatePresence>
                 
-                <h1 className="font-bold font-display text-center flex flex-col items-center justify-center leading-none relative z-10 w-full px-1.5 sm:px-4 py-4 sm:py-8">
+                <h1 
+                  className="font-bold font-display text-center flex flex-col items-center justify-center leading-none relative z-10 w-full px-1.5 sm:px-4 py-4 sm:py-8 cursor-pointer" 
+                  onClick={triggerImmediateReveal}
+                >
                   <div className="flex flex-col items-center w-full max-w-full px-1 sm:px-2">
                     <div className="relative w-[90vw] max-w-[400px] sm:max-w-[500px] md:max-w-[650px] lg:max-w-[800px] xl:max-w-[950px] mx-auto aspect-square @container">
                       <HarpiaTextEffect 
                         speed={1.4} 
                         className="w-full h-auto text-white drop-shadow-[0_0_15px_rgba(209,160,84,0.4)] z-10" 
                         onAnimationComplete={() => {
-                          setLogoDrawn(true);
-                          setTimeout(() => setShowPlanet(true), 800);
+                          // Step 1: Reveal Slogan & Globe while centered
+                          setShowSlogan(true);
+                          setShowPlanet(true);
+                          // Step 2: Delay 1.5s (1500ms) before shifting layout & revealing menus/app options
+                          setTimeout(() => {
+                            setShowAppContent(true);
+                          }, 1500);
                         }} 
                       />
                       
                       <AnimatePresence>
-                        {logoDrawn && (
+                        {showSlogan && (
                           <motion.div 
                             className="absolute z-20 text-center pointer-events-none"
                             style={{ 
@@ -942,7 +1500,7 @@ export default function VoieExpressApp() {
                             }}
                             initial={{ opacity: 0, scale: 0.95, y: -5 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
-                            transition={{ duration: 0.8, ease: "easeOut" }}
+                            transition={{ duration: 0.6, ease: "easeOut" }}
                           >
                             <p 
                               className="font-medium text-[#D1A054] uppercase text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] leading-none whitespace-nowrap" 
@@ -959,9 +1517,29 @@ export default function VoieExpressApp() {
                     </div>
                   </div>
                 </h1>
-              </div>
 
-              <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12">
+                {!showAppContent && (
+                  <motion.button
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 0.8, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                    onClick={triggerImmediateReveal}
+                    className="mt-2 px-4 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400 hover:text-tech transition-colors cursor-pointer font-mono tracking-wider"
+                  >
+                    Clique aqui ou aguarde para ver as opções
+                  </motion.button>
+                )}
+              </motion.div>
+
+              {/* Functional App Options & Route Grid - Revealed after Logo Animation */}
+              <AnimatePresence>
+                {showAppContent && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 40 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                    className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12"
+                  >
                 {/* Left Column: Itinerary inputs (Spans 7 columns on desktop) */}
                 <div className="lg:col-span-7 glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
@@ -1021,12 +1599,50 @@ export default function VoieExpressApp() {
                         <div className="relative">
                           <input
                             ref={el => { inputRefs.current[0] = el; }}
+                            data-autocomplete="true"
                             value={addresses[0] || ''}
-                            onChange={(e) => updateAddress(0, e.target.value)}
-                            onFocus={() => setActiveSuggestionIdx(0)}
-                            onBlur={() => setTimeout(() => {
-                              if (activeSuggestionIdx === 0) setShowSuggestions(false);
-                            }, 200)}
+                            onChange={(e) => {
+                              updateAddress(0, e.target.value);
+                              setActiveSuggestionIdx(0);
+                              if (e.target.value.trim().length >= 2) {
+                                setShowSuggestions(true);
+                              } else {
+                                setShowSuggestions(false);
+                                setSuggestions([]);
+                              }
+                            }}
+                            onFocus={() => {
+                              setActiveSuggestionIdx(0);
+                              if ((addresses[0] || '').trim().length >= 2) {
+                                setShowSuggestions(true);
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (showSuggestions && suggestions.length > 0) {
+                                  const top = suggestions[0];
+                                  const updated = [...addresses];
+                                  updated[0] = top.label;
+                                  setAddresses(updated);
+                                }
+                                setShowSuggestions(false);
+                                setSuggestions([]);
+                                setActiveSuggestionIdx(null);
+                                (e.target as HTMLElement).blur();
+                              } else if (e.key === 'Escape' || e.key === 'Tab') {
+                                setShowSuggestions(false);
+                                setSuggestions([]);
+                                setActiveSuggestionIdx(null);
+                              }
+                            }}
+                            onBlur={(e) => {
+                              if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('.autocomplete-container')) {
+                                setShowSuggestions(false);
+                                setSuggestions([]);
+                                setActiveSuggestionIdx(null);
+                              }
+                            }}
                             placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
                             className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10 hover:border-slate-700 font-sans"
                           />
@@ -1048,6 +1664,93 @@ export default function VoieExpressApp() {
                           </button>
                           {renderSuggestionsDropdown(0)}
                         </div>
+
+                        {/* Quick Action Toolbar for Departure Point */}
+                        <div className="flex items-center gap-2 flex-wrap pt-1.5 pb-1">
+                          <button
+                            type="button"
+                            onClick={handleUseCurrentGpsAsOrigin}
+                            disabled={isLocatingGps}
+                            className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-tech hover:border-tech/40 text-[10.5px] font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Definir ponto de partida com base no GPS em tempo real e ponto de referência mais próximo"
+                          >
+                            <Navigation className={`w-3 h-3 text-tech shrink-0 ${isLocatingGps ? 'animate-spin' : ''}`} />
+                            {isLocatingGps ? 'Estimando Ponto de Referência...' : 'Usar GPS Tempo Real'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setShowPickupHubModal(true)}
+                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 hover:bg-amber-500/20 text-[10.5px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                            title="Integrar Hubs de Coleta Temu, Shopee, Mercado Livre, AliExpress ou Motoboys"
+                          >
+                            <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
+                            Integrar Ponto de Coleta (E-Commerce / Motoboy)
+                          </button>
+                        </div>
+
+                        {/* Location Mismatch Warning Banner */}
+                        {isMismatchActive && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: -5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mt-2.5 p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/30 shadow-lg flex flex-col gap-2.5"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
+                                  <MapPin className="w-4 h-4 animate-bounce" />
+                                </div>
+                                <div>
+                                  <h4 className="text-[11px] font-black text-amber-400 uppercase tracking-wider">
+                                    Você não está neste ponto de partida (~{locationMismatch?.kmStr} do seu GPS)
+                                  </h4>
+                                  <p className="text-[10px] text-slate-300 mt-0.5 leading-snug">
+                                    Seu GPS atual indica que você está em outro endereço. Deseja definir sua localização real como partida ou integrar um Ponto de Coleta (Hub Temu/Shopee/Meli)?
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setLocationMismatchDismissed(addresses[0])}
+                                className="text-slate-500 hover:text-white text-xs font-bold px-1"
+                                title="Ignorar aviso"
+                              >
+                                ✕
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-wrap pt-1">
+                              <button
+                                type="button"
+                                onClick={handleUseCurrentGpsAsOrigin}
+                                disabled={isLocatingGps}
+                                className="px-3 py-1.5 rounded-xl bg-tech text-slate-950 font-black text-[10px] hover:bg-amber-300 transition-colors flex items-center gap-1 cursor-pointer shadow-md disabled:opacity-50"
+                              >
+                                <Navigation className={`w-3 h-3 ${isLocatingGps ? 'animate-spin' : ''}`} />
+                                {isLocatingGps ? 'Estimando GPS...' : 'Usar GPS Real como Partida'}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setShowPickupHubModal(true)}
+                                className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px] hover:bg-amber-500/30 transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <ShoppingBag className="w-3 h-3" />
+                                Integrar Hub de Coleta
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setLocationMismatchDismissed(addresses[0])}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 font-medium text-[10px] hover:text-white transition-colors cursor-pointer"
+                              >
+                                Manter Endereço Digitado
+                              </button>
+                            </div>
+                          </motion.div>
+                        )}
+
                         {activeNFeSearchIdx === 0 && (
                           <div className="mt-3 animate-fadeIn">
                             <NFeSearch 
@@ -1132,12 +1835,50 @@ export default function VoieExpressApp() {
                                   <div className="flex-1 min-w-0 relative">
                                     <input
                                       ref={el => { inputRefs.current[realIdx] = el; }}
+                                      data-autocomplete="true"
                                       value={addr}
-                                      onChange={(e) => updateAddress(realIdx, e.target.value)}
-                                      onFocus={() => setActiveSuggestionIdx(realIdx)}
-                                      onBlur={() => setTimeout(() => {
-                                        if (activeSuggestionIdx === realIdx) setShowSuggestions(false);
-                                      }, 200)}
+                                      onChange={(e) => {
+                                        updateAddress(realIdx, e.target.value);
+                                        setActiveSuggestionIdx(realIdx);
+                                        if (e.target.value.trim().length >= 2) {
+                                          setShowSuggestions(true);
+                                        } else {
+                                          setShowSuggestions(false);
+                                          setSuggestions([]);
+                                        }
+                                      }}
+                                      onFocus={() => {
+                                        setActiveSuggestionIdx(realIdx);
+                                        if ((addr || '').trim().length >= 2) {
+                                          setShowSuggestions(true);
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          if (showSuggestions && suggestions.length > 0) {
+                                            const top = suggestions[0];
+                                            const updated = [...addresses];
+                                            updated[realIdx] = top.label;
+                                            setAddresses(updated);
+                                          }
+                                          setShowSuggestions(false);
+                                          setSuggestions([]);
+                                          setActiveSuggestionIdx(null);
+                                          (e.target as HTMLElement).blur();
+                                        } else if (e.key === 'Escape' || e.key === 'Tab') {
+                                          setShowSuggestions(false);
+                                          setSuggestions([]);
+                                          setActiveSuggestionIdx(null);
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('.autocomplete-container')) {
+                                          setShowSuggestions(false);
+                                          setSuggestions([]);
+                                          setActiveSuggestionIdx(null);
+                                        }
+                                      }}
                                       placeholder="Empresa, hospital, praça ou rua..."
                                       className="w-full bg-slate-900/50 border border-slate-800/80 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10 hover:border-slate-700/60 font-sans"
                                     />
@@ -1278,12 +2019,52 @@ export default function VoieExpressApp() {
                           <div className="relative">
                             <input
                               ref={el => { inputRefs.current[addresses.length - 1] = el; }}
+                              data-autocomplete="true"
                               value={addresses[addresses.length - 1] || ''}
-                              onChange={(e) => updateAddress(addresses.length - 1, e.target.value)}
-                              onFocus={() => setActiveSuggestionIdx(addresses.length - 1)}
-                              onBlur={() => setTimeout(() => {
-                                  if (activeSuggestionIdx === addresses.length - 1) setShowSuggestions(false);
-                              }, 200)}
+                              onChange={(e) => {
+                                updateAddress(addresses.length - 1, e.target.value);
+                                setActiveSuggestionIdx(addresses.length - 1);
+                                if (e.target.value.trim().length >= 2) {
+                                  setShowSuggestions(true);
+                                } else {
+                                  setShowSuggestions(false);
+                                  setSuggestions([]);
+                                }
+                              }}
+                              onFocus={() => {
+                                const lastIdx = addresses.length - 1;
+                                setActiveSuggestionIdx(lastIdx);
+                                if ((addresses[lastIdx] || '').trim().length >= 2) {
+                                  setShowSuggestions(true);
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                const lastIdx = addresses.length - 1;
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  if (showSuggestions && suggestions.length > 0) {
+                                    const top = suggestions[0];
+                                    const updated = [...addresses];
+                                    updated[lastIdx] = top.label;
+                                    setAddresses(updated);
+                                  }
+                                  setShowSuggestions(false);
+                                  setSuggestions([]);
+                                  setActiveSuggestionIdx(null);
+                                  (e.target as HTMLElement).blur();
+                                } else if (e.key === 'Escape' || e.key === 'Tab') {
+                                  setShowSuggestions(false);
+                                  setSuggestions([]);
+                                  setActiveSuggestionIdx(null);
+                                }
+                              }}
+                              onBlur={(e) => {
+                                if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('.autocomplete-container')) {
+                                  setShowSuggestions(false);
+                                  setSuggestions([]);
+                                  setActiveSuggestionIdx(null);
+                                }
+                              }}
                               placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
                               className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10 hover:border-slate-705 font-sans"
                             />
@@ -1435,6 +2216,57 @@ export default function VoieExpressApp() {
                         </button>
                       ))}
                     </div>
+
+                    {/* Subpanel de Rota Fluvial & Embarcação quando 'boat' está ativo */}
+                    {options.vehicle === 'boat' && (
+                      <div className="mt-4 pt-4 border-t border-slate-800/60 animate-fadeIn space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                            <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                            Tipo de Embarcação & Calado
+                          </label>
+                          <span className="text-[9px] font-bold text-slate-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded-full">
+                            Matriz Fluvial Amazônica
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { id: 'express_lancha', label: 'Lancha Express', desc: '48 km/h • Calado 0.8m', icon: Zap },
+                            { id: 'voadeira', label: 'Voadeira Apoio', desc: '36 km/h • Calado 0.4m', icon: Navigation },
+                            { id: 'regional_gaiola', label: 'Barco Gaiola', desc: '18 km/h • Calado 2.2m', icon: Compass },
+                            { id: 'balsa_heavy', label: 'Balsa / Carga', desc: '14 km/h • Calado 3.5m', icon: Layers },
+                          ].map(vessel => (
+                            <button
+                              key={vessel.id}
+                              type="button"
+                              onClick={() => setOptions({ ...options, vesselType: vessel.id as any })}
+                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                                (options.vesselType || 'express_lancha') === vessel.id
+                                  ? 'bg-cyan-950/40 border-cyan-500/80 text-white shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-750 hover:text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-cyan-400' : 'text-slate-500' }`} />
+                                <span className="text-[10px] font-black uppercase tracking-tight">{vessel.label}</span>
+                              </div>
+                              <p className="text-[8.5px] text-slate-400 font-mono leading-none">{vessel.desc}</p>
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="p-3 bg-cyan-950/20 border border-cyan-900/40 rounded-2xl text-[10.5px] text-slate-300 space-y-1 font-sans">
+                          <p className="font-bold text-cyan-300 flex items-center gap-1.5 text-[11px]">
+                            <Waves className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                            Diferencial de Hidrovia Ativo:
+                          </p>
+                          <p className="text-slate-400 text-[10px] leading-relaxed">
+                            A rota calcula automaticamente a velocidade da correnteza a favor ou contra o fluxo do rio, profundidade dos canais (talvegue), risco de banzeiro por ventos e cota hidrológica da bacia.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Bento Box 2: Route optimization priority */}
@@ -1499,6 +2331,147 @@ export default function VoieExpressApp() {
                     />
                   </div>
 
+                  {/* Bento Box 5: Future Routing & Scheduling */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <Calendar className="w-4 h-4 text-tech shrink-0" />
+                      <span>
+                        Agendar Rota para o Futuro
+                        <InfoTooltip text="Programe e salve rotas para dias ou horários futuros no sistema. Você poderá recarregá-las a qualquer momento." />
+                      </span>
+                    </h3>
+                    <p className="text-slate-400 text-xs mb-4 leading-relaxed font-sans">
+                      Preencha os detalhes abaixo para salvar a lista de endereços atual para uso futuro.
+                    </p>
+                    
+                    <div className="space-y-3 font-sans">
+                      <div>
+                        <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Nome da Rota</label>
+                        <input
+                          type="text"
+                          value={scheduledName}
+                          onChange={(e) => setScheduledName(e.target.value)}
+                          placeholder="Ex: Rota Zona Sul - Manhã"
+                          className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Data Agendada</label>
+                          <input
+                            type="date"
+                            value={scheduledDate}
+                            onChange={(e) => setScheduledDate(e.target.value)}
+                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Horário de Saída</label>
+                          <input
+                            type="time"
+                            value={scheduledTime}
+                            onChange={(e) => setScheduledTime(e.target.value)}
+                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                          />
+                        </div>
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={handleSaveFutureRoute}
+                        disabled={addresses.filter(a => a.trim().length > 3).length < 2}
+                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-tech/40 text-tech disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950/20 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Salvar e Agendar Rota
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Bento Box 6: Saved & Shared Routes List */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <RouteIcon className="w-4 h-4 text-[#D1A054] shrink-0" />
+                      <span>
+                        Rotas Salvas e Agendadas
+                        <InfoTooltip text="Todas as suas rotas salvas ou agendadas no sistema. Carregue-as no planejador com um clique ou compartilhe-as via link." />
+                      </span>
+                    </h3>
+                    
+                    {savedRoutes.length === 0 ? (
+                      <div className="text-center py-6 border border-dashed border-slate-850 rounded-2xl bg-slate-950/20 font-sans">
+                        <RouteIcon className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                        <p className="text-xs text-slate-500 font-bold">Nenhuma rota programada</p>
+                        <p className="text-[10px] text-slate-600 mt-0.5 max-w-[200px] mx-auto leading-relaxed">As rotas que você planejar e agendar aparecerão aqui.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar font-sans pr-1">
+                        {savedRoutes.map((route: any) => {
+                          const isCopied = copiedRouteId === route.id;
+                          return (
+                            <div 
+                              key={route.id} 
+                              className="p-3 rounded-xl bg-slate-950/40 border border-slate-900/80 hover:border-slate-800 transition-all space-y-2"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <h4 className="text-xs font-bold text-slate-150 truncate leading-tight" title={route.name || 'Rota Sem Nome'}>
+                                    {route.name || 'Rota Sem Nome'}
+                                  </h4>
+                                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                    <span className="text-[9px] font-mono font-bold text-tech bg-tech/10 border border-tech/20 px-1 py-0.2 rounded leading-none shrink-0">
+                                      {route.addresses.length} Paradas
+                                    </span>
+                                    {route.scheduledDate && (
+                                      <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 leading-none">
+                                        <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                                        {new Date(route.scheduledDate + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                                        {route.scheduledTime ? ` às ${route.scheduledTime}` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSavedRoute(route.id)}
+                                  className="text-slate-600 hover:text-red-400 p-1 rounded hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                                  title="Excluir Rota"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              
+                              <div className="flex gap-2 pt-1 border-t border-slate-900/50">
+                                <button
+                                  type="button"
+                                  onClick={() => handleLoadSavedRoute(route)}
+                                  className="flex-1 py-1.5 bg-tech/10 border border-tech/20 hover:bg-tech/20 hover:border-tech/40 text-tech text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center cursor-pointer"
+                                >
+                                  Carregar
+                                </button>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => handleShareRoute(route)}
+                                  className={`flex-1 py-1.5 border text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer ${
+                                    isCopied 
+                                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
+                                      : 'bg-indigo-500/10 border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/40 text-indigo-400'
+                                  }`}
+                                >
+                                  <Share2 className="w-3 h-3 shrink-0" />
+                                  {isCopied ? 'Copiado!' : 'Compartilhar'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
                   {/* Ultimate Execution Button */}
                   {!hasTwoOrMoreAddresses ? (
                     <button 
@@ -1539,9 +2512,11 @@ export default function VoieExpressApp() {
                     </>
                   )}
                 </div>
-              </div>
-            </motion.div>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
 
           {currentScreen === 'loading' && (
             <motion.div
@@ -1606,6 +2581,7 @@ export default function VoieExpressApp() {
                     hybridAnalysis={routeResult.hybridAnalysis}
                     onNavigate={() => setCurrentScreen('navigation')}
                     isLoading={false}
+                    onShowInvoice={handleShowInvoice}
                     isSimulating={isSimulating}
                     onStartSimulation={handleStartSimulation}
                     onStopSimulation={handleStopSimulation}
@@ -1634,15 +2610,48 @@ export default function VoieExpressApp() {
                  
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
-                   {routeResult.sequence[navIndex].weather?.main?.temp > 30 && (
+                   {routeResult.sequence[navIndex]?.amazonasHydrology && (
+                     <motion.div 
+                       initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
+                       className="absolute top-20 right-4 z-[1000] bg-slate-950/90 backdrop-blur-md p-3.5 rounded-2xl border border-cyan-500/40 shadow-[0_10px_30px_rgba(6,182,212,0.2)] max-w-[280px] font-sans text-white space-y-2"
+                     >
+                       <div className="flex items-center justify-between border-b border-cyan-900/40 pb-1.5">
+                         <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold text-[10px] uppercase tracking-wider">
+                           <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                           <span>Monitor Fluvial Amazônico</span>
+                         </div>
+                         <span className="text-[9px] bg-cyan-950 text-cyan-300 font-bold px-1.5 py-0.5 rounded-md border border-cyan-800/40">
+                           {routeResult.sequence[navIndex].amazonasHydrology.season === 'cheia' ? 'Cheia Plena' : 'Vazante'}
+                         </span>
+                       </div>
+
+                       <div className="grid grid-cols-2 gap-1.5 text-[9.5px]">
+                         <div className="bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
+                           <span className="text-slate-400 text-[8px] uppercase block">Cota Hidrológica</span>
+                           <span className="font-mono font-bold text-cyan-300">{routeResult.sequence[navIndex].amazonasHydrology.riverLevelMeters || 26.2} m</span>
+                         </div>
+                         <div className="bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
+                           <span className="text-slate-400 text-[8px] uppercase block">Correnteza</span>
+                           <span className="font-mono font-bold text-cyan-300">{routeResult.sequence[navIndex].amazonasHydrology.currentSpeedKnots || 3.8} nós</span>
+                         </div>
+                       </div>
+
+                       <div className="text-[9.5px] text-slate-300 leading-tight bg-cyan-950/30 p-2 rounded-xl border border-cyan-900/30">
+                         <span className="font-bold text-cyan-300 block mb-0.5">Previsão 24h & Talvegue:</span>
+                         <p className="text-[9px] text-slate-300">{routeResult.sequence[navIndex].amazonasHydrology.forecast24h}</p>
+                       </div>
+                     </motion.div>
+                   )}
+
+                   {routeResult.sequence[navIndex].weather?.main?.temp > 38 && (
                      <motion.div 
                        initial={{ x: 300 }} animate={{ x: 0 }} exit={{ x: 300 }}
-                       className="absolute top-40 right-6 z-[1000] glass p-4 rounded-2xl border-warning/30 flex items-center gap-3"
+                       className="absolute top-48 right-4 z-[1000] glass p-3 rounded-2xl border-amber-500/30 flex items-center gap-2.5 max-w-[260px]"
                      >
-                       <Zap className="w-6 h-6 text-warning" />
+                       <Zap className="w-5 h-5 text-amber-400 shrink-0" />
                        <div>
-                         <p className="text-xs font-bold text-warning uppercase">Calor Extremo</p>
-                         <p className="text-[10px] text-slate-400">Considere hidratar-se</p>
+                         <p className="text-[10px] font-bold text-amber-400 uppercase">Calor Extremo ({Math.round(routeResult.sequence[navIndex].weather?.main?.temp)}°C)</p>
+                         <p className="text-[9px] text-slate-400">Monitore pressão pneumática e hidratação da equipe.</p>
                        </div>
                      </motion.div>
                    )}
@@ -1966,6 +2975,25 @@ export default function VoieExpressApp() {
                              </button>
                           </div>
                         )}
+
+                        {/* Compartilhar Rota Live Action */}
+                        <div className="mt-3 flex items-center gap-2 flex-wrap">
+                          <button 
+                            onClick={() => {
+                              const routeData = {
+                                name: `Rota Otimizada (${routeResult.sequence.length} Paradas)`,
+                                addresses: routeResult.sequence.map((stop: any) => stop.address),
+                                options: options,
+                                aiCustomPrompt: aiCustomPrompt
+                              };
+                              handleShareRoute(routeData);
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-xl uppercase font-black text-[10px] tracking-widest transition-all shadow-md cursor-pointer"
+                          >
+                             <Share2 className="w-3.5 h-3.5 shrink-0" />
+                             Compartilhar Rota Ativa
+                          </button>
+                        </div>
                       </div>
 
                       {/* Right Side Massive Tap-Target Action Buttons (Highly Accessible) */}
@@ -2111,287 +3139,7 @@ export default function VoieExpressApp() {
                </AnimatePresence>
 
                 {/* Preview Invoice Modal */}
-                <AnimatePresence>
-                  {previewInvoice && (
-                    <motion.div 
-                      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                      className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-[2000] flex items-center justify-center p-3 sm:p-6"
-                    >
-                      <motion.div
-                        initial={{ scale: 0.95, opacity: 0, y: 15 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0, y: 15 }}
-                        transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                        className="bg-slate-900 border border-slate-800 shadow-2xl rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-                      >
-                        {/* Header */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/40 gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-tech/10 flex items-center justify-center border border-tech/20 shadow-inner">
-                              <FileText className="w-5 h-5 text-tech" />
-                            </div>
-                            <div>
-                              <h3 className="text-white font-black text-sm uppercase tracking-widest flex items-center gap-2">
-                                Detalhes do Documento Fiscal
-                              </h3>
-                              <p className="text-[10px] text-slate-500 font-mono tracking-wider truncate max-w-xs sm:max-w-md">
-                                {previewInvoice?.chave ? `Chave: ${previewInvoice.chave.replace(/(.{4})/g, '$1 ')}` : 'Documento Carregado Localmente'}
-                              </p>
-                            </div>
-                          </div>
-                          
-                          {/* Top Navigation Tabs inside Modal (only if we have HTML/Structured content) */}
-                          {!previewInvoice?.isImage && previewInvoice?.htmlContent && (
-                            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-850 self-start sm:self-center shrink-0">
-                              <button
-                                onClick={() => setActiveInvoiceTab('danfe')}
-                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-                                  activeInvoiceTab === 'danfe' 
-                                    ? 'bg-tech text-slate-950 shadow-md font-black' 
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                DANFE Oficial (Papel)
-                              </button>
-                              <button
-                                onClick={() => setActiveInvoiceTab('data')}
-                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-                                  activeInvoiceTab === 'data' 
-                                    ? 'bg-tech text-slate-950 shadow-md font-black' 
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                Painel Digital
-                              </button>
-                            </div>
-                          )}
-
-                          <button 
-                            onClick={() => setPreviewInvoice(null)}
-                            className="absolute sm:relative top-4 right-4 sm:top-auto sm:right-auto w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full transition-colors border border-slate-700/40 cursor-pointer"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                        
-                        {/* Main Body */}
-                        <div className="flex-1 bg-slate-950/90 overflow-y-auto p-4 sm:p-6 flex flex-col justify-between gap-5 min-h-[55vh]">
-                          {previewInvoice?.isImage ? (
-                            <div className="flex-1 max-w-full flex items-center justify-center relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-900 p-4">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img 
-                                src={previewInvoice?.url} 
-                                alt="Visualização do Documento" 
-                                className="max-w-full max-h-[55vh] object-contain rounded-xl shadow-2xl"
-                              />
-                            </div>
-                          ) : (
-                            <>
-                              {/* Tab Content: DANFE Clássico */}
-                              {(!previewInvoice?.htmlContent || activeInvoiceTab === 'danfe') ? (
-                                <div className="flex-1 w-full bg-slate-950 border border-slate-900 rounded-2xl overflow-hidden relative shadow-inner">
-                                  {previewInvoice?.htmlContent ? (
-                                    <iframe 
-                                      id="danfe-preview-iframe"
-                                      srcDoc={previewInvoice.htmlContent}
-                                      className="w-full h-[58vh] bg-white border-0"
-                                      title="Visualização da NFe"
-                                    />
-                                  ) : (
-                                    <iframe 
-                                      id="danfe-preview-iframe"
-                                      src={previewInvoice?.url}
-                                      className="w-full h-[58vh] bg-white border-0"
-                                      title="Visualização da NFe"
-                                    />
-                                  )}
-                                </div>
-                              ) : (
-                                /* Tab Content: Painel Digital Premium (APEX design) */
-                                <div className="flex-1 w-full space-y-4 animate-fadeIn text-xs text-slate-200">
-                                  {/* Resumo de Valores e Natureza */}
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Valor Total do Documento</span>
-                                      <span className="text-3xl font-black text-tech tracking-tight leading-none mt-2">
-                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(previewInvoice.fullData?.valor || 0)}
-                                      </span>
-                                    </div>
-                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Peso Bruto Total</span>
-                                      <span className="text-2xl font-black text-white tracking-tight mt-2 flex items-baseline gap-1">
-                                        {previewInvoice.fullData?.peso || 0} <span className="text-xs text-slate-400 font-medium">kg</span>
-                                      </span>
-                                    </div>
-                                    <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Status do Documento</span>
-                                      <div className="mt-2 flex items-center gap-2">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                                        <span className="text-sm font-black uppercase text-emerald-400 tracking-wider">
-                                          {previewInvoice.fullData?.statusNfe || 'Autorizada (SEFAZ)'}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Participantes (Emitente e Destinatário) */}
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {/* Emitente */}
-                                    <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
-                                      <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
-                                        Emitente / Remetente
-                                      </h4>
-                                      <div className="space-y-1">
-                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
-                                        <p className="text-xs font-black text-white">{previewInvoice.fullData?.emitente.nome}</p>
-                                      </div>
-                                      <div className="space-y-1">
-                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">CNPJ / CPF</span>
-                                        <p className="text-xs font-mono text-slate-300">{previewInvoice.fullData?.emitente.cnpj}</p>
-                                      </div>
-                                    </div>
-
-                                    {/* Destinatário */}
-                                    <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
-                                      <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
-                                        Destinatário / Cliente
-                                      </h4>
-                                      <div className="space-y-1">
-                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
-                                        <p className="text-xs font-black text-white">{previewInvoice.fullData?.destinatario.nome}</p>
-                                      </div>
-                                      <div className="space-y-1">
-                                        <span className="text-[9px] uppercase font-bold text-slate-500 block">Endereço de Entrega</span>
-                                        <p className="text-xs text-slate-300 leading-normal">{previewInvoice.fullData?.destinatario.endereco}</p>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Informações de Carga / Descrição */}
-                                  <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl space-y-2">
-                                    <h4 className="text-[10px] uppercase font-black text-slate-400 tracking-widest border-b border-slate-800 pb-1.5">
-                                      Descrição das Mercadorias
-                                    </h4>
-                                    <p className="text-xs font-medium text-slate-300 italic bg-slate-950 p-3 rounded-xl border border-slate-900 leading-relaxed">
-                                      {previewInvoice.fullData?.descricao || 'Mercadorias Gerais'}
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          )}
-
-                          {/* Footer Actions Panel */}
-                          <div className="border-t border-slate-800/80 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-slate-950/20 p-2 rounded-2xl">
-                            {/* Left Meta Info */}
-                            <div className="text-[10px] text-slate-500 flex items-center gap-2">
-                              <span className="w-2 h-2 rounded-full bg-tech/50" />
-                              Visualizador Multiplataforma Harpia v2.5
-                            </div>
-
-                            {/* Action Buttons */}
-                            <div className="flex items-center gap-2.5 w-full sm:w-auto">
-                              {/* Print Button (only for DANFE HTML view) */}
-                              {!previewInvoice?.isImage && previewInvoice?.htmlContent && activeInvoiceTab === 'danfe' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
-                                    if (iframe?.contentWindow) {
-                                      iframe.contentWindow.focus();
-                                      iframe.contentWindow.print();
-                                    }
-                                  }}
-                                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
-                                >
-                                  <Printer className="w-4 h-4" /> Imprimir
-                                </button>
-                              )}
-
-                              {/* XML Download Button */}
-                              {!previewInvoice?.isImage && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    try {
-                                      let xmlStr = "";
-                                      if (previewInvoice.fullData) {
-                                        const d = previewInvoice.fullData;
-                                        xmlStr = `<?xml version="1.0" encoding="UTF-8"?>\n<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">\n  <NFe>\n    <infNFe Id="NFe${d.chaveAcesso}" versao="4.00">\n      <ide>\n        <cUF>${d.chaveAcesso.substring(0, 2)}</cUF>\n        <dhEmi>${d.dataEmissao}</dhEmi>\n      </ide>\n      <emit>\n        <CNPJ>${d.emitente.cnpj.replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.emitente.nome}</xNome>\n      </emit>\n      <dest>\n        <CNPJ>${(d.destinatario.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.destinatario.nome}</xNome>\n        <enderDest>\n          <xLgr>${(d.destinatario.endereco || '').split(',')[0]}</xLgr>\n          <xMun>${d.destinatario.cidade}</xMun>\n          <UF>${d.destinatario.estado}</UF>\n          <CEP>${(d.destinatario.cep || '69000-000')}</CEP>\n        </enderDest>\n      </dest>\n      <det nItem="1">\n        <prod>\n          <xProd>${d.descricao}</xProd>\n        </prod>\n      </det>\n      <total>\n        <ICMSTot>\n          <vNF>${d.valor}</vNF>\n        </ICMSTot>\n      </total>\n      <transp>\n        <vol>\n          <pesoB>${d.peso || 0}</pesoB>\n        </vol>\n      </transp>\n    </infNFe>\n  </NFe>\n</nfeProc>`;
-                                      } else {
-                                        xmlStr = `<?xml version="1.0" encoding="UTF-8"?><nfeProc versao="4.00"><NFe><infNFe Id="NFe${previewInvoice.chave || '0'}" versao="4.00"></infNFe></NFe></nfeProc>`;
-                                      }
-                                      
-                                      const blob = new Blob([xmlStr], { type: 'application/xml' });
-                                      const blobUrl = URL.createObjectURL(blob);
-                                      const link = document.createElement('a');
-                                      link.href = blobUrl;
-                                      link.download = `NFe_${previewInvoice.chave || previewInvoice.filename || 'xml'}.xml`;
-                                      document.body.appendChild(link);
-                                      link.click();
-                                      document.body.removeChild(link);
-                                      URL.revokeObjectURL(blobUrl);
-                                    } catch (err) {
-                                      console.error("Falha ao baixar XML:", err);
-                                    }
-                                  }}
-                                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
-                                >
-                                  <Code className="w-4 h-4 text-tech/80" /> Baixar XML
-                                </button>
-                              )}
-
-                              {/* PDF/Image Download Button */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!previewInvoice.url) return;
-                                  try {
-                                    if (previewInvoice.isImage) {
-                                      const link = document.createElement('a');
-                                      link.href = previewInvoice.url;
-                                      link.download = `${previewInvoice.filename || 'documento'}.png`;
-                                      document.body.appendChild(link);
-                                      link.click();
-                                      document.body.removeChild(link);
-                                      return;
-                                    }
-
-                                    const base64Data = previewInvoice.url.includes(',') ? previewInvoice.url.split(',')[1] : previewInvoice.url;
-                                    const binaryString = window.atob(base64Data);
-                                    const len = binaryString.length;
-                                    const bytes = new Uint8Array(len);
-                                    for (let i = 0; i < len; i++) {
-                                      bytes[i] = binaryString.charCodeAt(i);
-                                    }
-                                    const blob = new Blob([bytes], { type: 'application/pdf' });
-                                    const blobUrl = URL.createObjectURL(blob);
-                                    const link = document.createElement('a');
-                                    link.href = blobUrl;
-                                    link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
-                                    document.body.appendChild(link);
-                                    link.click();
-                                    document.body.removeChild(link);
-                                    URL.revokeObjectURL(blobUrl);
-                                  } catch (err) {
-                                    console.error("Falha ao decodificar e baixar PDF base64. Tentando download normal:", err);
-                                    const link = document.createElement('a');
-                                    link.href = previewInvoice.url;
-                                    link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
-                                    document.body.appendChild(link);
-                                    link.click();
-                                    document.body.removeChild(link);
-                                  }
-                                }}
-                                className="flex-1 sm:flex-none px-6 py-2.5 bg-tech text-slate-950 hover:brightness-110 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_4px_12px_rgba(0,242,255,0.25)]"
-                              >
-                                <Download className="w-4 h-4 text-slate-950" /> Baixar PDF
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {/* Preview Invoice Modal relocated to root level */}
 
                {/* Failure Registration Modal */}
                <AnimatePresence>
@@ -2627,7 +3375,315 @@ export default function VoieExpressApp() {
         </AnimatePresence>
       </main>
 
-      {/* 🔮 ASSISTENTE INTERATIVO DE APRESENTAÇÃO / TUTORIAL DE PITCH */}
+      {/* Universal Preview Invoice Modal (APEX Design & High Accessibility) */}
+      <AnimatePresence>
+        {previewInvoice && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-[9990] flex items-center justify-center p-3 sm:p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 15 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-slate-900 border border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.8)] rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/40 gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-tech/10 flex items-center justify-center border border-tech/20 shadow-inner">
+                    <FileText className="w-5 h-5 text-tech" />
+                  </div>
+                  <div>
+                    <h3 className="text-white font-black text-sm uppercase tracking-widest flex items-center gap-2">
+                      Detalhes do Documento Fiscal
+                    </h3>
+                    <p className="text-[10px] text-slate-500 font-mono tracking-wider truncate max-w-xs sm:max-w-md">
+                      {previewInvoice?.chave ? `Chave: ${previewInvoice?.chave?.replace(/(.{4})/g, '$1 ')}` : 'Documento Carregado Localmente'}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Top Navigation Tabs inside Modal */}
+                {!previewInvoice?.isImage && previewInvoice?.htmlContent && (
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-850 self-start sm:self-center shrink-0">
+                    <button
+                      onClick={() => setActiveInvoiceTab('danfe')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        activeInvoiceTab === 'danfe' 
+                          ? 'bg-tech text-slate-950 shadow-md font-black' 
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      DANFE Oficial
+                    </button>
+                    <button
+                      onClick={() => setActiveInvoiceTab('data')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        activeInvoiceTab === 'data' 
+                          ? 'bg-tech text-slate-950 shadow-md font-black' 
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Painel Digital
+                    </button>
+                  </div>
+                )}
+
+                <button 
+                  onClick={() => setPreviewInvoice(null)}
+                  className="absolute sm:relative top-4 right-4 sm:top-auto sm:right-auto w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full transition-colors border border-slate-700/40 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {/* Main Body */}
+              <div className="flex-1 bg-slate-950/90 overflow-y-auto p-4 sm:p-6 flex flex-col justify-between gap-5 min-h-[55vh]">
+                {previewInvoice?.isImage ? (
+                  <div className="flex-1 max-w-full flex items-center justify-center relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-900 p-4">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img 
+                      src={previewInvoice?.url} 
+                      alt="Visualização do Documento" 
+                      className="max-w-full max-h-[55vh] object-contain rounded-xl shadow-2xl"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    {/* Tab Content: DANFE Clássico */}
+                    {(!previewInvoice?.htmlContent || activeInvoiceTab === 'danfe') ? (
+                      <div className="flex-1 w-full bg-slate-950 border border-slate-900 rounded-2xl overflow-hidden relative shadow-inner">
+                        {previewInvoice?.htmlContent ? (
+                          <iframe 
+                            id="danfe-preview-iframe"
+                            srcDoc={previewInvoice.htmlContent}
+                            className="w-full h-[58vh] bg-white border-0"
+                            title="Visualização da NFe"
+                          />
+                        ) : (
+                          <iframe 
+                            id="danfe-preview-iframe"
+                            src={previewInvoice?.url}
+                            className="w-full h-[58vh] bg-white border-0"
+                            title="Visualização da NFe"
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      /* Tab Content: Painel Digital Premium (APEX design) */
+                      <div className="flex-1 w-full space-y-4 animate-fadeIn text-xs text-slate-200">
+                        {/* Resumo de Valores e Natureza */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Valor Total do Documento</span>
+                            <span className="text-3xl font-black text-tech tracking-tight leading-none mt-2">
+                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(previewInvoice.fullData?.valor || 0)}
+                            </span>
+                          </div>
+                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Peso Bruto Total</span>
+                            <span className="text-2xl font-black text-white tracking-tight mt-2 flex items-baseline gap-1">
+                              {previewInvoice.fullData?.peso || 0} <span className="text-xs text-slate-400 font-medium">kg</span>
+                            </span>
+                          </div>
+                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Status do Documento</span>
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="text-sm font-black uppercase text-emerald-400 tracking-wider">
+                                {previewInvoice.fullData?.statusNfe || 'Autorizada (SEFAZ)'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Participantes (Emitente e Destinatário) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Emitente */}
+                          <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
+                            <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
+                              Emitente / Remetente
+                            </h4>
+                            <div className="space-y-1">
+                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
+                              <p className="text-xs font-black text-white">{previewInvoice.fullData?.emitente?.nome || 'Emitente'}</p>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[9px] uppercase font-bold text-slate-500 block">CNPJ / CPF</span>
+                              <p className="text-xs font-mono text-slate-300">{previewInvoice.fullData?.emitente?.cnpj || 'CNPJ não informado'}</p>
+                            </div>
+                          </div>
+
+                          {/* Destinatário */}
+                          <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
+                            <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
+                              Destinatário / Cliente
+                            </h4>
+                            <div className="space-y-1">
+                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
+                              <p className="text-xs font-black text-white">{previewInvoice.fullData?.destinatario?.nome || 'Destinatário'}</p>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Endereço de Entrega</span>
+                              <p className="text-xs text-slate-300 leading-normal">{previewInvoice.fullData?.destinatario?.endereco || 'Endereço não informado'}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Informações de Carga / Descrição */}
+                        <div className="grid grid-cols-1 gap-4">
+                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl space-y-2">
+                            <h4 className="text-[10px] uppercase font-black text-slate-400 tracking-widest border-b border-slate-800 pb-1.5">
+                              Descrição das Mercadorias
+                            </h4>
+                            <p className="text-xs font-medium text-slate-300 italic bg-slate-950 p-3 rounded-xl border border-slate-900 leading-relaxed">
+                              {previewInvoice.fullData?.descricao || 'Mercadorias Gerais'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Footer Actions Panel */}
+                <div className="border-t border-slate-800/80 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-slate-950/20 p-2 rounded-2xl">
+                  {/* Left Meta Info */}
+                  <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-tech/50" />
+                    Visualizador Multiplataforma Harpia v2.5
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    {/* Print Button (only for DANFE HTML view) */}
+                    {!previewInvoice?.isImage && previewInvoice?.htmlContent && activeInvoiceTab === 'danfe' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
+                          if (iframe?.contentWindow) {
+                            iframe.contentWindow.focus();
+                            iframe.contentWindow.print();
+                          }
+                        }}
+                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
+                      >
+                        <Printer className="w-4 h-4" /> Imprimir
+                      </button>
+                    )}
+
+                    {/* XML Download Button */}
+                    {!previewInvoice?.isImage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            let xmlStr = "";
+                            if (previewInvoice.fullData) {
+                              const d = previewInvoice.fullData;
+                              xmlStr = `<?xml version="1.0" encoding="UTF-8"?>\n<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">\n  <NFe>\n    <infNFe Id="NFe${d.chaveAcesso || '00000000000000000000000000000000000000000000'}" versao="4.00">\n      <ide>\n        <cUF>${(d.chaveAcesso || '00').substring(0, 2)}</cUF>\n        <dhEmi>${d.dataEmissao || ''}</dhEmi>\n      </ide>\n      <emit>\n        <CNPJ>${(d.emitente?.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.emitente?.nome || ''}</xNome>\n      </emit>\n      <dest>\n        <CNPJ>${(d.destinatario?.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.destinatario?.nome || ''}</xNome>\n        <enderDest>\n          <xLgr>${(d.destinatario?.endereco || '').split(',')[0]}</xLgr>\n          <xMun>${d.destinatario?.cidade || ''}</xMun>\n          <UF>${d.destinatario?.estado || ''}</UF>\n          <CEP>${(d.destinatario?.cep || '69000-000')}</CEP>\n        </enderDest>\n      </dest>\n      <det nItem="1">\n        <prod>\n          <xProd>${d.descricao || ''}</xProd>\n        </prod>\n      </det>\n      <total>\n        <ICMSTot>\n          <vNF>${d.valor || 0}</vNF>\n        </ICMSTot>\n      </total>\n      <transp>\n        <vol>\n          <pesoB>${d.peso || 0}</pesoB>\n        </vol>\n      </transp>\n    </infNFe>\n  </NFe>\n</nfeProc>`;
+                            } else {
+                              xmlStr = `<?xml version="1.0" encoding="UTF-8"?><nfeProc versao="4.00"><NFe><infNFe Id="NFe${previewInvoice.chave || '0'}" versao="4.00"></infNFe></NFe></nfeProc>`;
+                            }
+                            
+                            const blob = new Blob([xmlStr], { type: 'application/xml' });
+                            const blobUrl = URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = blobUrl;
+                            link.download = `NFe_${previewInvoice.chave || previewInvoice.filename || 'xml'}.xml`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            URL.revokeObjectURL(blobUrl);
+                          } catch (err) {
+                            console.error("Falha ao baixar XML:", err);
+                          }
+                        }}
+                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
+                      >
+                        <Code className="w-4 h-4 text-tech/80" /> Baixar XML
+                      </button>
+                    )}
+
+                    {/* PDF/Image Download Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!previewInvoice.url) {
+                          if (previewInvoice.htmlContent) {
+                            const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
+                            if (iframe?.contentWindow) {
+                              iframe.contentWindow.focus();
+                              iframe.contentWindow.print();
+                            } else {
+                              const blob = new Blob([previewInvoice.htmlContent], { type: 'text/html' });
+                              const url = URL.createObjectURL(blob);
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.html`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              URL.revokeObjectURL(url);
+                            }
+                          }
+                          return;
+                        }
+                        try {
+                          if (previewInvoice.isImage) {
+                            const link = document.createElement('a');
+                            link.href = previewInvoice.url;
+                            link.download = `${previewInvoice.filename || 'documento'}.png`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            return;
+                          }
+
+                          const base64Data = previewInvoice.url.includes(',') ? previewInvoice.url.split(',')[1] : previewInvoice.url;
+                          const binaryString = window.atob(base64Data);
+                          const len = binaryString.length;
+                          const bytes = new Uint8Array(len);
+                          for (let i = 0; i < len; i++) {
+                            bytes[i] = binaryString.charCodeAt(i);
+                          }
+                          const blob = new Blob([bytes], { type: 'application/pdf' });
+                          const blobUrl = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = blobUrl;
+                          link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          URL.revokeObjectURL(blobUrl);
+                        } catch (err) {
+                          console.error("Falha ao decodificar e baixar PDF base64. Tentando download normal:", err);
+                          const link = document.createElement('a');
+                          link.href = previewInvoice.url;
+                          link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }
+                      }}
+                      className="flex-1 sm:flex-none px-6 py-2.5 bg-tech text-slate-950 hover:brightness-110 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_4px_12px_rgba(0,242,255,0.25)]"
+                    >
+                      <Download className="w-4 h-4 text-slate-950" /> Baixar PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 🔮 ASSISTENTE INTERATIVO DE TUTORIAL GUIADO DO APP */}
       {showDemoAssistant && demoMinimized && (
         <motion.button
           initial={{ opacity: 0, scale: 0.8, y: 30 }}
@@ -2637,9 +3693,9 @@ export default function VoieExpressApp() {
           title="Retomar Tutorial"
         >
           <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
-          <span className="text-xs tracking-wide text-white/95">Retomar Apresentação ({demoStep + 1}/6)</span>
+          <span className="text-xs tracking-wide text-white/95">Retomar Tutorial ({demoStep}/9)</span>
           <div className="bg-tech text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-mono">
-            {demoStep + 1}
+            {demoStep}
           </div>
         </motion.button>
       )}
@@ -2649,14 +3705,14 @@ export default function VoieExpressApp() {
           id="panel-demo-assistant"
           initial={{ opacity: 0, y: 30, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[400px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.2)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
+          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[85vh] overflow-y-auto custom-scrollbar"
         >
           <div className="flex justify-between items-start border-b border-white/10 pb-2.5">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-tech animate-bounce shrink-0" />
               <div>
-                <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Tutorial Guiado</span>
-                <span className="text-xs text-slate-400 font-bold">Apresentação ao Vivo</span>
+                <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Tutorial do Aplicativo</span>
+                <span className="text-xs text-slate-300 font-bold">Guia Interativo de Funcionalidades</span>
               </div>
             </div>
             
@@ -2674,7 +3730,7 @@ export default function VoieExpressApp() {
                   setDemoStep(0);
                 }}
                 className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
-                title="Encerrar Demo"
+                title="Encerrar Tutorial"
               >
                 <XCircle className="w-4 h-4 text-slate-350" />
               </button>
@@ -2683,42 +3739,30 @@ export default function VoieExpressApp() {
 
           {demoStep === 0 && (
             <div className="flex flex-col gap-3">
-              <h3 className="text-sm font-black text-white">Bem-vindo ao Tour de Apresentação! 🎓</h3>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Este assistente de pitch guiará você por um <strong>fluxo de uso do Voie Express</strong>. Cada tela será explicada para que você demonstre as competências logísticas e de monitoramento ativo para a banca.
+              <h3 className="text-sm font-black text-white flex items-center gap-1.5">
+                <span>🎓</span> Bem-vindo ao Guia do HARPIA!
+              </h3>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                O <strong>HARPIA (Voie Express)</strong> é a sua central de inteligência logística, roteamento autônomo, navegação GPS com voz e monitoramento climático.
               </p>
-              <div className="bg-slate-900/60 p-2.5 rounded-xl border border-tech/10 text-[10px] text-slate-300">
-                <p className="font-bold text-tech mb-0.5">💡 Cruze Climático e Hidrológico do Amazonas:</p>
-                Roteamento autônomo baseado em janelas de tempo, cálculo de diesel e <strong>prevenção ativa de Cheias (Dez-Jun) ou Secas (Jul-Nov) no Amazonas</strong>.
+              <div className="bg-slate-900/80 p-3 rounded-2xl border border-tech/20 text-[11px] text-slate-200 space-y-1.5 font-sans">
+                <p className="font-bold text-tech">💡 O que você vai aprender neste tour:</p>
+                <ul className="space-y-1 text-slate-300 list-disc list-inside text-[10.5px]">
+                  <li>Cadastro de rotas & Leitura de Notas Fiscais (NFe/DANFE)</li>
+                  <li>Seleção de veículos, balança de peso & multas ANTT</li>
+                  <li>Monitoramento de clima e nível dos rios (Cheias/Secas)</li>
+                  <li>GPS por voz, desvio silencioso e modo 100% offline</li>
+                  <li>Comprovante digital de entrega (POD) & Dashboard</li>
+                </ul>
               </div>
               <button
                 onClick={() => {
                   setDemoStep(1);
                   setCurrentScreen('home');
-                  setAddresses([
-                    'CEASA, Manaus, AM',
-                    'Centro, Manaus, AM',
-                    'Adrianópolis, Manaus, AM',
-                    'Compensa, Manaus, AM',
-                    'BR-319, Manaus, AM'
-                  ]);
-                  setTimeWindows({
-                    1: { start: '08:00', end: '11:00' },
-                    2: { start: '13:00', end: '15:30' }
-                  });
-                  setOptions({
-                    priority: 'safety',
-                    vehicle: 'truck',
-                    avoidDirt: true,
-                    avoidFloods: true,
-                    avoidHills: false,
-                    engine: 'google'
-                  });
-                  setAiCustomPrompt('Evitar asfalto submerso próximo ao porto devido ao período de cheias fluviais amazônicas.');
                 }}
-                className="w-full mt-1 bg-tech text-slate-950 font-black text-[11px] py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                className="w-full mt-1 bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
               >
-                Carregar Cenário & Avançar
+                Iniciar Passo a Passo →
               </button>
             </div>
           )}
@@ -2726,23 +3770,144 @@ export default function VoieExpressApp() {
           {demoStep === 1 && (
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 1 de 5</span>
-                <span className="text-tech">Torre de Planejamento</span>
+                <span>Passo 1 de 9</span>
+                <span className="text-tech">Planejamento</span>
               </div>
-              <h4 className="text-xs font-bold text-white">📍 Entrada de Endereços & Diretivas de IA</h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Estamos na <strong>Tela Inicial (Home)</strong>. É aqui que o operador de tráfego central inicia o dia:
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📍</span> 1. Entrada de Endereços & Scanner de NFe/DANFE
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Na aba <strong>Planejamento</strong>, você pode montar suas rotas de 3 formas fáceis:
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>📝 Alvos Estratégicos:</strong> Foram carregados 5 pontos reais de Manaus (incluindo acessos de Porto e Rodovias).</p>
-                <p><strong>🌧️ Cruze Hidrológico:</strong> O motor lê a latitude/longitude do Amazonas para cruzar com a data atual, alertando sobre inundações ou estiagens severas.</p>
+                <p><strong>🔍 Digitação Flexível:</strong> Escreva qualquer endereço com CEP, número ou ponto de referência (ex: <i>&quot;Rua Tefé 1000 Japiim&quot;</i>).</p>
+                <p><strong>📄 Leitor de Nota Fiscal (NFe):</strong> Cole a chave de 44 dígitos ou envie o XML/PDF do DANFE no botão <strong>&quot;Consultar NFe&quot;</strong> para extrair os locais de entrega em 1 clique!</p>
+                <p><strong>⏱️ Janelas de Horário:</strong> Defina horários específicos em que cada cliente atende (ex: <i>&quot;Recebe entre 08:00 e 11:00&quot;</i>).</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
+                  onClick={() => setDemoStep(0)}
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
+                >
+                  Voltar
+                </button>
+                <button
                   onClick={() => {
-                    setDemoStep(0);
+                    setAddresses([
+                      'CEASA, Manaus, AM',
+                      'Centro, Manaus, AM',
+                      'Adrianópolis, Manaus, AM',
+                      'Compensa, Manaus, AM',
+                      'BR-319, Manaus, AM'
+                    ]);
+                    setTimeWindows({
+                      1: { start: '08:00', end: '11:00' },
+                      2: { start: '13:00', end: '15:30' }
+                    });
+                    setDemoStep(2);
                   }}
-                  className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  Carregar Endereços & Avançar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 2 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 2 de 9</span>
+                <span className="text-tech">Especificação da Carga</span>
+              </div>
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>🚚</span> 2. Veículos, Balança & Multas Fiscais (ANTT)
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                O HARPIA inclui controle de frota e balança rodoviária integrada:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>🚛 Seleção de Frota:</strong> Alterne entre Moto, Van, VUC, Caminhão Baú ou Carreta.</p>
+                <p><strong>⚖️ Balança de Peso por Eixo:</strong> Insira o peso total da carga (ex: 8.500 kg). O sistema valida a distribuição por eixo de acordo com o limite do CONTRAN/ANTT.</p>
+                <p><strong>🚨 Alerta de Excesso de Peso:</strong> Caso o peso ultrapasse o limite legal, o app calcula imediatamente a estimativa da multa em R$ para evitar autuações nas balanças.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => setDemoStep(1)}
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={() => {
+                    setOptions(prev => ({ ...prev, vehicle: 'truck' }));
+                    setDemoStep(3);
+                  }}
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  Definir Caminhão & Avançar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 3 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 3 de 9</span>
+                <span className="text-tech">Inteligência Ambiental</span>
+              </div>
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>🌊</span> 3. Clima, Nível dos Rios & Diretivas de IA
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Tecnologia preventiva para intempéries e peculiaridades regionais:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>🌧️ Monitoramento Hidrológico:</strong> Cruza dados do INMET e bacias hidrográficas (Cheias/Inundações de Dez a Jun e Estiagem/Seca de Jul a Nov) para evitar atoleiros ou balsas inoperantes.</p>
+                <p><strong>🤖 Instruções Personalizadas de IA:</strong> Digite comandos em linguagem natural, como <i>&quot;Evitar vias alagadas na orla e priorizar entregas comerciais de manhã&quot;</i>.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => setDemoStep(2)}
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={() => {
+                    setAiCustomPrompt('Evitar trechos com risco de alagamento próximo a igarapés e orla fluviométrica.');
+                    setOptions(prev => ({ ...prev, priority: 'safety', avoidFloods: true }));
+                    setDemoStep(4);
+                  }}
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  Aplicar Diretiva & Avançar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 4 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 4 de 9</span>
+                <span className="text-tech">Roteamento Inteligente</span>
+              </div>
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>⚡</span> 4. Otimização de Rota & Multi-Motores
+              </h4>
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                O algoritmo analisa milhares de combinações para encontrar o melhor trajeto:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>🎯 Modos de Prioridade:</strong> Alterne entre <strong>Menor Distância</strong>, <strong>Menor Tempo</strong>, <strong>Equilibrado</strong> ou <strong>Segurança</strong>.</p>
+                <p><strong>🗺️ Provedores de Mapa:</strong> Escolha entre Google Maps, Mapbox, OpenRouteService, OSRM e Photon para garantir máxima precisão.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => setDemoStep(3)}
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                 >
                   Voltar
                 </button>
@@ -2755,37 +3920,39 @@ export default function VoieExpressApp() {
                       'Compensa, Manaus, AM',
                       'BR-319, Manaus, AM'
                     ]);
-                    setDemoStep(3);
+                    setDemoStep(5);
                   }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans text-ellipsis overflow-hidden whitespace-nowrap"
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                 >
-                  Otimizar Rota
+                  ⚡ Otimizar Rota Agora
                 </button>
               </div>
             </div>
           )}
 
-          {demoStep === 2 && (
+          {demoStep === 5 && (
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 2 de 5</span>
-                <span className="text-tech">Análise de Custos & Clima</span>
+                <span>Passo 5 de 9</span>
+                <span className="text-tech">Análise do Traçado</span>
               </div>
-              <h4 className="text-xs font-bold text-white">📈 Diagnósticos Avançados e Custos</h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                O traçado ideal foi calculado e ordenado para maximizar a economia e evitar áreas de risco!
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📈</span> 5. Diagnóstico de Custos, Combustível & Score
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                A rota otimizada exibe um relatório completo de eficiência:
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🌊 Hidrologia Ativa:</strong> Role o painel lateral de resultados. Cada parada associada a zonas de igarapés ou rios da região (Centro, Compensa, CEASA) possui um alerta dinâmico histórico.</p>
-                <p><strong>🧠 Análise de Rota (IA)</strong> O relatório detalhado ao final incorpora esses dados para calibrar o score de integridade da carga.</p>
+                <p><strong>⛽ Custo & Combustível:</strong> Exibe a quilometragem total, consumo em litros de Diesel/Gasolina e projeção de custo financeiro.</p>
+                <p><strong>⭐ Score de Segurança (0-100):</strong> Classificação baseada em vias pavimentadas, risco de retenção e atendimento de janelas de horário.</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
                   onClick={() => {
-                    setDemoStep(1);
+                    setDemoStep(4);
                     setCurrentScreen('home');
                   }}
-                  className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                 >
                   Voltar
                 </button>
@@ -2793,29 +3960,68 @@ export default function VoieExpressApp() {
                   onClick={() => {
                     setNavIndex(0);
                     setCurrentScreen('navigation');
-                    setDemoStep(3);
+                    setDemoStep(6);
                   }}
                   className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                 >
-                  Iniciar GPS de Viagem
+                  Iniciar GPS de Navegação
                 </button>
               </div>
             </div>
           )}
 
-          {demoStep === 3 && (
+          {demoStep === 6 && (
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 3 de 5</span>
-                <span className="text-tech">Cockpit Operacional</span>
+                <span>Passo 6 de 9</span>
+                <span className="text-tech">Cockpit do Motorista</span>
               </div>
-              <h4 className="text-xs font-bold text-white">🚚 GPS Ativo e Ocorrências Offline</h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Esta é a interface que fica no celular ou tablet do motorista dentro da cabine do veículo:
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>🧭</span> 6. GPS por Voz, Giroscópio & Mapa Detalhado HD
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Interface de navegação completa para a cabine do veículo:
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🔊 Voz & Sentido:</strong> Fornece orientações curva-a-curva com assistência de fala.</p>
-                <p><strong>⚠️ Registro de Sinistros Offline:</strong> O motorista relata desmoronamento fluvial ou via alagada. Se o celular perder o sinal, os dados são salvos localmente via IndexedDB!</p>
+                <p><strong>📱 Giroscópio & Bússola do Veículo:</strong> O cursor aponta para a direção e o mapa gira dinamicamente conforme os sensores do celular ou veículo do usuário.</p>
+                <p><strong>🛰️ Camadas de Alta Definição (Detalhe HD):</strong> Alternância em 1 clique entre Satélite Híbrido, Ruas & POIs, Relevo Topográfico e Detalhamento Urbano.</p>
+                <p><strong>🔊 Voz & Desvio Silencioso:</strong> Instruções faladas em voz clara com recálculo automático em menos de 2s sem interromper o motorista.</p>
+              </div>
+              <div className="flex gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    setDemoStep(5);
+                    setCurrentScreen('home');
+                  }}
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={() => setDemoStep(7)}
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                >
+                  Avançar para Modo Offline
+                </button>
+              </div>
+            </div>
+          )}
+
+          {demoStep === 7 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+                <span>Passo 7 de 9</span>
+                <span className="text-tech">Resiliência de Campo</span>
+              </div>
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📲</span> 7. Operação Offline & Registro de Alertas
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Funcionamento ininterrupto mesmo sem sinal de celular:
+              </p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
+                <p><strong>💾 Armazenamento Local (IndexedDB):</strong> Se o celular perder a internet em rodovias, todas as ações são gravadas localmente e sincronizadas quando houver conexão.</p>
+                <p><strong>⚠️ Botão de Ocorrências:</strong> O motorista registra acidentes, vias alagadas ou quedas de barreiras em tempo real.</p>
               </div>
               <div className="flex flex-col gap-2 mt-1">
                 <button
@@ -2823,75 +4029,72 @@ export default function VoieExpressApp() {
                     try {
                       await db.occurrences.add({
                         type: 'flood',
-                        description: 'refluxo pluvial severo na orla do Centro de Manaus',
+                        description: 'Alagamento em via de acesso reportado via GPS',
                         lat: -3.134,
                         lon: -60.024,
                         timestamp: new Date(),
                         synced: false
                       });
-                      setApiWarning("OCORRÊNCIA REGISTRADA: Alerta de transbordamento salvo localmente e reportado à central!");
+                      setApiWarning("OCORRÊNCIA REGISTRADA: Alerta salvo localmente no celular!");
                     } catch(e){}
                   }}
-                  className="w-full bg-slate-900/80 border border-alert/20 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
+                  className="w-full bg-slate-900/80 border border-alert/30 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
                 >
-                  ⚠️ Reportar Alagamento Sazonal (Sinistro Local)
+                  ⚠️ Testar Reporte de Ocorrência (Sinistro)
                 </button>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => {
-                      setDemoStep(1);
-                      setCurrentScreen('home');
-                    }}
-                    className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                    onClick={() => setDemoStep(6)}
+                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                   >
                     Voltar
                   </button>
                   <button
                     onClick={() => {
-                      setNavIndex(4); // Advance to final address
-                      setDemoStep(4);
+                      setNavIndex(4);
+                      setDemoStep(8);
                     }}
                     className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                   >
-                    Ir ao Destino Final
+                    Ir à Prova de Entrega
                   </button>
                 </div>
               </div>
             </div>
           )}
 
-          {demoStep === 4 && (
+          {demoStep === 8 && (
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 4 de 5</span>
-                <span className="text-tech">Prova Eletrônica</span>
+                <span>Passo 8 de 9</span>
+                <span className="text-tech">Comprovação Fiscal</span>
               </div>
-              <h4 className="text-xs font-bold text-white">📸 Comprovante de Entrega Seguro (POD)</h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Chegamos ao último cliente! Para auditar juridicamente a entrega e comprovar o recebimento:
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📸</span> 8. Comprovante Digital de Entrega (POD)
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Validação antifraude e auditoria de recebimento da carga:
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>📊 Geolocalização Criptografada:</strong> Registra as coordenadas GPS de onde a foto foi tirada para evitar fraudes logísticas de carga.</p>
+                <p><strong>📷 Foto da Mercadoria:</strong> O motorista captura a foto do canhoto assinado ou da caixa entregue.</p>
+                <p><strong>🔒 GPS & Data Criptografados:</strong> O carimbo com as coordenadas exatas e o horário de entrega é gravado para garantia jurídica contra extravios.</p>
               </div>
               <div className="flex flex-col gap-2 mt-1">
                 <button
                   onClick={() => {
                     const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
                     setDeliveryPhoto(boxSvg);
-                    setDeliveryNotes("Insumos biológicos em temperatura regulada entregues com perfeição no terminal.");
+                    setDeliveryNotes("Mercadoria entregue em perfeito estado sob fiscalização.");
                     setShowDeliveryModal(true);
                   }}
                   className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
                 >
-                  📷 Simular Captação de Foto POD
+                  📷 Abrir Câmera / Comprovante POD
                 </button>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => {
-                      setDemoStep(3);
-                      setNavIndex(0);
-                    }}
-                    className="px-3 bg-slate-900 border border-slate-850 text-slate-400 font-bold text-xs rounded-xl"
+                    onClick={() => setDemoStep(7)}
+                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                   >
                     Voltar
                   </button>
@@ -2913,7 +4116,7 @@ export default function VoieExpressApp() {
                           score: 95,
                           status: 'completed',
                           deliveryPhoto: boxSvg,
-                          deliveryNotes: 'Entrega efetuada com sucesso sob inspeção em orla fluviométrica.',
+                          deliveryNotes: 'Entrega concluída com comprovante digital seguro.',
                           completedAt: new Date()
                         });
                       } catch (err) {
@@ -2923,30 +4126,33 @@ export default function VoieExpressApp() {
                       setShowDeliveryModal(false);
                       setNavIndex(0);
                       setCurrentScreen('dashboard');
-                      setDemoStep(5);
+                      setDemoStep(9);
                     }}
                     className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                   >
-                    Salvar e Concluir
+                    Concluir Entrega & Ir às Métricas
                   </button>
                 </div>
               </div>
             </div>
           )}
 
-          {demoStep === 5 && (
+          {demoStep === 9 && (
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 5 de 5</span>
-                <span className="text-tech">Painel de Gerenciamento</span>
+                <span>Passo 9 de 9</span>
+                <span className="text-tech">Gestão Central</span>
               </div>
-              <h4 className="text-xs font-bold text-white">📊 Centro de Gerência & Controle de Carga</h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                Sucesso! Chegamos à torre administrativa central onde gestores monitoram frotas e regulamentos das vias terrestres e acessos fluviais:
+              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📊</span> 9. Painel Gerencial, Exportação & Agendamento
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Parabéns! Você completou o tour de funcionalidades do HARPIA:
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>⚖️ Balança Inteligente de Peso:</strong> Localize o controle de <em>Peso da Carga</em> ao lado do ícone da balança.</p>
-                <p><strong>🚨 Multas Fiscais de Excesso ANTT:</strong> Se ultrapassar o limite, o sistema calcula na hora de acordo com a resolução brasileira!</p>
+                <p><strong>📊 Métricas & CO2:</strong> Na aba <strong>Métricas</strong>, acompanhe o histórico de entregas, índice de pontualidade e emissão de CO2.</p>
+                <p><strong>📅 Agendamento Futuro:</strong> Na aba Planejamento, programe e salve rotas para datas futuras.</p>
+                <p><strong>🔗 Exportação Completa:</strong> Abra suas rotas no Waze, Google Maps, exporte em GPX/KML ou imprima o manifesto em PDF!</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
@@ -2954,15 +4160,168 @@ export default function VoieExpressApp() {
                     setShowDemoAssistant(false);
                     setDemoStep(0);
                   }}
-                  className="w-full bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-115 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                  className="w-full bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-115 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
                 >
-                  🎉 Concluir e Voltar ao App
+                  🎉 Finalizar Tutorial & Usar o App
                 </button>
               </div>
             </div>
           )}
         </motion.div>
       )}
+
+      {/* Modal Integrar Ponto de Coleta (Temu, Shopee, Mercado Livre, Motoboys) */}
+      <AnimatePresence>
+        {showPickupHubModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9990] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setShowPickupHubModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 20 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-[0_25px_60px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[85vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                    <ShoppingBag className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-white font-display flex items-center gap-2">
+                      Integrar Ponto de Coleta / Hub Logistics
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Para motoboys, entregadores independentes e parceiros de e-commerce (Temu, Shopee, Mercado Livre, AliExpress, Correios).
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPickupHubModal(false)}
+                  className="text-slate-500 hover:text-white p-2 rounded-xl hover:bg-slate-800 text-sm font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Filter / Search Bar */}
+              <div className="my-4">
+                <input
+                  type="text"
+                  value={customHubSearch}
+                  onChange={(e) => setCustomHubSearch(e.target.value)}
+                  placeholder="Pesquisar por Hub, Plataforma (Temu, Shopee, Meli), Bairro ou Endereço..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-all font-sans"
+                />
+              </div>
+
+              {/* Hubs Grid List */}
+              <div className="overflow-y-auto custom-scrollbar flex-1 space-y-3 pr-1">
+                {ECOMMERCE_PICKUP_HUBS.filter(h => {
+                  if (!customHubSearch) return true;
+                  const query = customHubSearch.toLowerCase();
+                  return h.name.toLowerCase().includes(query) || 
+                         h.platform.toLowerCase().includes(query) || 
+                         h.address.toLowerCase().includes(query);
+                }).map(hub => (
+                  <div 
+                    key={hub.id}
+                    className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-amber-500/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border ${hub.badgeColor}`}>
+                          {hub.platform}
+                        </span>
+                        <span className="text-[9px] text-slate-400 font-mono">
+                          {hub.type}
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-100 group-hover:text-amber-300 transition-colors">
+                        {hub.name}
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                        {hub.address}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPickupHub(hub, true)}
+                        className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 text-[10.5px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <MapPin className="w-3 h-3" />
+                        Definir como Partida
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPickupHub(hub, false)}
+                        className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-[10.5px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <PackageCheck className="w-3 h-3 text-tech" />
+                        + Adicionar Coleta
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Option for custom address hub */}
+                {customHubSearch.trim().length >= 3 && (
+                  <div className="p-4 rounded-2xl bg-slate-950/40 border border-dashed border-slate-700 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-200">
+                        Usar &quot;{customHubSearch}&quot; como Ponto de Coleta
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Insira este endereço personalizado para a entrega de volumes.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const customHub = {
+                          id: `custom-${Date.now()}`,
+                          name: `Ponto de Coleta: ${customHubSearch}`,
+                          platform: 'Personalizado',
+                          address: customHubSearch,
+                          lat: -3.1311,
+                          lon: -60.0242,
+                          type: 'Coleta Personalizada',
+                          badgeColor: 'bg-tech/10 text-tech border-tech/20'
+                        };
+                        handleSelectPickupHub(customHub, true);
+                      }}
+                      className="px-3 py-2 rounded-xl bg-tech text-slate-950 text-[10.5px] font-black hover:bg-amber-300 cursor-pointer"
+                    >
+                      Definir como Partida
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                <span>💡 O roteador integrará este Ponto de Coleta no seu plano de entregas.</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPickupHubModal(false)}
+                  className="text-slate-300 font-bold hover:underline cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }

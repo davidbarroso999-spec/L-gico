@@ -1,7 +1,47 @@
 /**
  * Gemini AI Engine Connector
- * Usando o novo Gemini 3.1 para fornecer as intuições estratégicas e insights.
+ * Responsible for Step A (Context Adjustments JSON) and Step C (Natural Language Explanation of Solver Result).
  */
+
+import { GeminiContextAdjustments } from './vrp-types';
+
+export async function getGeminiContextAdjustments(input: {
+  locations: any[];
+  vehicle: string;
+  priority: string;
+  customPrompt?: string;
+  avoidDirt?: boolean;
+  avoidFloods?: boolean;
+  avoidHills?: boolean;
+}): Promise<GeminiContextAdjustments> {
+  const defaultAdjustments: GeminiContextAdjustments = {
+    edgePenalties: [],
+    excludedEdges: [],
+    globalMultipliers: {
+      timeWeight: input.priority === 'speed' ? 1.3 : 1.0,
+      distanceWeight: input.priority === 'distance' ? 1.5 : 1.0,
+      riskWeight: input.priority === 'safety' ? 1.8 : 1.0
+    },
+    qualitativeSummary: "Ajuste ambiental e de trânsito calibrado para a matriz de custo."
+  };
+
+  try {
+    const res = await fetch('/api/route/gemini-context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input)
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.adjustments) return data.adjustments;
+    }
+    return defaultAdjustments;
+  } catch (err) {
+    console.warn("Falha ao consultar ajustes contextuais do Gemini:", err);
+    return defaultAdjustments;
+  }
+}
 
 export async function getGeminiAnalysis(input: any) {
   try {
@@ -40,12 +80,24 @@ export async function getGeminiAnalysis(input: any) {
       `;
     } else {
       const dataAtual = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+      
+      const solverInfo = input.solverDetails ? `
+        SOLVER MATEMÁTICO VRP APLICADO:
+        - Método: ${input.solverDetails.solverMethod}
+        - Tempo de execução do solver: ${input.solverDetails.solverExecutionTimeMs} ms
+        - Atraso total calculado em janelas de entrega: ${input.solverDetails.totalLatenessMinutes} min
+        - Espera acumulada: ${input.solverDetails.totalWaitTimeMinutes} min
+      ` : '';
+
+      const contextSummary = input.contextAdjustmentsSummary ? `
+        AJUSTES CONTEXTUAIS DA MATRIZ: ${input.contextAdjustmentsSummary}
+      ` : '';
+
       prompt = `
-        ### MISSÃO: VEREDITO HARPIA (IA ESTRATÉGICA)
+        ### MISSÃO: EXPLICAÇÃO EXECUTIVA DA ROTA CALCULADA PELO SOLVER (HARPIA ORION)
         DATA ATUAL PARA REFERÊNCIA DE SAZONALIDADE/CLIMA: ${dataAtual}
-        ESTRATÉGIA APLICADA: ${input.strategy || 'N/A'}
         
-        DADOS REAIS DA EXECUÇÃO FINAL DA ROTA:
+        DADOS DA ROTA CALCULADA MATEMATICAMENTE PELO SOLVER DE VRP:
         - PRIORIDADE DA ROTA: ${input.priority || 'N/A'}
         - VEÍCULO SELECIONADO: ${input.vehicle || 'N/A'}
         - PARÂMETROS PERSONALIZADOS ATIVOS:
@@ -56,29 +108,23 @@ export async function getGeminiAnalysis(input: any) {
           * Distância total calculada: ${(input.summary.distance / 1000).toFixed(2)} km
           * Tempo total estimado: ${Math.round(input.summary.duration / 60)} minutos
           * Score de integridade operacional do trajeto: ${Math.round(input.score)}/100
+        ${solverInfo}
+        ${contextSummary}
         
-        SEQUÊNCIA OFICIAL DE PARADAS TRAFEGADAS:
+        SEQUÊNCIA DE PARADAS CALCULADA PELO SOLVER:
         ${input.sequence.map((stop: any, idx: number) => {
           const amHydro = stop.amazonasHydrology ? ` [Hidrologia AM: ${stop.amazonasHydrology.seasonLabel} - Alerta: ${stop.amazonasHydrology.warning}]` : '';
-          return `* Parada #${idx + 1}: ${stop.address} (Coordenadas: ${stop.lat.toFixed(4)}, ${stop.lon.toFixed(4)}) - Temperatura: ${Math.round(stop.weather?.main?.temp || 0)}°C - Clima: ${stop.weather?.weather?.[0]?.description || 'Normal'} - Perigo/Risco Local Calculado: ${Math.round(stop.riskScore)}%${amHydro}`;
+          const tw = stop.timeWindow ? ` [Janela de Entrega: ${stop.timeWindow.start}h às ${stop.timeWindow.end}h]` : '';
+          return `* Parada #${idx + 1}: ${stop.address} (Chegada Estimada: ${stop.estimatedArrival || 'N/A'})${tw} - Temp: ${Math.round(stop.weather?.main?.temp || 0)}°C - Clima: ${stop.weather?.weather?.[0]?.description || 'Normal'} - Perigo/Risco: ${Math.round(stop.riskScore)}%${amHydro}`;
         }).join('\n')}
         
-        OCORRÊNCIAS OPERACIONAIS REGISTRADAS NO ENTORNO (RAIO DE 1.5KM):
-        ${input.sequence.map((stop: any, idx: number) => {
-          const occs = stop.activeOccurrences || [];
-          if (occs.length === 0) return `* Parada #${idx + 1} (${stop.address}): Nenhuma ocorrência ou bloqueio encontrado no raio de 1.5km.`;
-          return `* Parada #${idx + 1} (${stop.address}): Encontradas ${occs.length} ocorrência(s): ${occs.map((o: any) => `[Tipo: ${o.type}] Descrição: ${o.description}`).join('; ')}`;
-        }).join('\n')}
+        ${input.customPrompt ? `--- DIRETRIZES PERSONALIZADAS DO OPERADOR ---
+        O operador solicitou: "${input.customPrompt}"` : ''}
 
-        ${input.customPrompt ? `--- DIRETRIZES PERSONALIZADAS ADICIONAIS DO OPERADOR ---
-        O operador solicitou com prioridade absoluta: "${input.customPrompt}"` : ''}
-
-        ### DIRETRIZES IMPORTANTES PARA A IA (MÁXIMA PRECISÃO):
-        1. CONTEXTO SAZONAL E CLIMÁTICO REAL: Baseie-se estritamente nas temperaturas e descrições climáticas reais fornecidas em cada parada para dar o diagnóstico operativo (por exemplo, se a temperatura real é 28°C e o céu está limpo, nunca assuma ou mencione alagamentos ou calor extremo fora da realidade de forma estática baseando-se em meses do calendário).
-        2. REGRA ANTIALUCINAÇÃO RIGOROSA: Não invente descrições climáticas fictícias ou perigos sazonais (como alagamento do Rio Negro ou sol escaldante de 40°C no Amazonas) se as medições reais de tempo real mostrarem estabilidade e normalidade. Confie 100% no "Alerta" e na "Temperatura" reais informados na lista de paradas.
-        3. ANÁLISE FIEL DA ROTA: Relate como as prioridades e restrições influenciaram na escolha da ordem das paradas no trajeto.
-        4. RESPOSTA EXECUTIVA E CURTA: Forneça um insight tático direto e realista com no máximo 2 frases explicativas. Responda em termos logísticos objetivos.
-        5. EXTENSÃO E IDIOMA: Nunca ultrapasse o limite de 2 frases. Responda sempre em Português do Brasil.
+        ### DIRETRIZES IMPORTANTES PARA A EXPLICAÇÃO (TIPO ORION):
+        1. Explique em linguagem simples e executiva POR QUE o solver escolheu essa ordem específica de paradas (por exemplo: "O solver definiu a sequência iniciando por X para cumprir a janela das 09h, contornando o trecho com risco de inundação em Y...").
+        2. Destaque o papel do Solver Matemático de VRP e o ganho de eficiência do trajeto.
+        3. RESPOSTA EXECUTIVA E CURTA: No máximo 2 frases explicativas. Responda em Português do Brasil.
       `;
     }
 
@@ -91,20 +137,13 @@ export async function getGeminiAnalysis(input: any) {
     });
 
     if (!response.ok) {
-      console.warn("API AI returned error status:", response.status);
-      return "Fluxo dinâmico otimizado. Rota estruturada em total conformidade para garantir maior segurança operacional.";
-    }
-
-    const contentType = response.headers.get("content-type");
-    if (!contentType || !contentType.includes("application/json")) {
-      console.warn("API AI non-JSON response received");
-      return "Fluxo tático de transporte otimizado. Traçado mestre gerado de acordo com as restrições selecionadas.";
+      return "Sequência otimizada matematicamente pelo solver VRP com base na matriz de distância e janelas de entrega.";
     }
 
     const data = await response.json();
-    return data.content || "Análise do trajeto indisponível no momento.";
+    return data.content || "Sequência calculada pelo solver de otimização de rotas.";
   } catch (error) {
     console.error("Gemini AI Connector Error:", error);
-    return "Conexão de contingência operacional ativada. Recomenda-se atenção redobrada sob as condições de trânsito locais.";
+    return "Rota otimizada pelo solver matemático VRP com base nos dados reais de trânsito e restrições.";
   }
 }

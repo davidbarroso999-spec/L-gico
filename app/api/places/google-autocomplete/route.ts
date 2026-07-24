@@ -42,21 +42,39 @@ export async function GET(request: NextRequest) {
                     const geoData = await geoResponse.json();
                     if (geoData.status === 'OK' && Array.isArray(geoData.results) && geoData.results.length > 0) {
                       const r = geoData.results[0];
-                      const postalCodeComp = r.address_components?.find((c: any) => c.types.includes('postal_code'))?.long_name;
-                      const isPOI = prediction.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'shopping_mall', 'food', 'store'].includes(t));
-                      
+                      const comps = r.address_components || [];
+                      const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.long_name;
+                      const postalCodeComp = getComp(['postal_code']);
+                      const streetNumber = getComp(['street_number']);
+                      const route = getComp(['route']);
+                      const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
+                      const locality = getComp(['locality', 'administrative_area_level_2']);
+                      const adminArea = getComp(['administrative_area_level_1']);
+
+                      const mainText = prediction.structured_formatting?.main_text || prediction.description.split(',')[0];
+                      const secondaryText = prediction.structured_formatting?.secondary_text || '';
+
                       return {
                         location: {
                           latitude: r.geometry.location.lat,
                           longitude: r.geometry.location.lng
                         },
                         displayName: {
-                          text: prediction.structured_formatting?.main_text || prediction.description.split(',')[0]
+                          text: mainText
                         },
                         formattedAddress: r.formatted_address || prediction.description,
-                        types: r.types || prediction.types,
+                        types: r.types || prediction.types || [],
                         cep: postalCodeComp,
-                        address_components: r.address_components
+                        structured: {
+                          mainText,
+                          secondaryText,
+                          streetNumber,
+                          route,
+                          sublocality,
+                          locality,
+                          adminArea,
+                          postalCode: postalCodeComp
+                        }
                       };
                     }
                   }
@@ -97,7 +115,7 @@ export async function GET(request: NextRequest) {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.location,places.displayName,places.formattedAddress,places.types'
+            'X-Goog-FieldMask': 'places.location,places.displayName,places.formattedAddress,places.types,places.addressComponents'
           },
           body: JSON.stringify(body)
         });
@@ -105,18 +123,40 @@ export async function GET(request: NextRequest) {
         if (response.ok) {
           const data = await response.json();
           const items = data.places || [];
-          return items.map((p: any) => ({
-            location: {
-              latitude: p.location?.latitude || 0,
-              longitude: p.location?.longitude || 0
-            },
-            displayName: {
-              text: p.displayName?.text || ''
-            },
-            formattedAddress: p.formattedAddress || '',
-            types: p.types || [],
-            cep: undefined
-          }));
+          return items.map((p: any) => {
+            const comps = p.addressComponents || [];
+            const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.longText;
+            const postalCodeComp = getComp(['postal_code']);
+            const streetNumber = getComp(['street_number']);
+            const route = getComp(['route']);
+            const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
+            const locality = getComp(['locality', 'administrative_area_level_2']);
+            const adminArea = getComp(['administrative_area_level_1']);
+
+            const mainText = p.displayName?.text || '';
+
+            return {
+              location: {
+                latitude: p.location?.latitude || 0,
+                longitude: p.location?.longitude || 0
+              },
+              displayName: {
+                text: mainText
+              },
+              formattedAddress: p.formattedAddress || '',
+              types: p.types || [],
+              cep: postalCodeComp,
+              structured: {
+                mainText,
+                streetNumber,
+                route,
+                sublocality,
+                locality,
+                adminArea,
+                postalCode: postalCodeComp
+              }
+            };
+          });
         }
       } catch (err) {
         console.error('[Google Autocomplete Proxy - places:searchText] Error:', err);
@@ -134,20 +174,23 @@ export async function GET(request: NextRequest) {
           const data = await response.json();
           if (data.status === 'OK' && Array.isArray(data.results)) {
             return data.results.map((r: any) => {
-              const postalCodeComp = r.address_components?.find((c: any) => c.types.includes('postal_code'))?.long_name;
-              const streetNumber = r.address_components?.find((c: any) => c.types.includes('street_number'))?.long_name;
-              const route = r.address_components?.find((c: any) => c.types.includes('route'))?.long_name;
-              const sublocality = r.address_components?.find((c: any) => c.types.includes('sublocality') || r.address_components?.find((c: any) => c.types.includes('sublocality_level_1'))?.long_name);
+              const comps = r.address_components || [];
+              const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.long_name;
+              const postalCodeComp = getComp(['postal_code']);
+              const streetNumber = getComp(['street_number']);
+              const route = getComp(['route']);
+              const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
+              const locality = getComp(['locality', 'administrative_area_level_2']);
+              const adminArea = getComp(['administrative_area_level_1']);
 
-              let displayNameText = '';
+              let mainText = '';
               if (route) {
-                displayNameText = route;
-                if (streetNumber) displayNameText += `, ${streetNumber}`;
-                if (sublocality) displayNameText += ` - ${sublocality}`;
+                mainText = route;
+                if (streetNumber) mainText += `, ${streetNumber}`;
               } else if (sublocality) {
-                displayNameText = sublocality;
+                mainText = sublocality;
               } else {
-                displayNameText = r.address_components?.[0]?.long_name || 'Endereço';
+                mainText = r.address_components?.[0]?.long_name || 'Endereço';
               }
 
               return {
@@ -156,12 +199,20 @@ export async function GET(request: NextRequest) {
                   longitude: r.geometry.location.lng
                 },
                 displayName: {
-                  text: displayNameText
+                  text: mainText
                 },
                 formattedAddress: r.formatted_address,
-                types: r.types,
+                types: r.types || [],
                 cep: postalCodeComp,
-                address_components: r.address_components
+                structured: {
+                  mainText,
+                  streetNumber,
+                  route,
+                  sublocality,
+                  locality,
+                  adminArea,
+                  postalCode: postalCodeComp
+                }
               };
             });
           }

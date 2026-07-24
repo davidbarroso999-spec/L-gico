@@ -1,7 +1,20 @@
 import { NFeData } from "./nfe.types";
 
+/**
+ * Função utilitária de hash para geração determinística de dados secundários de fallback.
+ */
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
+
 export function generateDanfeHtml(dados: NFeData): string {
-  const formatCurrency = (val: number) => {
+  const formatCurrency = (val?: number) => {
+    if (val === undefined || isNaN(val)) return "R$ 0,00";
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   };
 
@@ -15,20 +28,180 @@ export function generateDanfeHtml(dados: NFeData): string {
     }
   };
 
-  // Generate some realistic lines of bars for barcode simulation
+  const formatCNPJ = (cnpj?: string) => {
+    if (!cnpj) return "";
+    const clean = cnpj.replace(/\D/g, '');
+    if (clean.length === 14) {
+      return clean.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+    }
+    if (clean.length === 11) {
+      return clean.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, "$1.$2.$3-$4");
+    }
+    return cnpj;
+  };
+
+  const formatCEP = (cep?: string) => {
+    if (!cep) return "";
+    const clean = cep.replace(/\D/g, '');
+    if (clean.length === 8) {
+      return clean.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+    }
+    return cep;
+  };
+
+  const cleanChave = dados.chaveAcesso.replace(/\D/g, '');
+  const formattedChave = cleanChave.replace(/(.{4})/g, '$1 ').trim();
+
+  // Decodifica Série e Número de Nota real a partir do objeto ou fallback da Chave de Acesso
+  let numeroNota = dados.numeroNota || "";
+  let serieNota = dados.serieNota || "1";
+
+  if (!numeroNota && cleanChave.length === 44) {
+    const serieStr = cleanChave.slice(22, 25);
+    const numeroStr = cleanChave.slice(25, 34);
+    const serieInt = parseInt(serieStr, 10);
+    const numeroInt = parseInt(numeroStr, 10);
+    if (!isNaN(serieInt)) serieNota = String(serieInt);
+    if (!isNaN(numeroInt)) {
+      numeroNota = numeroStr.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1.$2.$3");
+    }
+  }
+  if (!numeroNota) {
+    numeroNota = "000.564.005";
+  }
+
+  // Protocolo SEFAZ
+  let protocolo = dados.protocoloAutorizacao || "";
+  if (!protocolo && cleanChave.length === 44) {
+    const uf = cleanChave.slice(0, 2);
+    const seed = Math.abs(hashCode(cleanChave)).toString().substring(0, 11).padEnd(11, '3');
+    protocolo = `${uf}${seed} - Autorizada em ${formatDate(dados.dataEmissao)}`;
+  } else if (protocolo && !protocolo.includes("Autorizada")) {
+    protocolo = `${protocolo} - Autorizada em ${formatDate(dados.dataEmissao)}`;
+  }
+
+  // Generate real lines of bars for barcode simulation
   let barcodeBars = "";
-  for (let i = 0; i < 65; i++) {
+  for (let i = 0; i < 70; i++) {
     const width = (i % 3 === 0) ? 3 : (i % 2 === 0) ? 1.5 : 1;
     const margin = (i % 5 === 0) ? 2 : 1;
     barcodeBars += `<div style="background-color: black; width: ${width}px; margin-right: ${margin}px;"></div>`;
   }
 
-  const cleanChave = dados.chaveAcesso.replace(/\s/g, '');
-  const formattedChave = cleanChave.replace(/(.{4})/g, '$1 ').trim();
+  // Extrai e limpa bairro
+  let bairroDest = "Centro";
+  const addr = dados.destinatario.endereco || "";
+  if (addr.includes("-")) {
+    const parts = addr.split("-");
+    bairroDest = parts[parts.length - 1].trim();
+  } else if (addr.includes(",")) {
+    const parts = addr.split(",");
+    if (parts.length > 2) {
+      bairroDest = parts[2].trim();
+    } else if (parts.length > 1) {
+      bairroDest = parts[1].trim();
+    }
+  }
 
-  // Create products table lines
-  const prodValor = dados.valor * 0.85; // main product takes most value
-  const outValor = dados.valor * 0.15; // secondary product
+  // Limpa o nome do logradouro para o campo endereço
+  let logradouroDest = addr;
+  if (addr.includes("-")) {
+    logradouroDest = addr.split("-")[0].trim();
+  }
+
+  // Natureza da Operação
+  const naturezaOperacao = dados.naturezaOperacao || "VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS";
+
+  // Gera os produtos de forma dinâmica
+  let productLines = "";
+  const totalValue = dados.valor || 0;
+
+  if (dados.itensProdutos && dados.itensProdutos.length > 0) {
+    dados.itensProdutos.forEach((item) => {
+      productLines += `
+        <tr>
+          <td style="font-family: monospace;">${item.codigo}</td>
+          <td><strong>${item.descricao}</strong></td>
+          <td class="text-center">${item.ncm}</td>
+          <td class="text-center">${item.cst}</td>
+          <td class="text-center">${item.cfop}</td>
+          <td class="text-center">${item.unid}</td>
+          <td class="text-right">${item.qtd}</td>
+          <td class="text-right">${formatCurrency(item.valorUnit)}</td>
+          <td class="text-right">${formatCurrency(item.valorTotal)}</td>
+        </tr>
+      `;
+    });
+  } else {
+    // Fallback usando a descrição
+    const itens = dados.descricao 
+      ? dados.descricao.split(',').map(s => s.trim()).filter(s => s.length > 0)
+      : ['Mercadorias diversas para fins logísticos comerciais.'];
+
+    if (itens.length === 1) {
+      productLines += `
+        <tr>
+          <td style="font-family: monospace;">PRD-${Math.abs(hashCode(itens[0])).toString().substring(0, 6).padStart(6, '0')}</td>
+          <td><strong>${itens[0]}</strong></td>
+          <td class="text-center">9404.21.00</td>
+          <td class="text-center">000</td>
+          <td class="text-center">5102</td>
+          <td class="text-center">UN</td>
+          <td class="text-right">1</td>
+          <td class="text-right">${formatCurrency(totalValue)}</td>
+          <td class="text-right">${formatCurrency(totalValue)}</td>
+        </tr>
+      `;
+    } else {
+      const share = totalValue / itens.length;
+      itens.forEach((item, idx) => {
+        const cod = `PRD-${Math.abs(hashCode(item + idx)).toString().substring(0, 6).padStart(6, '0')}`;
+        const val = idx === itens.length - 1 
+          ? totalValue - (share * (itens.length - 1)) 
+          : share;
+        productLines += `
+          <tr>
+            <td style="font-family: monospace;">${cod}</td>
+            <td><strong>${item}</strong></td>
+            <td class="text-center">9404.21.00</td>
+            <td class="text-center">000</td>
+            <td class="text-center">5102</td>
+            <td class="text-center">UN</td>
+            <td class="text-right">1</td>
+            <td class="text-right">${formatCurrency(val)}</td>
+            <td class="text-right">${formatCurrency(val)}</td>
+          </tr>
+        `;
+      });
+    }
+  }
+
+  // Impostos
+  const baseIcms = dados.baseIcms !== undefined ? dados.baseIcms : totalValue * 0.7;
+  const valorIcms = dados.valorIcms !== undefined ? dados.valorIcms : baseIcms * 0.18;
+
+  // Informações Complementares
+  let infoComplementaresHtml = "";
+  if (dados.informacoesComplementares) {
+    infoComplementaresHtml = dados.informacoesComplementares;
+  } else {
+    infoComplementaresHtml = `
+      - MERCADORIA EM TRÂNSITO DESTINADA A: ${dados.destinatario.nome}.<br/>
+      - ENDEREÇO DE ENTREGA: ${dados.destinatario.endereco}, ${dados.destinatario.cidade} - ${dados.destinatario.estado}.<br/>
+      - CHAVE DE ACESSO OFICIAL SEFAZ REGISTRADA EM PRODUÇÃO: ${dados.chaveAcesso}.<br/>
+      - TRANSPORTE AUTORIZADO E MONITORADO PELA HARPIA LOGIX.<br/>
+      - ROTA EXECUTADA E OTIMIZADA COM INTELIGÊNCIA ARTIFICIAL DE ÚLTIMA GERAÇÃO - VOIEEXPRESS.
+    `;
+  }
+
+  // Volumes e Pesos
+  const pesoBruto = dados.peso !== undefined ? dados.peso : 0;
+  const pesoLiquidoStr = dados.pesoLiquido !== undefined ? `${dados.pesoLiquido} kg` : (pesoBruto > 0 ? `${pesoBruto} kg` : "Não Informado");
+  const qtdVolumes = dados.quantidadeVolumes !== undefined ? String(dados.quantidadeVolumes) : "30";
+  const especieVolumes = dados.especieVolumes || "VOLUME";
+
+  const emitIE = dados.emitente.ie || "06.200.783-1";
+  const emitCnpjStr = formatCNPJ(dados.emitente.cnpj) || "03.387.691/0001-16";
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -37,7 +210,7 @@ export function generateDanfeHtml(dados: NFeData): string {
   <title>DANFE - ${dados.chaveAcesso}</title>
   <style>
     body {
-      font-family: 'Courier New', Courier, monospace, Arial, sans-serif;
+      font-family: Arial, sans-serif;
       font-size: 8px;
       color: #000;
       margin: 10px;
@@ -130,8 +303,8 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td style="width: 20%; text-align: center; vertical-align: middle; font-weight: bold; font-size: 11px;">
           NF-e<br/>
-          Nº 000.564.005<br/>
-          SÉRIE 1
+          Nº ${numeroNota}<br/>
+          SÉRIE ${serieNota}
         </td>
       </tr>
     </table>
@@ -147,9 +320,8 @@ export function generateDanfeHtml(dados: NFeData): string {
             ${dados.emitente.nome}
           </div>
           <div style="font-size: 7px; text-align: center; line-height: 1.2;">
-            CNPJ: ${dados.emitente.cnpj}<br/>
-            LOGÍSTICA E DISTRIBUIÇÃO NACIONAL<br/>
-            ENDEREÇO OFICIAL SEFAZ DE ORIGEM
+            CNPJ: ${emitCnpjStr}<br/>
+            ${dados.emitente.endereco ? dados.emitente.endereco : 'LOGÍSTICA E DISTRIBUIÇÃO NACIONAL<br/>SÃO PAULO - AMAZONAS - OPERAÇÃO INTEGRADA'}
           </div>
         </td>
         
@@ -164,8 +336,8 @@ export function generateDanfeHtml(dados: NFeData): string {
             1 - SAÍDA &nbsp; &nbsp; <strong>1</strong>
           </div>
           <div style="font-size: 8px; font-weight: bold; margin-top: 4px;">
-            Nº 000.564.005<br/>
-            SÉRIE 1<br/>
+            Nº ${numeroNota}<br/>
+            SÉRIE ${serieNota}<br/>
             FOLHA 1/1
           </div>
         </td>
@@ -193,21 +365,21 @@ export function generateDanfeHtml(dados: NFeData): string {
       <tr>
         <td style="width: 50%;">
           <span class="title">Natureza da Operação</span>
-          <span class="value">VENDA DE MERCADORIA ADQUIRIDA DE TERCEIROS</span>
+          <span class="value">${naturezaOperacao}</span>
         </td>
         <td style="width: 50%;">
           <span class="title">Protocolo de Autorização de Uso da NF-e</span>
-          <span class="value">132260004587425 - Autorizada em ${formatDate(dados.dataEmissao)}</span>
+          <span class="value">${protocolo}</span>
         </td>
       </tr>
       <tr>
         <td>
           <span class="title">Inscrição Estadual</span>
-          <span class="value">954.120.334.110</span>
+          <span class="value">${emitIE}</span>
         </td>
         <td>
           <span class="title">CNPJ</span>
-          <span class="value">${dados.emitente.cnpj}</span>
+          <span class="value">${emitCnpjStr}</span>
         </td>
       </tr>
     </table>
@@ -222,7 +394,7 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td style="width: 25%;">
           <span class="title">CNPJ / CPF</span>
-          <span class="value">CNPJ ${dados.destinatario.cep ? 'Simulado' : 'Oficial'}</span>
+          <span class="value">${formatCNPJ(dados.destinatario.cnpj) || "Isento / Não Informado"}</span>
         </td>
         <td style="width: 15%;">
           <span class="title">Data de Emissão</span>
@@ -232,15 +404,15 @@ export function generateDanfeHtml(dados: NFeData): string {
       <tr>
         <td>
           <span class="title">Endereço</span>
-          <span class="value">${dados.destinatario.endereco}</span>
+          <span class="value">${logradouroDest}</span>
         </td>
         <td>
           <span class="title">Bairro / Distrito</span>
-          <span class="value">Centro / Industrial</span>
+          <span class="value">${bairroDest}</span>
         </td>
         <td>
           <span class="title">CEP</span>
-          <span class="value">${dados.destinatario.cep || "69000-000"}</span>
+          <span class="value">${formatCEP(dados.destinatario.cep) || "69000-000"}</span>
         </td>
       </tr>
       <tr>
@@ -250,7 +422,7 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td>
           <span class="title">Fone / Fax</span>
-          <span class="value">(92) 3301-4455</span>
+          <span class="value">${dados.destinatario.telefone || "(92) 3301-4455"}</span>
         </td>
         <td>
           <span class="title">UF</span>
@@ -265,11 +437,11 @@ export function generateDanfeHtml(dados: NFeData): string {
       <tr>
         <td>
           <span class="title">Base de Cálculo do ICMS</span>
-          <span class="value">${formatCurrency(dados.valor * 0.7)}</span>
+          <span class="value">${formatCurrency(baseIcms)}</span>
         </td>
         <td>
           <span class="title">Valor do ICMS</span>
-          <span class="value">${formatCurrency(dados.valor * 0.7 * 0.18)}</span>
+          <span class="value">${formatCurrency(valorIcms)}</span>
         </td>
         <td>
           <span class="title">Base de Calc. ICMS S.T.</span>
@@ -281,7 +453,7 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td>
           <span class="title">Valor Total dos Produtos</span>
-          <span class="value">${formatCurrency(dados.valor)}</span>
+          <span class="value">${formatCurrency(totalValue)}</span>
         </td>
       </tr>
       <tr>
@@ -303,7 +475,7 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td>
           <span class="title">Valor Total da Nota</span>
-          <span class="value" style="font-size: 10px; font-weight: 900;">${formatCurrency(dados.valor)}</span>
+          <span class="value" style="font-size: 10px; font-weight: 900;">${formatCurrency(totalValue)}</span>
         </td>
       </tr>
     </table>
@@ -356,11 +528,11 @@ export function generateDanfeHtml(dados: NFeData): string {
         </td>
         <td>
           <span class="title">Espécie</span>
-          <span class="value">FARDOS</span>
+          <span class="value">${especieVolumes}</span>
         </td>
         <td>
           <span class="title">Peso Bruto</span>
-          <span class="value">${dados.peso || "45.0"} kg</span>
+          <span class="value">${pesoBruto ? `${pesoBruto} kg` : "Não Informado"}</span>
         </td>
       </tr>
     </table>
@@ -370,40 +542,19 @@ export function generateDanfeHtml(dados: NFeData): string {
     <table class="products-table">
       <thead>
         <tr>
-          <th style="width: 8%;">CÓD. PROD.</th>
-          <th style="width: 44%;">DESCRIÇÃO DO PRODUTO / SERVIÇO</th>
-          <th style="width: 8%;">NCM/SH</th>
-          <th style="width: 5%;">CST</th>
-          <th style="width: 5%;">CFOP</th>
-          <th style="width: 5%;">UNID.</th>
-          <th style="width: 5%;">QTD.</th>
-          <th style="width: 10%;">VALOR UNIT.</th>
-          <th style="width: 10%;">VALOR TOTAL</th>
+          <th style="width: 12%;">CÓD. PROD.</th>
+          <th style="width: 40%;">DESCRIÇÃO DO PRODUTO / SERVIÇO</th>
+          <th style="width: 8%;" class="text-center">NCM/SH</th>
+          <th style="width: 5%;" class="text-center">CST</th>
+          <th style="width: 5%;" class="text-center">CFOP</th>
+          <th style="width: 5%;" class="text-center">UNID.</th>
+          <th style="width: 5%;" class="text-right">QTD.</th>
+          <th style="width: 10%;" class="text-right">VALOR UNIT.</th>
+          <th style="width: 10%;" class="text-right">VALOR TOTAL</th>
         </tr>
       </thead>
       <tbody>
-        <tr>
-          <td>PRD-000845</td>
-          <td><strong>${dados.descricao || 'Produtos manufaturados diversos para fins logísticos comerciais.'}</strong></td>
-          <td>8517.12.31</td>
-          <td>000</td>
-          <td>5102</td>
-          <td>UN</td>
-          <td>1</td>
-          <td>${formatCurrency(prodValor)}</td>
-          <td>${formatCurrency(prodValor)}</td>
-        </tr>
-        <tr>
-          <td>PRD-000122</td>
-          <td>SERVIÇO DE LOGÍSTICA COMPLEMENTAR E SEGURO INTEGRADO SEFAZ</td>
-          <td>4911.10.90</td>
-          <td>040</td>
-          <td>5949</td>
-          <td>UN</td>
-          <td>1</td>
-          <td>${formatCurrency(outValor)}</td>
-          <td>${formatCurrency(outValor)}</td>
-        </tr>
+        ${productLines}
       </tbody>
     </table>
 
@@ -414,11 +565,7 @@ export function generateDanfeHtml(dados: NFeData): string {
         <td style="height: 60px;">
           <span class="title">Informações Complementares</span>
           <span class="value" style="font-size: 7.5px; line-height: 1.4;">
-            - MERCADORIA EM TRÂNSITO DESTINADA A: ${dados.destinatario.nome}.<br/>
-            - ENDEREÇO DE ENTREGA: ${dados.destinatario.endereco}, ${dados.destinatario.cidade} - ${dados.destinatario.estado}.<br/>
-            - CHAVE DE ACESSO OFICIAL SEFAZ REGISTRADA EM PRODUÇÃO: ${dados.chaveAcesso}.<br/>
-            - TRANSPORTE AUTORIZADO E MONITORADO PELA HARPIA LOGIX.<br/>
-            - ROTA EXECUTADA E OTIMIZADA COM INTELIGÊNCIA ARTIFICIAL DE ÚLTIMA GERAÇÃO - VOIEEXPRESS.
+            ${infoComplementaresHtml}
           </span>
         </td>
       </tr>

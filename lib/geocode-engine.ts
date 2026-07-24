@@ -201,9 +201,127 @@ function normalizeForDedup(str: string): string {
     .trim();
 }
 
-export async function enhancedAutocomplete(text: string, proximity?: { lat: number, lon: number }): Promise<GeocodeResult[]> {
+function geoDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export interface ParsedAddressQuery {
+  raw: string;
+  typedNumber?: string;
+  typedComplement?: string;
+  typedCep?: string;
+  typedWords: string[];
+  cleanedRaw: string;
+  canonicalQuery: string;
+  streetOnlyQuery: string;
+}
+
+export function parseQueryTokens(text: string): ParsedAddressQuery {
+  const raw = text.trim();
+  
+  // 1. CEP Extraction (8 digits with optional hyphen or space)
+  const cepMatch = raw.match(/\b\d{5}[- ]?\d{3}\b/) || raw.match(/\b\d{8}\b/);
+  const typedCep = cepMatch ? formatCep(cepMatch[0].replace(/\s+/g, '')) : undefined;
+
+  let textWithoutCep = raw;
+  if (cepMatch) {
+    textWithoutCep = textWithoutCep.replace(cepMatch[0], ' ');
+  }
+
+  // 2. Complement / Lot / Block / Quadra detection
+  const compMatch = textWithoutCep.match(/\b(apto|apt|bloco|bl|sala|lote|lt|qd|quadra|km|casa|fundos|sobrado|galpao|galpão|andar|ap)\s*[:.-]?\s*([a-zA-Z0-9]+)\b/i);
+  const typedComplement = compMatch ? `${compMatch[1].toUpperCase()} ${compMatch[2]}` : undefined;
+
+  let textWithoutComp = textWithoutCep;
+  if (compMatch) {
+    textWithoutComp = textWithoutComp.replace(compMatch[0], ' ');
+  }
+
+  // 3. House Number detection with flexible prefixes (nº, n°, num, #, no., n-, or standalone digits)
+  let typedNumber: string | undefined = undefined;
+  
+  // First check explicit number patterns like "nº 123", "n° 123", "#123", "num 123", "no. 123", "n 123"
+  const explicitNumMatch = textWithoutComp.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*)\s*(\d{1,5}[a-zA-Z]?)\b/i);
+  if (explicitNumMatch) {
+    typedNumber = explicitNumMatch[1];
+  } else {
+    // Check for standalone 1-5 digit numbers not equal to current/recent years
+    const numMatches = Array.from(textWithoutComp.matchAll(/\b(\d{1,5}[a-zA-Z]?)\b/g)).map(m => m[1]);
+    for (const num of numMatches) {
+      if (!['2023', '2024', '2025', '2026', '2027'].includes(num) && num.length <= 5) {
+        typedNumber = num;
+        break;
+      }
+    }
+  }
+
+  // 4. Tokenize for out-of-order fuzzy search
+  const cleanedRaw = raw
+    .replace(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*)\s*(\d+)/gi, '$1')
+    .replace(/[^\w\s\,-]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const typedWords = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2 && !['de', 'da', 'do', 'dos', 'das', 'em', 'no', 'na', 'para', 'com', 'nº', 'num', 'no', 'brasil', 'brazil', 'manaus', 'am'].includes(w));
+
+  // Build a query without the house number for geocoders that choke on unformatted numbers
+  let streetOnlyQuery = cleanedRaw;
+  if (typedNumber) {
+    streetOnlyQuery = streetOnlyQuery.replace(new RegExp(`\\b${typedNumber}\\b`, 'g'), ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Build canonical structured query
+  const canonicalParts: string[] = [];
+  if (typedWords.length > 0) {
+    canonicalParts.push(typedWords.join(' '));
+  }
+  if (typedNumber) {
+    canonicalParts.push(typedNumber);
+  }
+
+  return {
+    raw,
+    typedNumber,
+    typedComplement,
+    typedCep,
+    typedWords,
+    cleanedRaw,
+    canonicalQuery: canonicalParts.length > 0 ? canonicalParts.join(', ') : raw,
+    streetOnlyQuery: streetOnlyQuery.length >= 2 ? streetOnlyQuery : raw
+  };
+}
+
+export async function enhancedAutocomplete(
+  text: string, 
+  latOrProximity?: number | { lat: number, lon: number }, 
+  lonParam?: number
+): Promise<GeocodeResult[]> {
   if (!text || text.trim().length < 2) return [];
+
+  let lat: number | undefined;
+  let lon: number | undefined;
+  if (typeof latOrProximity === 'number') {
+    lat = latOrProximity;
+    lon = lonParam;
+  } else if (latOrProximity && typeof latOrProximity === 'object') {
+    lat = latOrProximity.lat;
+    lon = latOrProximity.lon;
+  }
   const normalizedText = text.trim().toLowerCase();
+  const parsedQueryInfo = parseQueryTokens(text);
   
   // 1. Check offline registry matches by searching our rich aliases or names
   const normalizedSearch = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -217,13 +335,17 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       }) || entry.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(normalizedSearch);
 
       if (matchFound) {
+        let entryName = entry.name;
+        if (parsedQueryInfo.typedNumber && !entryName.includes(parsedQueryInfo.typedNumber)) {
+          entryName = `${entry.name}, ${parsedQueryInfo.typedNumber}`;
+        }
         offlineMatches.push({
           lat: entry.lat,
           lon: entry.lon,
-          name: entry.name,
+          name: entryName,
           context: entry.context,
-          label: `${entry.name}, ${entry.context}`,
-          confidenceScore: 98, // Let high-quality online matches compete if they are more specific
+          label: `${entryName} - ${entry.context}`,
+          confidenceScore: 98,
           source: 'cache',
           type: 'address'
         });
@@ -240,8 +362,6 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
   try {
     const cachedEntry = await db.cache.get(`geo-${normalizedText}`);
     if (cachedEntry && cachedEntry.data) {
-      console.log(`[Geocode Cache] Hit persistent cache for: "${normalizedText}"`);
-      // Update in-memory cache
       geoCache.set(normalizedText, cachedEntry.data);
       return cachedEntry.data;
     }
@@ -250,9 +370,6 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
   }
 
   try {
-    let lat = proximity?.lat;
-    let lon = proximity?.lon;
-    
     // Check if input resembles any Brazilian Postal Code (CEP) or partial CEP
     const isCepInput = /\b\d{5}-?\d{3}\b/.test(text) || /\b\d{8}\b/.test(text) || /\b\d{5}\b/.test(text);
 
@@ -269,7 +386,7 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     
     const hasProximity = (lat != null && lon != null);
     
-    let composedQuery = text;
+    let composedQuery = parsedQueryInfo.cleanedRaw;
     if (!text.toLowerCase().includes('brasil') && !text.toLowerCase().includes('br') && !text.toLowerCase().includes('brazil')) {
       const queryLower = text.toLowerCase();
       const hasSpecificLocation = queryLower.includes('manaus') || 
@@ -287,9 +404,9 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
                                   /\b(am|sp|rj|mg|pr|rs|sc|go|df)\b/.test(queryLower);
       
       if (!hasSpecificLocation) {
-        composedQuery = `${text}, Manaus, AM, Brasil`;
+        composedQuery = `${parsedQueryInfo.cleanedRaw}, Manaus, AM, Brasil`;
       } else {
-        composedQuery = `${text}, Brasil`;
+        composedQuery = `${parsedQueryInfo.cleanedRaw}, Brasil`;
       }
     }
 
@@ -299,27 +416,27 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     // Detect if search query contains a Brazilian Postal Code (CEP), formatting with or without hyphen
     const cepMatch = text.match(/\b\d{5}-?\d{3}\b/) || text.match(/\b\d{8}\b/);
     if (cepMatch) {
-      const cleanCep = cepMatch[0].replace('-', '');
-      console.log(`[Geocode CEP] Detectou CEP: ${cepMatch[0]} em "${text}"`);
+      const cleanCep = cepMatch[0].replace('-', '').replace(/\s+/g, '');
       try {
         const response = await fetch(`/api/viacep?cep=${cleanCep}`);
         if (response.ok) {
           const data = await response.json();
           if (data && !data.erro) {
             resolvedViaCepData = data;
-            // Find a house number in the query (any digit group of max 5 chars that is not the CEP itself and not inside logradouro)
             const textWithoutCep = text.replace(cepMatch[0], '').replace(/,/, ' ').replace(/\s+/g, ' ').trim();
             const allNumbers = Array.from(textWithoutCep.matchAll(/\b\d{1,5}\b/g)).map(m => m[0]);
             
-            let streetNumber = '';
-            for (const num of allNumbers) {
-              if (data.logradouro && !data.logradouro.toLowerCase().includes(num)) {
-                streetNumber = num;
-                break;
+            let streetNumber = parsedQueryInfo.typedNumber || '';
+            if (!streetNumber) {
+              for (const num of allNumbers) {
+                if (data.logradouro && !data.logradouro.toLowerCase().includes(num)) {
+                  streetNumber = num;
+                  break;
+                }
               }
-            }
-            if (!streetNumber && allNumbers.length > 0) {
-              streetNumber = allNumbers[0];
+              if (!streetNumber && allNumbers.length > 0) {
+                streetNumber = allNumbers[0];
+              }
             }
 
             const parts = [
@@ -333,7 +450,6 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
             if (parts.length > 2) {
               composedQuery = parts.join(', ');
               viaCepResolved = true;
-              console.log(`[Geocode CEP] Resolvido via ViaCEP: ${composedQuery}`);
             }
           }
         }
@@ -341,6 +457,20 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         console.warn("[Geocode CEP] Erro ao buscar CEP no ViaCEP:", err);
       }
     }
+
+    const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 2500) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        if (!response.ok) return null;
+        return await response.json();
+      } catch (err) {
+        clearTimeout(id);
+        return null;
+      }
+    };
 
     const cleanText = encodeURIComponent(composedQuery);
     const viewboxStr = hasProximity ? `&viewbox=${lon! - 0.5},${lat! + 0.5},${lon! + 0.5},${lat! - 0.5}` : '';
@@ -350,13 +480,34 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     const seenKeys = new Set<string>();
 
     const addResult = (res: GeocodeResult) => {
-      // Get the full 8-digit CEP if we resolved or detected one
+      // Enforce Typed Number on address results if user provided a house number
+      if (parsedQueryInfo.typedNumber && res.type !== 'poi') {
+        const numStr = parsedQueryInfo.typedNumber;
+        if (!res.name.includes(numStr)) {
+          const oldName = res.name;
+          res.name = `${res.name}, ${numStr}`;
+          if (res.label.startsWith(oldName)) {
+            res.label = res.label.replace(oldName, res.name);
+          } else if (!res.label.includes(numStr)) {
+            res.label = `${res.name} - ${res.context || ''}`;
+          }
+        }
+      }
+
+      // Enforce Typed Complement if present
+      if (parsedQueryInfo.typedComplement && !res.name.includes(parsedQueryInfo.typedComplement)) {
+        res.name = `${res.name} (${parsedQueryInfo.typedComplement})`;
+        if (!res.label.includes(parsedQueryInfo.typedComplement)) {
+          res.label = `${res.name} - ${res.context || ''}`;
+        }
+      }
+
+      // CEP formatting
       const inputFullCep = (viaCepResolved && resolvedViaCepData?.cep) 
         ? formatCep(resolvedViaCepData.cep) 
         : (cepMatch ? formatCep(cepMatch[0]) : null);
 
       if (inputFullCep && inputFullCep.replace(/\D/g, '').length === 8) {
-        // Force replace any missing or 5-digit CEP with the full 8-digit CEP
         if (!res.cep || res.cep.replace(/\D/g, '').length < 8) {
           res.cep = inputFullCep;
         } else {
@@ -385,14 +536,13 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         const cleanCepStr = res.cep.replace('-', '');
         if (!res.label.replace('-', '').includes(cleanCepStr)) {
             if (res.label.endsWith(', Brasil') || res.label.endsWith(', Brazil')) {
-                res.label = res.label.replace(/, (Brasil|Brazil)$/i, ` - ${res.cep}`);
+                res.label = res.label.replace(/, (Brasil|Brazil)$/i, ` - CEP ${res.cep}`);
             } else {
-                res.label = `${res.label} - ${res.cep}`;
+                res.label = `${res.label} - CEP ${res.cep}`;
             }
         }
       }
 
-      // Coordinate grid up to 4 decimals (~11 meters precision) provides excellent deduplication
       const latGrid = Math.floor(res.lat * 10000);
       const lonGrid = Math.floor(res.lon * 10000);
       
@@ -406,13 +556,9 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       }
     };
 
-    // Add offline matches to results list seamlessly
     offlineMatches.forEach(addResult);
 
-    // Detect if search has numbers (likely a street/house number)
-    const hasNumber = /\d+/.test(composedQuery);
-
-    // Common search terms to boost POI detection
+    const hasNumber = Boolean(parsedQueryInfo.typedNumber);
     const isCompanyOrPOI = /loja|empresa|praça|parque|hospital|restaurante|escola|shopping|supermercado|posto|banco|academia|hotel|aeroporto/i.test(composedQuery);
 
     const orsParams: any = {
@@ -437,61 +583,120 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
       googleQs.append('lon', lon.toString());
     }
 
-    // Parallelize search requests to all geocoding services
+    // Parallelize search requests to all geocoding services with 2.5s timeouts
     const providers = [
       // 0. Google Places Autocomplete API
-      fetch(`/api/places/google-autocomplete?${googleQs.toString()}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchWithTimeout(`/api/places/google-autocomplete?${googleQs.toString()}`),
 
       // 1. Mapbox API 
-      fetch(`/api/places/search?${mapboxQs.toString()}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetchWithTimeout(`/api/places/search?${mapboxQs.toString()}`),
 
       // 2. OpenRouteService 
-      fetch('/api/ors', {
+      fetchWithTimeout('/api/ors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           endpoint: hasNumber && !isCompanyOrPOI ? 'geocode/search' : 'geocode/autocomplete',
           params: orsParams
         })
-      }).then(r => r.ok ? r.json() : null).catch(() => null),
+      }),
 
-      // 3. Nominatim (OSM online geocoder proxied to avoid client-side CORS failures)
-      fetch(`/api/places/osm?type=nominatim&q=${cleanText}${viewboxStr}`)
-        .then(r => r.ok ? r.json() : null)
-        .catch(() => null),
+      // 3. Nominatim (OSM Geocoder)
+      fetchWithTimeout(`/api/places/osm?type=nominatim&q=${cleanText}${viewboxStr}`),
 
-      // 4. Photon (High-availability search engine proxied to avoid client-side CORS failures)
-      fetch(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`)
-        .then(r => r.ok ? r.json() : null)
-        .catch(() => null)
+      // 4. Photon (Fast fuzzy search)
+      fetchWithTimeout(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`)
     ];
 
     const [googleRes, mapboxRes, orsRes, nomRes, phoRes] = await Promise.all(providers);
 
-    // Parse Google Places API (New) Text Search
+    // Parse Google Places & Autocomplete API results
     if (googleRes && Array.isArray(googleRes.places)) {
       googleRes.places.forEach((p: any) => {
-        const isPOI = p.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'shopping_mall', 'food', 'store'].includes(t));
-        const name = p.displayName?.text || '';
-        const context = p.formattedAddress || '';
-        
-        let label = '';
-        if (isPOI) {
-          label = `${name}${context ? `, ${context}` : ''}`;
+        const isPOI = p.types?.some((t: string) =>
+          ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital', 'shopping_mall', 'food', 'store', 'restaurant', 'lodging', 'gas_station', 'bank', 'supermarket', 'pharmacy', 'school', 'university'].includes(t)
+        );
+
+        const mainTitle = p.displayName?.text || p.structured?.mainText || '';
+        const route = p.structured?.route || '';
+        const streetNum = p.structured?.streetNumber || '';
+        const sublocality = p.structured?.sublocality || '';
+        const locality = p.structured?.locality || '';
+        const adminArea = p.structured?.adminArea || '';
+        const cep = p.cep || p.structured?.postalCode || '';
+
+        // Determine exact street + house number component
+        let streetAndNum = '';
+        if (route) {
+          streetAndNum = route;
+          if (streetNum) {
+            streetAndNum += `, ${streetNum}`;
+          } else if (parsedQueryInfo.typedNumber && !streetAndNum.includes(parsedQueryInfo.typedNumber)) {
+            streetAndNum += `, ${parsedQueryInfo.typedNumber}`;
+          }
+        } else if (mainTitle) {
+          streetAndNum = mainTitle;
+          if (parsedQueryInfo.typedNumber && !streetAndNum.includes(parsedQueryInfo.typedNumber) && !isPOI) {
+            streetAndNum += `, ${parsedQueryInfo.typedNumber}`;
+          }
+        }
+
+        // Attach typed complement if user provided one (e.g. Apto 101, Bloco A, Sala 3)
+        if (parsedQueryInfo.typedComplement && streetAndNum && !streetAndNum.toLowerCase().includes(parsedQueryInfo.typedComplement.toLowerCase())) {
+          streetAndNum += ` (${parsedQueryInfo.typedComplement})`;
+        }
+
+        // Build neighborhood, city, and state context
+        const contextParts: string[] = [];
+        if (sublocality) contextParts.push(sublocality);
+        if (locality) {
+          if (adminArea) {
+            contextParts.push(`${locality} - ${adminArea}`);
+          } else {
+            contextParts.push(locality);
+          }
+        } else if (adminArea) {
+          contextParts.push(adminArea);
+        }
+        const contextStr = contextParts.join(', ');
+
+        // Format primary name and full display label
+        let primaryName = '';
+        let fullLabel = '';
+
+        if (isPOI && mainTitle && mainTitle !== route) {
+          // Establishment / Venue name + street address
+          if (streetAndNum && streetAndNum !== mainTitle) {
+            primaryName = `${mainTitle} - ${streetAndNum}`;
+          } else {
+            primaryName = mainTitle;
+          }
         } else {
-          label = context || name;
+          // Exact street address
+          primaryName = streetAndNum || mainTitle || 'Endereço';
+        }
+
+        if (contextStr) {
+          fullLabel = `${primaryName} - ${contextStr}`;
+        } else {
+          fullLabel = primaryName;
+        }
+
+        const finalCep = cep || parsedQueryInfo.typedCep;
+        if (finalCep && !fullLabel.includes(finalCep)) {
+          fullLabel += ` - CEP ${formatCep(finalCep)}`;
         }
 
         addResult({
           lat: p.location?.latitude || 0,
           lon: p.location?.longitude || 0,
-          name: name,
-          context: context,
-          label: label,
-          confidenceScore: 100, // Highest priority
+          name: primaryName,
+          context: contextStr || p.formattedAddress || '',
+          label: fullLabel,
+          confidenceScore: 100, // Top priority for Google Places
           source: 'google',
           type: isPOI ? 'poi' : 'address',
-          cep: p.cep
+          cep: finalCep
         });
       });
     }
@@ -509,22 +714,26 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         if (f.address) {
           name = `${f.text}, ${f.address}`;
           score += 15; // Exact house number matched by Mapbox!
-        } else if (hasNumber) {
-          const matchNum = composedQuery.match(/\b\d{1,5}\b/);
-          if (matchNum && (f.place_name.includes(matchNum[0]) || f.text.includes(matchNum[0]))) {
-            score += 8;
-            name = `${f.text}, ${matchNum[0]}`;
+        } else if (parsedQueryInfo.typedNumber) {
+          if (!name.includes(parsedQueryInfo.typedNumber)) {
+            name = `${f.text}, ${parsedQueryInfo.typedNumber}`;
+            score += 10;
           }
         }
 
+        if (parsedQueryInfo.typedComplement && !name.includes(parsedQueryInfo.typedComplement)) {
+          name += ` (${parsedQueryInfo.typedComplement})`;
+        }
+
         const mapboxPc = f.context?.find((c: any) => c.id?.startsWith('postcode'))?.text;
+        const formattedLabel = `${name} - ${contextText}${mapboxPc ? ` - CEP ${formatCep(mapboxPc)}` : ''}`;
 
         addResult({
           lat: f.center[1], // Mapbox uses [lon, lat]
           lon: f.center[0],
           name: name,
           context: contextText,
-          label: f.place_name,
+          label: formattedLabel,
           confidenceScore: score,
           source: 'mapbox',
           type: isPOI ? 'poi' : 'address',
@@ -550,24 +759,27 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         } else if (props.housenumber) {
           name = `${name}, ${props.housenumber}`;
           score += 15;
-        } else if (hasNumber) {
-          const matchNum = composedQuery.match(/\b\d{1,5}\b/);
-          if (matchNum && (props.label.includes(matchNum[0]) || props.name?.includes(matchNum[0]))) {
-            score += 10;
-            if (props.street) {
-              name = `${props.street}, ${matchNum[0]}`;
-            } else {
-              name = `${name}, ${matchNum[0]}`;
-            }
+        } else if (parsedQueryInfo.typedNumber) {
+          if (props.street) {
+            name = `${props.street}, ${parsedQueryInfo.typedNumber}`;
+          } else if (!name.includes(parsedQueryInfo.typedNumber)) {
+            name = `${name}, ${parsedQueryInfo.typedNumber}`;
           }
+          score += 10;
         }
+
+        if (parsedQueryInfo.typedComplement && !name.includes(parsedQueryInfo.typedComplement)) {
+          name += ` (${parsedQueryInfo.typedComplement})`;
+        }
+
+        const formattedLabel = `${name} - ${details || props.label}${props.postalcode ? ` - CEP ${formatCep(props.postalcode)}` : ''}`;
 
         addResult({
           lat: f.geometry.coordinates[1],
           lon: f.geometry.coordinates[0],
           name: name,
           context: (isPOI && props.street ? `${props.street}, ${details}` : details) || props.label,
-          label: props.label,
+          label: formattedLabel,
           confidenceScore: Math.min(score, 100),
           source: 'ors',
           type: isPOI ? 'poi' : 'address',
@@ -583,7 +795,6 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         const type = item.type || '';
         const osmClass = item.class || '';
         
-        // osmClass amenity/shop/tourism/historic/leisure indicate POIs
         const isPOI = !['highway', 'place', 'boundary', 'house', 'building', 'street', 'administrative'].includes(type) && 
                       !['highway', 'place', 'boundary'].includes(osmClass);
         
@@ -601,24 +812,27 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
             score += 20; // Highly precise house matching
           } else {
             name = addr.road;
-            if (hasNumber) {
-              const matchNum = composedQuery.match(/\b\d{1,5}\b/);
-              if (matchNum && item.display_name.includes(matchNum[0])) {
-                score += 10;
-                name = `${addr.road}, ${matchNum[0]}`;
-              }
+            if (parsedQueryInfo.typedNumber) {
+              name = `${addr.road}, ${parsedQueryInfo.typedNumber}`;
+              score += 10;
             }
           }
         }
+
+        if (parsedQueryInfo.typedComplement && !name.includes(parsedQueryInfo.typedComplement)) {
+          name += ` (${parsedQueryInfo.typedComplement})`;
+        }
         
         if (isPOI) score += 8;
+
+        const formattedLabel = `${name} - ${details || item.display_name}${addr?.postcode ? ` - CEP ${formatCep(addr.postcode)}` : ''}`;
 
         addResult({
           lat: parseFloat(item.lat),
           lon: parseFloat(item.lon),
           name: name,
           context: (isPOI && addr?.road ? `${addr.road}, ${details}` : details) || item.display_name,
-          label: item.display_name,
+          label: formattedLabel,
           confidenceScore: Math.min(score, 100),
           source: 'nominatim',
           type: isPOI ? 'poi' : 'address',
@@ -641,22 +855,27 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         if (props.street && props.housenumber) {
           name = `${props.street}, ${props.housenumber}`;
           score += 15;
-        } else if (hasNumber) {
-          const matchNum = composedQuery.match(/\b\d{1,5}\b/);
-          if (matchNum && (props.name?.includes(matchNum[0]) || props.street?.includes(matchNum[0]) || props.district?.includes(matchNum[0]))) {
-            score += 10;
-            if (props.street) {
-              name = `${props.street}, ${matchNum[0]}`;
-            }
+        } else if (parsedQueryInfo.typedNumber) {
+          if (props.street) {
+            name = `${props.street}, ${parsedQueryInfo.typedNumber}`;
+          } else if (!name.includes(parsedQueryInfo.typedNumber)) {
+            name = `${name}, ${parsedQueryInfo.typedNumber}`;
           }
+          score += 10;
         }
+
+        if (parsedQueryInfo.typedComplement && !name.includes(parsedQueryInfo.typedComplement)) {
+          name += ` (${parsedQueryInfo.typedComplement})`;
+        }
+
+        const formattedLabel = `${name} - ${details}${props.postcode ? ` - CEP ${formatCep(props.postcode)}` : ''}`;
 
         addResult({
           lat: f.geometry.coordinates[1],
           lon: f.geometry.coordinates[0],
           name: name,
           context: details,
-          label: `${name}${details ? `, ${details}` : ''}${props.country ? `, ${props.country}` : ''}`,
+          label: formattedLabel,
           confidenceScore: score,
           source: 'photon',
           type: isPOI ? 'poi' : 'address',
@@ -666,93 +885,74 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
     }
 
     // Dynamic Multi-Factor Scorer and Ranking Algorithm
-    // Evaluates both proximity, match similarity, coarse features, and POIs
-    const tokenQuery = viaCepResolved ? composedQuery : text;
-    const queryTokens = tokenQuery.toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\d{5}-?\d{3}/g, "") // skip CEP
-      .match(/\b\w{3,}\b/g) || [];
-
-    const isPoiQuery = /hospital|shopping|posto|parque|restaurante|clube|escola|colégio|hotel|praça|teatro|museu|estação|terminal|aeroporto|loja|supermercado|condomínio|edifício/i.test(text);
-
+    // Cross-references ALL typed tokens against each candidate result
     results.forEach(r => {
       let boost = 0;
+      const rLabelNorm = r.label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const rNameNorm = r.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-      // 1. Keyword Similarity Boost (Token Matching)
-      if (queryTokens.length > 0) {
-        const rLabelNorm = r.label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const rNameNorm = r.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        
-        let matchedTokens = 0;
-        queryTokens.forEach(token => {
-          if (rLabelNorm.includes(token) || rNameNorm.includes(token)) {
-            matchedTokens++;
+      // 1. Check matching typed words (street, neighborhood, POI)
+      if (parsedQueryInfo.typedWords.length > 0) {
+        let matched = 0;
+        parsedQueryInfo.typedWords.forEach(w => {
+          if (rLabelNorm.includes(w) || rNameNorm.includes(w)) {
+            matched++;
           }
         });
-        
-        // Proportional boost up to 25 points
-        boost += (matchedTokens / queryTokens.length) * 25;
+        const ratio = matched / parsedQueryInfo.typedWords.length;
+        boost += ratio * 35; // Up to 35 points for matching typed words
       }
 
-      // 2. POI query matching boost
-      if (isPoiQuery && r.type === 'poi') {
-        boost += 12;
+      // 2. House number matching boost
+      if (parsedQueryInfo.typedNumber) {
+        if (rLabelNorm.includes(parsedQueryInfo.typedNumber.toLowerCase())) {
+          boost += 20;
+        }
       }
 
-      // 3. Demote administrative or coarse results unless the user only typed city names
+      // 3. CEP matching boost
+      if (parsedQueryInfo.typedCep) {
+        const cleanCep = parsedQueryInfo.typedCep.replace('-', '');
+        if (rLabelNorm.replace('-', '').includes(cleanCep)) {
+          boost += 30;
+        }
+      }
+
+      // 4. POI query matching boost
+      if (parsedQueryInfo.typedWords.some(w => /hospital|shopping|posto|parque|restaurante|clube|escola|colêgio|hotel|praça|teatro|museu|estação|terminal|aeroporto|loja|supermercado|condomínio|edifício|bemol/i.test(w)) && r.type === 'poi') {
+        boost += 15;
+      }
+
+      // 5. Demote administrative or coarse results unless input was short
       const isCoarse = /state|country|region|administrative|municipality|state_district/i.test(r.type || '');
-      const isSimpleCity = r.label.split(',').length <= 2;
-      const textWordCount = text.trim().split(/\s+/).length;
-      if (textWordCount > 2 && (isCoarse || isSimpleCity) && !text.toLowerCase().includes('brasil')) {
-         boost -= 30; // Heavy penalty for coarse results when specific input was given
+      if (parsedQueryInfo.typedWords.length > 2 && isCoarse) {
+        boost -= 40;
       }
 
-      // 4. Proximity penalty (biases local options, but CAPPED at 15 pts to allow cross-region searches)
+      // 6. Proximity penalty (biases local options, but soft capped)
       if (hasProximity && lat && lon) {
         const dist = Math.sqrt(Math.pow(r.lat - lat, 2) + Math.pow(r.lon - lon, 2));
-        // Distances under ~5km (0.05 degrees) get zero penalty. Above that, soft penalty capped at 15 points max.
-        let proximityPenalty = 0;
         if (dist > 0.05) {
-          proximityPenalty = Math.min(15, (dist - 0.05) * 4);
+          boost -= Math.min(15, (dist - 0.05) * 4);
         }
-        boost -= proximityPenalty;
       }
 
-      // 5. Special ViaCEP accuracy matching boost
+      // 7. ViaCEP accuracy matching boost
       if (viaCepResolved && resolvedViaCepData) {
-        const rLabelLow = r.label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const rNameLow = r.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        
-        let matchScore = 0;
-
         if (resolvedViaCepData.bairro) {
           const normBairro = resolvedViaCepData.bairro.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          if (rLabelLow.includes(normBairro) || rNameLow.includes(normBairro)) {
-            matchScore += 25;
+          if (rLabelNorm.includes(normBairro)) {
+            boost += 25;
           }
         }
-
         if (resolvedViaCepData.logradouro) {
           const normLogradouro = resolvedViaCepData.logradouro.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          const words = normLogradouro.split(/\s+/).filter((w: string) => w.length > 3 && !['rua', 'avenida', 'travessa', 'beco', 'praca', 'alameda', 'rodovia', 'estrada'].includes(w));
-          let wordMatches = 0;
-          words.forEach((w: string) => {
-            if (rLabelLow.includes(w) || rNameLow.includes(w)) {
-              wordMatches++;
-            }
-          });
-
-          if (words.length > 0 && wordMatches > 0) {
-            matchScore += (wordMatches / words.length) * 35;
+          if (rLabelNorm.includes(normLogradouro)) {
+            boost += 30;
           }
         }
-
-        // Add matching score boost
-        boost += matchScore;
       }
 
-      // Apply the final computed boost
       r.confidenceScore = Math.max(0, Math.min(100, Math.round(r.confidenceScore + boost)));
     });
 
@@ -767,12 +967,31 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         bestLon = geoResult.lon;
       }
       
-      if (bestLat !== 0 && bestLon !== 0) {
-        const cepFormatted = formatCep(resolvedViaCepData.cep) || resolvedViaCepData.cep;
-        
-        // Find a house number in the typed text if any
-        let streetNumber = '';
-        const allNumbers = Array.from(text.replace(cepMatch![0], '').matchAll(/\b\d{1,5}\b/g)).map(m => m[0]);
+      // If no provider returned valid coordinates yet, perform a direct geocode attempt
+      if (bestLat === 0 || bestLon === 0) {
+        try {
+          const directGeo = await preciseGeocode(composedQuery);
+          if (directGeo && directGeo.lat !== 0 && directGeo.lon !== 0) {
+            bestLat = directGeo.lat;
+            bestLon = directGeo.lon;
+          }
+        } catch (err) {
+          console.warn("[Geocode CEP] Direct geocode fallback error:", err);
+        }
+      }
+
+      // If still 0, fall back to proximity coordinates or Manaus center
+      if (bestLat === 0 || bestLon === 0) {
+        bestLat = lat || -3.1116;
+        bestLon = lon || -60.0242;
+      }
+
+      const cepFormatted = formatCep(resolvedViaCepData.cep) || resolvedViaCepData.cep;
+      
+      // Find a house number in the typed text or parsed query
+      let streetNumber = parsedQueryInfo.typedNumber || '';
+      if (!streetNumber && cepMatch) {
+        const allNumbers = Array.from(text.replace(cepMatch[0], '').matchAll(/\b\d{1,5}\b/g)).map(m => m[0]);
         for (const num of allNumbers) {
           if (resolvedViaCepData.logradouro && !resolvedViaCepData.logradouro.toLowerCase().includes(num)) {
             streetNumber = num;
@@ -782,52 +1001,126 @@ export async function enhancedAutocomplete(text: string, proximity?: { lat: numb
         if (!streetNumber && allNumbers.length > 0) {
           streetNumber = allNumbers[0];
         }
+      }
 
-        const street = resolvedViaCepData.logradouro || '';
-        const streetWithNum = street ? (streetNumber ? `${street}, ${streetNumber}` : street) : '';
-        const bairro = resolvedViaCepData.bairro || '';
-        const city = resolvedViaCepData.localidade || 'Manaus';
-        const uf = resolvedViaCepData.uf || 'AM';
-        
-        const labelParts = [
-          streetWithNum,
-          bairro,
-          `${city} - ${uf}`,
-          `CEP ${cepFormatted}`
-        ].filter(Boolean);
-        
-        const exactLabel = labelParts.join(', ');
-        
-        const exactResult: GeocodeResult = {
-          lat: bestLat,
-          lon: bestLon,
-          name: streetWithNum || `CEP ${cepFormatted}`,
-          context: [bairro, `${city} - ${uf}`].filter(Boolean).join(', '),
-          label: exactLabel,
-          confidenceScore: 999, // Absolute top score
-          source: 'viacep',
-          type: 'address',
-          cep: cepFormatted
-        };
+      const street = resolvedViaCepData.logradouro || '';
+      let streetWithNum = street ? (streetNumber ? `${street}, ${streetNumber}` : street) : '';
+      if (parsedQueryInfo.typedComplement && streetWithNum) {
+        streetWithNum += ` (${parsedQueryInfo.typedComplement})`;
+      }
 
-        // Remove any other duplicate items with very close coordinates from the list to avoid duplicate listings
-        const filteredResults = results.filter(r => {
-          if (r.source === 'viacep') return false;
-          const latDiff = Math.abs(r.lat - bestLat);
-          const lonDiff = Math.abs(r.lon - bestLon);
-          // If coordinates are identical or within ~50 meters, deduplicate them to avoid listing the same street twice
-          return !(latDiff < 0.0005 && lonDiff < 0.0005);
-        });
+      const bairro = resolvedViaCepData.bairro || '';
+      const city = resolvedViaCepData.localidade || 'Manaus';
+      const uf = resolvedViaCepData.uf || 'AM';
+      
+      const labelParts = [
+        streetWithNum || `CEP ${cepFormatted}`,
+        bairro,
+        `${city} - ${uf}`,
+        `CEP ${cepFormatted}`
+      ].filter(Boolean);
+      
+      const exactLabel = labelParts.join(', ');
+      
+      const exactResult: GeocodeResult = {
+        lat: bestLat,
+        lon: bestLon,
+        name: streetWithNum || `CEP ${cepFormatted}`,
+        context: [bairro, `${city} - ${uf}`].filter(Boolean).join(', '),
+        label: exactLabel,
+        confidenceScore: 999, // Absolute top score
+        source: 'viacep',
+        type: 'address',
+        cep: cepFormatted
+      };
 
-        // Clear and rebuild
-        results.length = 0;
-        results.push(exactResult, ...filteredResults);
+      // Remove any other duplicate items with very close coordinates from the list to avoid duplicate listings
+      const filteredResults = results.filter(r => {
+        if (r.source === 'viacep') return false;
+        const latDiff = Math.abs(r.lat - bestLat);
+        const lonDiff = Math.abs(r.lon - bestLon);
+        return !(latDiff < 0.0005 && lonDiff < 0.0005);
+      });
+
+      // Clear and rebuild with ViaCEP exact match at index 0
+      results.length = 0;
+      results.push(exactResult, ...filteredResults);
+    } else if (results.length === 0 && (parsedQueryInfo.typedNumber || parsedQueryInfo.typedWords.length >= 2)) {
+      // Emergency fallback if all third party autocomplete APIs returned empty for a typed address with number
+      try {
+        const fallbackGeo = await preciseGeocode(composedQuery);
+        if (fallbackGeo && fallbackGeo.lat !== 0 && fallbackGeo.lon !== 0) {
+          addResult(fallbackGeo);
+        }
+      } catch (err) {
+        console.warn("Emergency geocode fallback failed:", err);
       }
     }
 
     // Sort by confidenceScore falling
     results.sort((a, b) => b.confidenceScore - a.confidenceScore);
-    const finalResults = results.slice(0, 8);
+
+    // Multi-factor Deduplication Pass: Remove duplicate addresses & near-identical venue results
+    const cleanDeduplicated: GeocodeResult[] = [];
+    for (const candidate of results) {
+      const candNormName = normalizeForDedup(candidate.name);
+      const candNormLabel = normalizeForDedup(candidate.label);
+
+      let isDuplicate = false;
+      for (let i = 0; i < cleanDeduplicated.length; i++) {
+        const existing = cleanDeduplicated[i];
+        const existingNormName = normalizeForDedup(existing.name);
+        const existingNormLabel = normalizeForDedup(existing.label);
+
+        // 1. Exact or near-identical normalized label or name match
+        const labelSimilarity = candNormLabel === existingNormLabel || 
+          (candNormLabel.length > 5 && existingNormLabel.length > 5 && (candNormLabel.includes(existingNormLabel) || existingNormLabel.includes(candNormLabel)));
+        const nameSimilarity = candNormName.length > 2 && (candNormName === existingNormName || candNormName.replace(/\s+/g, '') === existingNormName.replace(/\s+/g, ''));
+
+        if (labelSimilarity || nameSimilarity) {
+          isDuplicate = true;
+          if (candidate.confidenceScore > existing.confidenceScore || 
+             (candidate.confidenceScore === existing.confidenceScore && candidate.label.length > existing.label.length)) {
+            cleanDeduplicated[i] = candidate;
+          }
+          break;
+        }
+
+        // 2. Spatial proximity check (< 300 meters) with overlapping primary tokens
+        if (candidate.lat !== 0 && candidate.lon !== 0 && existing.lat !== 0 && existing.lon !== 0) {
+          const distMeters = geoDistanceMeters(candidate.lat, candidate.lon, existing.lat, existing.lon);
+          if (distMeters < 300) {
+            const nameOverlap = candNormName.includes(existingNormName) || existingNormName.includes(candNormName);
+            if (nameOverlap) {
+              isDuplicate = true;
+              if (candidate.confidenceScore > existing.confidenceScore) {
+                cleanDeduplicated[i] = candidate;
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      if (!isDuplicate) {
+        cleanDeduplicated.push(candidate);
+      }
+    }
+
+    // Sort primarily by confidenceScore, with proximity boost as tie-breaker
+    cleanDeduplicated.sort((a, b) => {
+      if (b.confidenceScore !== a.confidenceScore) {
+        return b.confidenceScore - a.confidenceScore;
+      }
+      if (hasProximity && lat && lon) {
+        const distA = geoDistanceMeters(a.lat, a.lon, lat, lon);
+        const distB = geoDistanceMeters(b.lat, b.lon, lat, lon);
+        return distA - distB;
+      }
+      return 0;
+    });
+
+    const finalResults = cleanDeduplicated.slice(0, 8);
     
     if (finalResults.length > 0) {
       geoCache.set(normalizedText, finalResults);
@@ -885,4 +1178,84 @@ export async function preciseGeocode(address: string): Promise<GeocodeResult> {
     return validResults[0]; // Highest confidence result with real coordinates
   }
   throw new Error(`Não foi possível encontrar as coordenadas para: ${address}`);
+}
+
+export interface ReferencePointResult {
+  fullLabel: string;
+  landmarkName: string;
+  streetAddress: string;
+  distanceMeters: number;
+  lat: number;
+  lon: number;
+}
+
+export async function getNearestReferencePoint(lat: number, lon: number): Promise<ReferencePointResult> {
+  let closestLandmark: RegistryEntry | null = null;
+  let minLandmarkDist = Infinity;
+
+  for (const entry of RICH_OFFLINE_REGISTRY) {
+    const dist = geoDistanceMeters(lat, lon, entry.lat, entry.lon);
+    if (dist < minLandmarkDist) {
+      minLandmarkDist = dist;
+      closestLandmark = entry;
+    }
+  }
+
+  let road = '';
+  let suburb = '';
+  let city = 'Manaus';
+  let state = 'AM';
+
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`, {
+      headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.address) {
+        road = data.address.road || data.address.pedestrian || data.address.suburb || '';
+        suburb = data.address.suburb || data.address.neighbourhood || data.address.residential || '';
+        city = data.address.city || data.address.town || data.address.municipality || 'Manaus';
+        state = data.address.state || 'AM';
+      }
+    }
+  } catch (err) {
+    console.warn("Reverse geocode fetch error:", err);
+  }
+
+  const landmarkName = closestLandmark ? closestLandmark.name : 'Ponto de Apoio';
+  const streetAddress = road ? `${road}${suburb ? ', ' + suburb : ''}` : 'Sua Posição GPS';
+
+  let fullLabel = '';
+
+  if (closestLandmark && minLandmarkDist <= 350) {
+    // User is right at the landmark
+    fullLabel = `${closestLandmark.name} - ${closestLandmark.context}`;
+  } else if (closestLandmark && minLandmarkDist <= 3000) {
+    // User is within 3km of a known reference point
+    const distFormatted = minLandmarkDist >= 1000 ? `${(minLandmarkDist / 1000).toFixed(1)} km` : `${Math.round(minLandmarkDist)}m`;
+    if (road) {
+      fullLabel = `${road}${suburb ? ', ' + suburb : ''}, ${city} (Próximo a ${closestLandmark.name} - ${distFormatted})`;
+    } else {
+      fullLabel = `${closestLandmark.name} (Próximo) - ${closestLandmark.context}`;
+    }
+  } else if (road) {
+    fullLabel = `${road}${suburb ? ', ' + suburb : ''}, ${city} - ${state}`;
+  } else {
+    fullLabel = `Minha Localização GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+  }
+
+  return {
+    fullLabel,
+    landmarkName,
+    streetAddress,
+    distanceMeters: minLandmarkDist,
+    lat,
+    lon
+  };
+}
+
+export async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  const ref = await getNearestReferencePoint(lat, lon);
+  return ref.fullLabel;
 }

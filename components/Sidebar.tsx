@@ -3,19 +3,20 @@
 import React from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
-import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation, Anchor, Sparkles, Shield, Leaf, Zap, ArrowLeft, TrendingUp, ArrowRightLeft, FileText, Fuel, Activity, ShoppingBag, DollarSign, Globe, RefreshCw } from 'lucide-react';
+import { MapPin, Clock, AlertTriangle, ChevronRight, CheckCircle2, Navigation, Anchor, Sparkles, Shield, Leaf, Zap, ArrowLeft, TrendingUp, ArrowRightLeft, FileText, Fuel, Activity, ShoppingBag, DollarSign, Globe, RefreshCw, Eye } from 'lucide-react';
 import { RouteStop } from '@/lib/route-engine';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { fetchExternalScoutData } from '@/lib/api-services';
 
 interface SidebarProps {
   stops: RouteStop[];
-  summary: { distance: number, duration: number };
+  summary: { distance: number, duration: number, vehicle?: string };
   score: number;
   aiAnalysis?: string;
   hybridAnalysis?: any;
   onNavigate: () => void;
   isLoading: boolean;
+  onShowInvoice?: (idx: number) => void;
   
   // Optional Simulation Mode props
   isSimulating?: boolean;
@@ -36,6 +37,7 @@ export default function Sidebar({
   hybridAnalysis,
   onNavigate, 
   isLoading,
+  onShowInvoice,
   
   isSimulating = false,
   onStartSimulation,
@@ -948,10 +950,38 @@ export default function Sidebar({
                                     <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
                                   )}
                                 </div>
-                                {stop.fluvialPort && (
+                                {(summary?.vehicle === 'boat' && stop.fluvialPort) && (
                                   <div className="mb-2 mt-1 flex items-center gap-1.5 text-[9.5px] font-bold text-sky-400 bg-sky-950/40 border border-sky-900/40 px-2 py-0.5 rounded w-fit uppercase font-mono">
                                     <Anchor className="w-3.5 h-3.5 text-sky-450 shrink-0" />
                                     {stop.fluvialPort}
+                                  </div>
+                                )}
+                                
+                                {stop.invoice && (
+                                  <div className="mt-1.5 mb-2 bg-slate-950/50 border border-slate-800/80 rounded-xl p-2.5 flex flex-col gap-1.5">
+                                    <div className="flex items-center justify-between flex-wrap gap-1">
+                                      <span className="text-[9px] font-black uppercase text-tech tracking-wider flex items-center gap-1">
+                                        <FileText className="w-3.5 h-3.5 text-tech shrink-0 animate-pulse" />
+                                        {stop.invoice.valor ? 'NFe Vinculada' : 'DANFE Anexada'}
+                                      </span>
+                                      {stop.invoice.valor !== undefined && (
+                                        <span className="text-[10px] font-bold text-emerald-450 font-mono">
+                                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stop.invoice.valor || 0)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[9px] text-slate-400 truncate font-sans">
+                                      {stop.invoice.destinatario ? `Dest: ${stop.invoice.destinatario}` : `Chave: ${stop.invoice.key}`}
+                                    </div>
+                                    {onShowInvoice && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onShowInvoice(parseInt(stop.id))}
+                                        className="w-full text-center py-1 bg-tech/10 hover:bg-tech/20 border border-tech/25 rounded-lg text-[9px] font-black uppercase tracking-wider text-tech mt-1 transition-all cursor-pointer h-7 flex items-center justify-center gap-1"
+                                      >
+                                        <Eye className="w-3 h-3 text-tech shrink-0" /> Visualizar Nota
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                                 
@@ -967,6 +997,41 @@ export default function Sidebar({
                                     </span>
                                     {stop.deliveryNotes && (
                                       <p className="text-[9px] text-slate-400 italic font-sans animate-fade">Obs: {stop.deliveryNotes}</p>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Hydrographic & Fluvial Matrix Card */}
+                                {(summary?.vehicle === 'boat' && stop.amazonasHydrology) && (
+                                  <div className="mt-2.5 p-2.5 bg-cyan-950/20 border border-cyan-800/40 rounded-xl space-y-1.5 text-[9.5px]">
+                                    <div className="flex items-center justify-between text-cyan-300 font-extrabold uppercase tracking-wider text-[9px]">
+                                      <span className="flex items-center gap-1">
+                                        <Anchor className="w-3 h-3 text-cyan-400 shrink-0" />
+                                        Monitor Hidrográfico Fluvial
+                                      </span>
+                                      <span className="bg-cyan-950 px-1.5 py-0.5 rounded text-[8.5px] border border-cyan-800/40">
+                                        {stop.amazonasHydrology.season === 'cheia' ? 'Cheia Plena' : 'Vazante'}
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1 font-mono text-[9px]">
+                                      <div className="bg-slate-950/60 p-1 rounded border border-slate-800/80">
+                                        <span className="text-slate-500 block text-[8px]">Cota Rio:</span>
+                                        <span className="text-cyan-300 font-bold">{stop.amazonasHydrology.riverLevelMeters || 26.2}m</span>
+                                      </div>
+                                      <div className="bg-slate-950/60 p-1 rounded border border-slate-800/80">
+                                        <span className="text-slate-500 block text-[8px]">Correnteza:</span>
+                                        <span className="text-cyan-300 font-bold">{stop.amazonasHydrology.currentSpeedKnots || 3.8} nós</span>
+                                      </div>
+                                    </div>
+                                    {stop.amazonasHydrology.vesselDraftStatus && (
+                                      <p className="text-slate-300 leading-tight text-[8.5px]">
+                                        <strong>Calado/Talvegue:</strong> {stop.amazonasHydrology.vesselDraftStatus}
+                                      </p>
+                                    )}
+                                    {stop.amazonasHydrology.forecast24h && (
+                                      <p className="text-cyan-200/90 leading-tight text-[8.5px] italic">
+                                        <strong>Previsão 24h:</strong> {stop.amazonasHydrology.forecast24h}
+                                      </p>
                                     )}
                                   </div>
                                 )}
@@ -998,7 +1063,7 @@ export default function Sidebar({
                                 )}
 
                                 {/* Amazonas Hydrology Warning (Mobile) */}
-                                {stop.amazonasHydrology && (
+                                {(summary?.vehicle === 'boat' && stop.amazonasHydrology) && (
                                   <div className="mt-2 text-[9px] py-1.5 px-2.5 rounded-xl border flex flex-col gap-0.5 bg-sky-950/25 border-sky-700/20 text-sky-300">
                                     <span className="font-bold flex items-center gap-1">
                                       <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" />
@@ -1321,6 +1386,34 @@ export default function Sidebar({
                     <div className="mb-2 mt-0.5 flex items-center gap-1.5 text-[9.5px] font-bold text-sky-400 bg-sky-950/40 border border-sky-900/40 px-2 py-0.5 rounded w-fit uppercase font-mono">
                       <Anchor className="w-3 h-3 text-sky-450 shrink-0" />
                       {stop.fluvialPort}
+                    </div>
+                  )}
+                  
+                  {stop.invoice && (
+                    <div className="mt-2 mb-2.5 bg-slate-950/50 border border-slate-800/80 rounded-xl p-3 flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between flex-wrap gap-1">
+                        <span className="text-[9.5px] font-black uppercase text-tech tracking-wider flex items-center gap-1">
+                          <FileText className="w-3.5 h-3.5 text-tech shrink-0 animate-pulse" />
+                          {stop.invoice.valor ? 'NFe Vinculada' : 'DANFE Anexada'}
+                        </span>
+                        {stop.invoice.valor !== undefined && (
+                          <span className="text-[10px] font-bold text-emerald-450 font-mono">
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stop.invoice.valor || 0)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[9.5px] text-slate-400 truncate font-sans">
+                        {stop.invoice.destinatario ? `Dest: ${stop.invoice.destinatario}` : `Chave: ${stop.invoice.key}`}
+                      </div>
+                      {onShowInvoice && (
+                        <button
+                          type="button"
+                          onClick={() => onShowInvoice(parseInt(stop.id))}
+                          className="w-full text-center py-1.5 bg-tech/10 hover:bg-tech/20 border border-tech/25 rounded-lg text-[9.5px] font-black uppercase tracking-wider text-tech mt-1.5 transition-all cursor-pointer h-8 flex items-center justify-center gap-1.5"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Visualizar Nota
+                        </button>
+                      )}
                     </div>
                   )}
                   

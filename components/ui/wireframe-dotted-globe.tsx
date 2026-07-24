@@ -31,12 +31,12 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
     const context = canvas.getContext("2d")
     if (!context) return
 
-    // Set up responsive dimensions
+    // Set up responsive dimensions with capped DPR for optimal 60 FPS performance across devices
     const containerWidth = Math.max(10, Math.min(width, window.innerWidth - 40))
     const containerHeight = Math.max(10, Math.min(height, window.innerHeight - 100))
     const radius = Math.max(1, Math.min(containerWidth, containerHeight) / 2.5)
 
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = containerWidth * dpr
     canvas.height = containerHeight * dpr
     canvas.style.width = `${containerWidth}px`
@@ -162,8 +162,11 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
         context.lineWidth = 1 * scaleFactor
         context.stroke()
 
-        // Land dots
-        allDots.forEach((dot) => {
+        // Land dots - Batched in a single canvas path for 60 FPS performance
+        context.beginPath()
+        const dotRadius = 1 * scaleFactor
+        for (let i = 0; i < allDots.length; i++) {
+          const dot = allDots[i]
           const projected = projection([dot.lng, dot.lat])
           if (
             projected &&
@@ -172,55 +175,46 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
             projected[1] >= 0 &&
             projected[1] <= containerHeight
           ) {
-            // Check hemisphere visibility
-            const gdist = d3.geoDistance([dot.lng, dot.lat], [-projection.rotate()[0], -projection.rotate()[1]])
-            if (gdist < Math.PI / 2) {
-              context.beginPath()
-              context.arc(projected[0], projected[1], 1 * scaleFactor, 0, 2 * Math.PI)
-              context.fillStyle = "rgba(255, 255, 255, 0.45)"
-              context.fill()
-            }
+            context.moveTo(projected[0] + dotRadius, projected[1])
+            context.arc(projected[0], projected[1], dotRadius, 0, 2 * Math.PI)
           }
-        })
+        }
+        context.fillStyle = "rgba(255, 255, 255, 0.45)"
+        context.fill()
 
         // 2. Interactive Pulsing Beacon precisely on Amazonas / Manaus (-60.021731, -3.119027)
         const manausLng = -60.021731
         const manausLat = -3.119027
-        const currentRot = projection.rotate()
-        const gdist = d3.geoDistance([manausLng, manausLat], [-currentRot[0], -currentRot[1]])
-        const isManausVisible = gdist < Math.PI / 2
+        const proj = projection([manausLng, manausLat])
 
-        if (isManausVisible) {
-          const proj = projection([manausLng, manausLat])
-          if (proj) {
-            const time = Date.now()
-            const pulse1 = (Math.sin(time / 240) + 1) / 2 // 0 to 1
-            const pulse2 = (Math.sin(time / 150 + Math.PI) + 1) / 2 // staggered
+        if (proj && proj[0] >= 0 && proj[0] <= containerWidth && proj[1] >= 0 && proj[1] <= containerHeight) {
+          const time = Date.now()
+          const pulse1 = (Math.sin(time / 240) + 1) / 2 // 0 to 1
+          const pulse2 = (Math.sin(time / 150 + Math.PI) + 1) / 2 // staggered
 
-            // Double pulsing ring
-            context.beginPath()
-            context.arc(proj[0], proj[1], (5 + pulse1 * 12) * scaleFactor, 0, 2 * Math.PI)
-            context.strokeStyle = `rgba(209, 160, 84, ${0.4 * (1 - pulse1)})`
-            context.lineWidth = 1.5 * scaleFactor
-            context.stroke()
+          // Double pulsing ring
+          context.beginPath()
+          context.arc(proj[0], proj[1], (5 + pulse1 * 12) * scaleFactor, 0, 2 * Math.PI)
+          context.strokeStyle = `rgba(209, 160, 84, ${0.4 * (1 - pulse1)})`
+          context.lineWidth = 1.5 * scaleFactor
+          context.stroke()
 
-            context.beginPath()
-            context.arc(proj[0], proj[1], (3 + pulse2 * 8) * scaleFactor, 0, 2 * Math.PI)
-            context.strokeStyle = `rgba(209, 160, 84, ${0.5 * (1 - pulse2)})`
-            context.lineWidth = 1 * scaleFactor
-            context.stroke()
+          context.beginPath()
+          context.arc(proj[0], proj[1], (3 + pulse2 * 8) * scaleFactor, 0, 2 * Math.PI)
+          context.strokeStyle = `rgba(209, 160, 84, ${0.5 * (1 - pulse2)})`
+          context.lineWidth = 1 * scaleFactor
+          context.stroke()
 
-            // Glowing core
-            context.beginPath()
-            context.arc(proj[0], proj[1], 4.5 * scaleFactor, 0, 2 * Math.PI)
-            context.fillStyle = "#D1A054"
-            context.fill()
-            
-            context.beginPath()
-            context.arc(proj[0], proj[1], 2 * scaleFactor, 0, 2 * Math.PI)
-            context.fillStyle = "#FFFFFF"
-            context.fill()
-          }
+          // Glowing core
+          context.beginPath()
+          context.arc(proj[0], proj[1], 4.5 * scaleFactor, 0, 2 * Math.PI)
+          context.fillStyle = "#D1A054"
+          context.fill()
+          
+          context.beginPath()
+          context.arc(proj[0], proj[1], 2 * scaleFactor, 0, 2 * Math.PI)
+          context.fillStyle = "#FFFFFF"
+          context.fill()
         }
       }
     }
@@ -410,7 +404,7 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
     <div className={`relative flex items-center justify-center ${className}`}>
       <canvas
         ref={canvasRef}
-        className="max-w-full h-auto cursor-grab active:cursor-grabbing"
+        className="max-w-full h-auto cursor-grab active:cursor-grabbing [will-change:transform] [transform:translateZ(0)]"
       />
     </div>
   )

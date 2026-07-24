@@ -126,72 +126,7 @@ export async function analyzeAddressesHistory(addresses: string[]): Promise<Reco
  * high-value operational insights.
  */
 export async function seedHistoryIfEmpty() {
-  try {
-    const count = await db.routes.count();
-    if (count > 0) return; // Already seeded
-    
-    console.log("Seeding delivery history database with high-fidelity Amazonas routes...");
-    
-    const now = new Date();
-    const pastDate1 = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 1 day ago
-    const pastDate2 = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
-    const pastDate3 = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000); // 5 days ago
-
-    const sampleRoutes = [
-      {
-        date: pastDate1,
-        addresses: [
-          'Porto de Manaus, Centro',
-          'Av. Tefé, 1000 - Japiim',
-          'Av. Noel Nutels, 500 - Cidade Nova',
-          'Porto de Manaus, Centro'
-        ],
-        sequence: [
-          { address: 'Porto de Manaus, Centro', status: 'completed', actualServiceDuration: 15, deliveryNotes: 'Saída às 08:00' },
-          { address: 'Av. Tefé, 1000 - Japiim', status: 'completed', actualServiceDuration: 35, deliveryNotes: 'Descarga de caixas grandes demorou no galpão.' },
-          { address: 'Av. Noel Nutels, 500 - Cidade Nova', status: 'failed', failureReason: 'Destinatário Ausente', deliveryNotes: 'Portão fechado, ninguém atendeu ao interfone.' },
-          { address: 'Porto de Manaus, Centro', status: 'completed', actualServiceDuration: 10, deliveryNotes: 'Retorno com devolução.' }
-        ],
-        score: 75,
-        status: 'completed' as const
-      },
-      {
-        date: pastDate2,
-        addresses: [
-          'Terminal Graneleiro, Ponta Negra',
-          'Shopping Grande Circular',
-          'Av. Djalma Batista, 2000'
-        ],
-        sequence: [
-          { address: 'Terminal Graneleiro, Ponta Negra', status: 'completed', actualServiceDuration: 20 },
-          { address: 'Shopping Grande Circular', status: 'completed', actualServiceDuration: 15, deliveryNotes: 'Docas do shopping liberadas rapidamente.' },
-          { address: 'Av. Djalma Batista, 2000', status: 'completed', actualServiceDuration: 12 }
-        ],
-        score: 92,
-        status: 'completed' as const
-      },
-      {
-        date: pastDate3,
-        addresses: [
-          'Porto de Manaus, Centro',
-          'Av. Noel Nutels, 500 - Cidade Nova',
-          'Distrito Industrial I'
-        ],
-        sequence: [
-          { address: 'Porto de Manaus, Centro', status: 'completed', actualServiceDuration: 15 },
-          { address: 'Av. Noel Nutels, 500 - Cidade Nova', status: 'failed', failureReason: 'Cliente Recusou Receber', deliveryNotes: 'Mercadoria em desacordo com o pedido.' },
-          { address: 'Distrito Industrial I', status: 'completed', actualServiceDuration: 40, deliveryNotes: 'Muita fila de caminhões para descarregar.' }
-        ],
-        score: 68,
-        status: 'failed' as const
-      }
-    ];
-
-    for (const r of sampleRoutes) {
-      await db.routes.add(r);
-    }
-    console.log("Database history seeded successfully with 3 rich logs.");
-  } catch (err) {
-    console.error("Error seeding history:", err);
-  }
+  // No fictitious routes are seeded automatically.
+  // The database starts clean for authentic user-generated routes.
+  return;
 }

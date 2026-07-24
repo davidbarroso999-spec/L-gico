@@ -10,6 +10,10 @@ export interface Route {
   deliveryPhoto?: string;
   deliveryNotes?: string;
   completedAt?: Date;
+  name?: string;
+  scheduledDate?: string;
+  scheduledTime?: string;
+  isFutureRoute?: boolean;
 }
 
 export interface Occurrence {
