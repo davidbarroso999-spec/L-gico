@@ -78,70 +78,6 @@ import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 import TruckLoader from '@/components/TruckLoader';
 import { HarpiaTextEffect } from '@/components/ui/text-effect';
 
-// Pre-configured E-Commerce Pickup Hubs & Logistics Base Points (Temu, Shopee, Mercado Livre, Motoboys)
-const ECOMMERCE_PICKUP_HUBS = [
-  {
-    id: 'shopee-zs',
-    name: 'Hub Shopee - Zona Sul (Cachoeirinha)',
-    platform: 'Shopee',
-    address: 'Av. Castelo Branco, 1420 - Cachoeirinha, Manaus - AM',
-    lat: -3.1250,
-    lon: -60.0120,
-    type: 'Hub de Coleta / Last-Mile',
-    badgeColor: 'bg-orange-500/10 text-orange-400 border-orange-500/20'
-  },
-  {
-    id: 'temu-centro',
-    name: 'Hub Temu & Express Logistics - Centro',
-    platform: 'Temu',
-    address: 'Rua Marechal Deodoro, 310 - Centro, Manaus - AM',
-    lat: -3.1380,
-    lon: -60.0270,
-    type: 'Ponto de Apoio & Triagem E-Commerce',
-    badgeColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-  },
-  {
-    id: 'meli-distrito',
-    name: 'CD Mercado Livre & Magalu - Distrito Industrial I',
-    platform: 'Mercado Livre',
-    address: 'Av. Ministro João Gonçalves de Souza, 500 - Distrito Industrial I, Manaus - AM',
-    lat: -3.1180,
-    lon: -59.9750,
-    type: 'Centro de Distribuição Principal',
-    badgeColor: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
-  },
-  {
-    id: 'aliexpress-parque10',
-    name: 'Hub AliExpress & Cainiao - Parque 10',
-    platform: 'AliExpress',
-    address: 'Av. Tfe, 880 - Parque 10 de Novembro, Manaus - AM',
-    lat: -3.0850,
-    lon: -60.0100,
-    type: 'Ponto de Coleta e Consolidação',
-    badgeColor: 'bg-red-500/10 text-red-400 border-red-500/20'
-  },
-  {
-    id: 'motoboy-p10',
-    name: 'Ponto de Apoio Motoboys & Entregadores - Flores/P10',
-    platform: 'Motoboys / Express',
-    address: 'Av. Professor Nilton Lins, 3200 - Flores, Manaus - AM',
-    lat: -3.0780,
-    lon: -60.0150,
-    type: 'Estação de Transbordo Motoboy/Bike',
-    badgeColor: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-  },
-  {
-    id: 'coleta-cnova',
-    name: 'Ponto de Coleta Integrado Zona Norte (Cidade Nova)',
-    platform: 'Multi-Plataforma (Temu/Shopee/Meli)',
-    address: 'Av. Noel Nutels, 1050 - Cidade Nova, Manaus - AM',
-    lat: -3.0320,
-    lon: -59.9710,
-    type: 'Hub Bairro Norte',
-    badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-  }
-];
-
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
   ssr: false,
@@ -630,10 +566,8 @@ export default function VoieExpressApp() {
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number} | null>(null);
   const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
 
-  // Pickup Hubs & Location Mismatch States
+  // Location Mismatch States
   const [locationMismatchDismissed, setLocationMismatchDismissed] = useState<string | null>(null);
-  const [showPickupHubModal, setShowPickupHubModal] = useState<boolean>(false);
-  const [customHubSearch, setCustomHubSearch] = useState<string>('');
   const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
   const [nearbyRefPoints, setNearbyRefPoints] = useState<Array<{
     name: string;
@@ -731,9 +665,20 @@ export default function VoieExpressApp() {
     return () => { isMounted = false; };
   }, [userLocation, addresses]);
 
-  // Continuous High-Precision Geolocation Watcher
+  // Continuous High-Precision Geolocation Watcher & Initial Instant Fix
   useEffect(() => {
     if (typeof window === 'undefined' || !('geolocation' in navigator)) return;
+
+    // Trigger instant initial fix to auto-fill reference point immediately
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      },
+      (err) => {
+        console.warn("Geolocation initial fix error:", err);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 5000 }
+    );
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -794,31 +739,7 @@ export default function VoieExpressApp() {
   const locationMismatch = getDistanceBetweenUserAndOrigin();
   const isMismatchActive = locationMismatch && locationMismatchDismissed !== addresses[0];
 
-  const handleSelectPickupHub = (hub: typeof ECOMMERCE_PICKUP_HUBS[0], asOrigin: boolean) => {
-    const hubLabel = `${hub.name} (${hub.platform})`;
-    setResolvedCoords(prev => ({
-      ...prev,
-      [hubLabel]: { lat: hub.lat, lon: hub.lon },
-      [hub.address]: { lat: hub.lat, lon: hub.lon }
-    }));
 
-    if (asOrigin) {
-      const updated = [...addresses];
-      updated[0] = hubLabel;
-      if (updated.length === 1) updated.push('');
-      setAddresses(updated);
-      setLocationMismatchDismissed(hubLabel);
-    } else {
-      const updated = [...addresses];
-      if (updated.length > 1) {
-        updated.splice(1, 0, hubLabel);
-      } else {
-        updated.push(hubLabel);
-      }
-      setAddresses(updated);
-    }
-    setShowPickupHubModal(false);
-  };
 
 
   useEffect(() => {
@@ -936,10 +857,14 @@ export default function VoieExpressApp() {
     const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
     const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }> = {};
+    const validStopTypes: Record<number, 'pickup' | 'delivery'> = {};
     let validCount = 0;
     const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
       if (isValid) {
+        if (stopTypes[i]) {
+          validStopTypes[validCount] = stopTypes[i];
+        }
         const win = timeWindows[i];
         if (win && (win.start || win.end)) {
           validWithWindows[validCount] = {
@@ -971,7 +896,7 @@ export default function VoieExpressApp() {
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
     try {
-      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices);
+      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
       setRouteResult(result);
       
       // Save to IndexedDB (safe catch)
@@ -1333,15 +1258,6 @@ export default function VoieExpressApp() {
 
               <button
                 type="button"
-                onClick={() => setShowPickupHubModal(true)}
-                className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
-                Ponto de Coleta (Hub)
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setLocationMismatchDismissed(addresses[0])}
                 className="px-2.5 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-900 border border-slate-700 text-slate-300 font-medium text-xs transition-all cursor-pointer"
               >
@@ -1403,7 +1319,6 @@ export default function VoieExpressApp() {
                     ...(routeResult ? [
                       { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
                     ] : []),
-                    { id: 'coleta', label: 'Pontos de Coleta', icon: ShoppingBag, desc: 'Hubs Temu, Shopee, Meli, Motoboy' },
                     { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
                     { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
                     { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
@@ -1415,10 +1330,7 @@ export default function VoieExpressApp() {
                       <motion.button
                         key={tab.id}
                         onClick={() => {
-                          if (tab.id === 'coleta') {
-                            setShowPickupHubModal(true);
-                            setIsMenuBallOpen(false);
-                          } else if (tab.id === 'tutorial') {
+                          if (tab.id === 'tutorial') {
                             setShowDemoAssistant(true);
                             setDemoStep(0);
                             setDemoMinimized(false);
@@ -1700,16 +1612,6 @@ export default function VoieExpressApp() {
                             <Navigation className={`w-3 h-3 text-tech shrink-0 ${isLocatingGps ? 'animate-spin' : ''}`} />
                             {isLocatingGps ? 'Estimando Ponto de Referência...' : 'Usar GPS Tempo Real'}
                           </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setShowPickupHubModal(true)}
-                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 hover:bg-amber-500/20 text-[10.5px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                            title="Integrar Hubs de Coleta Temu, Shopee, Mercado Livre, AliExpress ou Motoboys"
-                          >
-                            <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
-                            Integrar Ponto de Coleta (E-Commerce / Motoboy)
-                          </button>
                         </div>
 
                         {/* Recommended Reference Points Bar (Mercadinhos, Postos, Padarias, Hubs) */}
@@ -1777,7 +1679,7 @@ export default function VoieExpressApp() {
                                     Você não está neste ponto de partida (~{locationMismatch?.kmStr} do seu GPS)
                                   </h4>
                                   <p className="text-[10px] text-slate-300 mt-0.5 leading-snug">
-                                    Seu GPS atual indica que você está em outro endereço. Deseja definir sua localização real como partida ou integrar um Ponto de Coleta (Hub Temu/Shopee/Meli)?
+                                    Seu GPS atual indica que você está em outro endereço. Deseja definir sua localização real como partida?
                                   </p>
                                 </div>
                               </div>
@@ -1800,15 +1702,6 @@ export default function VoieExpressApp() {
                               >
                                 <Navigation className={`w-3 h-3 ${isLocatingGps ? 'animate-spin' : ''}`} />
                                 {isLocatingGps ? 'Estimando GPS...' : 'Usar GPS Real como Partida'}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => setShowPickupHubModal(true)}
-                                className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px] hover:bg-amber-500/30 transition-colors flex items-center gap-1 cursor-pointer"
-                              >
-                                <ShoppingBag className="w-3 h-3" />
-                                Integrar Hub de Coleta
                               </button>
 
                               <button
@@ -2076,18 +1969,57 @@ export default function VoieExpressApp() {
                       </div>
                     )}
 
-                    {/* Final Destination */}
-                    {addresses.length >= 2 && (
-                       <div className="relative flex gap-4 items-start">
-                        <div className="w-4 h-4 rounded-full bg-alert text-white font-black flex items-center justify-center text-[10px] mt-4.5 z-10 shadow-[0_0_15px_rgba(239,68,68,0.3)]">
-                          B
-                        </div>
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex items-center justify-between flex-wrap gap-1">
-                            <label className="text-[10px] text-alert font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                              <div className="w-1.5 h-1.5 rounded-full bg-alert" />
-                              Destino Final
-                            </label>
+                    {/* Final Destination or Final Pickup */}
+                    {addresses.length >= 2 && (() => {
+                      const lastIdx = addresses.length - 1;
+                      const isLastPickup = stopTypes[lastIdx] === 'pickup';
+                      return (
+                        <div className="relative flex gap-4 items-start">
+                          <div className={`w-4 h-4 rounded-full font-black flex items-center justify-center text-[10px] mt-4.5 z-10 ${
+                            isLastPickup 
+                              ? 'bg-amber-500 text-slate-950 shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
+                              : 'bg-alert text-white shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                          }`}>
+                            {isLastPickup ? 'C' : 'B'}
+                          </div>
+                          <div className="flex-1 min-w-0 space-y-1">
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <div className="flex items-center gap-2">
+                                <label className={`text-[10px] font-black uppercase tracking-widest px-1 flex items-center gap-2 ${
+                                  isLastPickup ? 'text-amber-400' : 'text-alert'
+                                }`}>
+                                  <div className={`w-1.5 h-1.5 rounded-full ${isLastPickup ? 'bg-amber-400' : 'bg-alert'}`} />
+                                  {isLastPickup ? 'Ponto de Coleta' : 'Destino Final'}
+                                </label>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setStopTypes(prev => ({
+                                      ...prev,
+                                      [lastIdx]: prev[lastIdx] === 'pickup' ? 'delivery' : 'pickup'
+                                    }));
+                                  }}
+                                  className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border ${
+                                    isLastPickup
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                                  }`}
+                                  title="Alternar entre Ponto de Coleta e Destino de Entrega"
+                                >
+                                  {isLastPickup ? (
+                                    <>
+                                      <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
+                                      <span>Coleta (Não é entrega)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                      <span>Definir como Coleta</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
                              {invoiceData[addresses.length - 1] && (invoiceData[addresses.length - 1].key || invoiceData[addresses.length - 1].pdfUrl) ? (
                                <div className="flex items-center gap-2">
                                  <button
@@ -2251,7 +2183,8 @@ export default function VoieExpressApp() {
                           </div>
                         </div>
                       </div>
-                    )}
+                    );
+                  })()}
                   </div>
 
                   <div className="flex flex-col gap-3.5 mt-auto">
@@ -2788,7 +2721,7 @@ export default function VoieExpressApp() {
                            className="w-full py-3 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
                          >
                            <ChevronLeft className="w-4 h-4 text-tech" />
-                           <span>Voltar ao Planejador</span>
+                           <span>Ver Plano de Rota</span>
                          </button>
                        </div>
                      </motion.div>
@@ -4197,7 +4130,7 @@ export default function VoieExpressApp() {
             <div className="flex flex-col gap-2.5">
               <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 6 de 9</span>
-                <span className="text-tech">Cockpit do Motorista</span>
+                <span className="text-tech">Modo de Navegação do Motorista</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
                 <span>🧭</span> 6. GPS por Voz, Giroscópio & Mapa Detalhado HD
@@ -4393,158 +4326,7 @@ export default function VoieExpressApp() {
         </motion.div>
       )}
 
-      {/* Modal Integrar Ponto de Coleta (Temu, Shopee, Mercado Livre, Motoboys) */}
-      <AnimatePresence>
-        {showPickupHubModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[9990] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4"
-            onClick={() => setShowPickupHubModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 20 }}
-              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-[0_25px_60px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[85vh]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="flex items-start justify-between pb-4 border-b border-slate-800">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                    <ShoppingBag className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-extrabold text-white font-display flex items-center gap-2">
-                      Integrar Ponto de Coleta / Hub Logistics
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Para motoboys, entregadores independentes e parceiros de e-commerce (Temu, Shopee, Mercado Livre, AliExpress, Correios).
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPickupHubModal(false)}
-                  className="text-slate-500 hover:text-white p-2 rounded-xl hover:bg-slate-800 text-sm font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
 
-              {/* Filter / Search Bar */}
-              <div className="my-4">
-                <input
-                  type="text"
-                  value={customHubSearch}
-                  onChange={(e) => setCustomHubSearch(e.target.value)}
-                  placeholder="Pesquisar por Hub, Plataforma (Temu, Shopee, Meli), Bairro ou Endereço..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-all font-sans"
-                />
-              </div>
-
-              {/* Hubs Grid List */}
-              <div className="overflow-y-auto custom-scrollbar flex-1 space-y-3 pr-1">
-                {ECOMMERCE_PICKUP_HUBS.filter(h => {
-                  if (!customHubSearch) return true;
-                  const query = customHubSearch.toLowerCase();
-                  return h.name.toLowerCase().includes(query) || 
-                         h.platform.toLowerCase().includes(query) || 
-                         h.address.toLowerCase().includes(query);
-                }).map(hub => (
-                  <div 
-                    key={hub.id}
-                    className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-amber-500/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border ${hub.badgeColor}`}>
-                          {hub.platform}
-                        </span>
-                        <span className="text-[9px] text-slate-400 font-mono">
-                          {hub.type}
-                        </span>
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-100 group-hover:text-amber-300 transition-colors">
-                        {hub.name}
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5 truncate">
-                        {hub.address}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectPickupHub(hub, true)}
-                        className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 text-[10.5px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        <MapPin className="w-3 h-3" />
-                        Definir como Partida
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectPickupHub(hub, false)}
-                        className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 text-[10.5px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        <PackageCheck className="w-3 h-3 text-tech" />
-                        + Adicionar Coleta
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Option for custom address hub */}
-                {customHubSearch.trim().length >= 3 && (
-                  <div className="p-4 rounded-2xl bg-slate-950/40 border border-dashed border-slate-700 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold text-slate-200">
-                        Usar &quot;{customHubSearch}&quot; como Ponto de Coleta
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        Insira este endereço personalizado para a entrega de volumes.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const customHub = {
-                          id: `custom-${Date.now()}`,
-                          name: `Ponto de Coleta: ${customHubSearch}`,
-                          platform: 'Personalizado',
-                          address: customHubSearch,
-                          lat: -3.1311,
-                          lon: -60.0242,
-                          type: 'Coleta Personalizada',
-                          badgeColor: 'bg-tech/10 text-tech border-tech/20'
-                        };
-                        handleSelectPickupHub(customHub, true);
-                      }}
-                      className="px-3 py-2 rounded-xl bg-tech text-slate-950 text-[10.5px] font-black hover:bg-amber-300 cursor-pointer"
-                    >
-                      Definir como Partida
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-                <span>💡 O roteador integrará este Ponto de Coleta no seu plano de entregas.</span>
-                <button
-                  type="button"
-                  onClick={() => setShowPickupHubModal(false)}
-                  className="text-slate-300 font-bold hover:underline cursor-pointer"
-                >
-                  Fechar
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }

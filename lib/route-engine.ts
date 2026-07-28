@@ -40,6 +40,8 @@ export interface RouteStop {
   historyInsight?: any;
 
   fluvialPort?: string;
+  stopType?: 'pickup' | 'delivery';
+  isPickup?: boolean;
 }
 
 interface FluvialNode {
@@ -357,7 +359,8 @@ export async function optimizeRoute(
   options: RouteOptions, 
   knownCoords?: Record<string, { lat: number, lon: number }>,
   timeWindows?: Record<number, { start: string; end: string }>,
-  invoices?: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }>
+  invoices?: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }>,
+  stopTypes?: Record<number, 'pickup' | 'delivery'>
 ) {
   const routeHash = btoa(encodeURIComponent(addresses.join('|') + JSON.stringify(options) + JSON.stringify(timeWindows || {}) + JSON.stringify(invoices || {})));
 
@@ -560,6 +563,7 @@ export async function optimizeRoute(
     const tw = timeWindows?.[originalIdx];
     const inv = invoices?.[originalIdx];
     const history = historyInsights[loc.address];
+    const stType = stopTypes?.[originalIdx] || 'delivery';
     return {
       index: idx,
       address: loc.address,
@@ -567,7 +571,8 @@ export async function optimizeRoute(
       serviceTimeMinutes: history?.averageServiceTimeMinutes || 15,
       demandKg: inv?.peso || 0,
       priority: inv?.valor && inv.valor > 5000 ? 'urgent' : 'medium',
-      modalRestriction: options.vehicle === 'boat' ? 'boat_only' : 'all'
+      modalRestriction: options.vehicle === 'boat' ? 'boat_only' : 'all',
+      stopType: stType
     };
   });
 
@@ -605,13 +610,19 @@ export async function optimizeRoute(
     const arrivalMin = stepDetail ? stepDetail.arrivalMinutes : 480;
     const arrivalStr = formatMinutes(arrivalMin);
 
+    const constraint = stopConstraints.find(c => c.index === locIdx);
+    const stopType = constraint?.stopType || 'delivery';
+    const isPickup = stopType === 'pickup';
+
     return {
       ...loc,
       sequence: seqOrder,
       estimatedArrival: arrivalStr,
       timeWindow: timeWindows?.[originalIdx],
       invoice: invoices?.[originalIdx],
-      historyInsight: historyInsights[loc.address]
+      historyInsight: historyInsights[loc.address],
+      stopType,
+      isPickup
     };
   });
 

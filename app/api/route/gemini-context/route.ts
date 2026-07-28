@@ -78,28 +78,40 @@ INSTRUÇÃO DE RESPOSTA (RETORNE APENAS JSON VÁLIDO CONFORME A ESTRUTURA ABAIXO
 }
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [{ parts: [{ text: promptText }] }],
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.2
-      }
-    });
+    const modelSequence = [
+      "gemini-2.5-flash",
+      "gemini-3.5-flash",
+      "gemini-2.5-pro"
+    ];
 
-    if (response?.text) {
+    for (const modelName of modelSequence) {
       try {
-        const parsed = JSON.parse(response.text);
-        return NextResponse.json({
-          adjustments: {
-            edgePenalties: Array.isArray(parsed.edgePenalties) ? parsed.edgePenalties : [],
-            excludedEdges: Array.isArray(parsed.excludedEdges) ? parsed.excludedEdges : [],
-            globalMultipliers: parsed.globalMultipliers || defaultAdjustments.globalMultipliers,
-            qualitativeSummary: parsed.qualitativeSummary || defaultAdjustments.qualitativeSummary
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: [{ parts: [{ text: promptText }] }],
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.2
           }
         });
-      } catch (jsonErr) {
-        console.warn("Falha ao ler JSON de ajustes do Gemini, usando padrão:", jsonErr);
+
+        if (response?.text) {
+          try {
+            const parsed = JSON.parse(response.text);
+            return NextResponse.json({
+              adjustments: {
+                edgePenalties: Array.isArray(parsed.edgePenalties) ? parsed.edgePenalties : [],
+                excludedEdges: Array.isArray(parsed.excludedEdges) ? parsed.excludedEdges : [],
+                globalMultipliers: parsed.globalMultipliers || defaultAdjustments.globalMultipliers,
+                qualitativeSummary: parsed.qualitativeSummary || defaultAdjustments.qualitativeSummary
+              }
+            });
+          } catch (jsonErr) {
+            console.warn(`[Gemini Context] Falha ao ler JSON (${modelName}), tentando próximo...`, jsonErr);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[Gemini Context] Falha no modelo ${modelName}:`, err?.message || err);
       }
     }
 

@@ -292,8 +292,12 @@
 }
 
 /* Waze/Uber Premium Navigation CSS - Dark High-Res Tiles */
-.dark-map-tiles .leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(60%);
+.dark-map-tiles,
+.dark-map-tiles img,
+.dark-map-tiles.leaflet-layer,
+.dark-map-tiles .leaflet-tile,
+.leaflet-container.dark-map-tiles .leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(60%) !important;
 }
 
 /* Smooth Marker Animation (Uber/Waze Dead Reckoning) */

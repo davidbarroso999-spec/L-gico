@@ -546,7 +546,9 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                 ? new Date(route.completedAt).toLocaleDateString('pt-BR')
                 : new Date(route.date).toLocaleDateString('pt-BR');
 
-              const lastAddress = route.addresses[route.addresses.length - 1] || "Destino Final";
+              const lastStop = route.stops?.[route.stops.length - 1];
+              const isLastPickup = lastStop?.stopType === 'pickup';
+              const lastAddress = route.addresses[route.addresses.length - 1] || (isLastPickup ? "Ponto de Coleta" : "Destino Final");
 
               return (
                 <motion.div

@@ -539,7 +539,11 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [isRerouting, setIsRerouting] = useState(false);
   const [reroutingAlert, setReroutingAlert] = useState<string | null>(null);
   const [secondsStuck, setSecondsStuck] = useState(0); // Counts simulated time trapped in traffic
-  const [isCockpitOpen, setIsCockpitOpen] = useState(false); // Default drawer collapsed for clean GPS view
+  const [detourProposal, setDetourProposal] = useState<{
+    timeSavedMinutes: number;
+    cause: string;
+    reason: string;
+  } | null>(null);
 
   // Real Device Orientation (Gyroscope / Compass Sensor Listener - Always Active)
   useEffect(() => {
@@ -725,9 +729,9 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     return Math.round(distKm * 1000); // exact meters
   }, [carCoords, activeStep, polyline, stopIndices, navIndex]);
 
-  // Live traffic and weather layer controls
-  const [showTrafficLayer, setShowTrafficLayer] = useState(true);
-  const [showWeatherLayer, setShowWeatherLayer] = useState(true);
+  // Live traffic and weather layer controls (disabled by default for clean map view)
+  const [showTrafficLayer, setShowTrafficLayer] = useState(false);
+  const [showWeatherLayer, setShowWeatherLayer] = useState(false);
 
   // Local Occurrences database state
   const [localOccurrences, setLocalOccurrences] = useState<any[]>([]);
@@ -897,7 +901,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     if (isRerouting || !startPoint || polyline.length === 0) return;
     setIsRerouting(true);
     playAlertSound();
-    setReroutingAlert("ALERTA CO-PILOTO: Lentidão severa adiante detectada. Buscando rota inteligente alternativa...");
+    setReroutingAlert("DESVIO SOLICITADO: Buscando rota alternativa mais rápida...");
     
     // Smooth cinematic wait simulating advanced satellite path computations (1.5s)
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -1021,7 +1025,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       }
     } catch (err) {
       console.error("Failed to recalculate intelligent route:", err);
-      setReroutingAlert("AVISO CO-PILOTO: Tentativa de recálculo efetuada, mas as vias alternativas encontram-se congestionadas. Mantendo trajeto original.");
+      setReroutingAlert("AVISO HARPIA: Tentativa de recálculo efetuada, mas as vias alternativas encontram-se congestionadas. Mantendo trajeto original.");
       setTimeout(() => {
         setReroutingAlert(null);
       }, 4500);
@@ -1233,27 +1237,37 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
         if (isCongested) {
           targetSpeed = Math.floor(Math.random() * 4) + 4; // Crawling at 4-7 km/h
-          setInstructionHUD("ALERTA CO-PILOTO: Lentidão severa adiante! Trânsito interrompido.");
+          setInstructionHUD("ALERTA: Lentidão severa adiante na via!");
           
           setSecondsStuck(s => {
             const nextSecs = s + 0.5;
-            // If vehicle is trapped in traffic for too long, trigger autonomous rerouting!
-            if (autoRerouteEnabled && nextSecs >= 4.5 && !isRerouting) {
+            // Propose detour recommendation for user to accept or decline!
+            if (nextSecs >= 3.0 && !isRerouting && !detourProposal) {
               setTimeout(() => {
-                triggerWazeReroute();
+                playAlertSound();
+                setDetourProposal({
+                  timeSavedMinutes: 6,
+                  cause: 'Congestionamento em Tempo Real',
+                  reason: 'Lentidão severa detectada no trecho à frente. Deseja aplicar o desvio recomendado?'
+                });
               }, 10);
             }
             return nextSecs;
           });
         } else if (activeSimIncident === 'blocked') {
           targetSpeed = 0; // Completely stopped
-          setInstructionHUD("VIA INTERDITADA: Acidente ou bloqueio total à frente! Use o recálculo.");
+          setInstructionHUD("VIA INTERDITADA: Bloqueio total detectado à frente!");
           
           setSecondsStuck(s => {
             const nextSecs = s + 0.5;
-            if (autoRerouteEnabled && nextSecs >= 3.5 && !isRerouting) {
+            if (nextSecs >= 2.0 && !isRerouting && !detourProposal) {
               setTimeout(() => {
-                triggerWazeReroute();
+                playAlertSound();
+                setDetourProposal({
+                  timeSavedMinutes: 12,
+                  cause: 'Pista Bloqueada por Incidente',
+                  reason: 'A via à frente está com trânsito interrompido. Recomendado aplicar o desvio alternativo.'
+                });
               }, 10);
             }
             return nextSecs;
@@ -1322,21 +1336,26 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
       {/* CLIMA REAL-TIME HUD OVERLAY */}
       {showWeatherLayer && !isNavigationScreen && stops.length > 0 && (
-        <div className="absolute top-24 left-4 z-[995] bg-slate-900/90 backdrop-blur-md border border-teal-500/30 p-4 rounded-2xl w-60 shadow-[0_10px_30px_rgba(20,184,166,0.15)] text-white font-sans animate-in fade-in slide-in-from-left-4 duration-300 hidden md:block select-none">
-          <div className="flex items-center gap-2 mb-2.5 border-b border-white/10 pb-1.5 justify-between">
-            <div className="flex items-center gap-2">
-              <CloudRain className="w-4 h-4 text-teal-400 animate-bounce" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-teal-400 font-display">Clima em Tempo Real</span>
+        <div className="absolute top-16 left-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-teal-500/30 p-3.5 rounded-2xl w-56 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-left-4 duration-200 select-none">
+          <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
+            <div className="flex items-center gap-1.5">
+              <CloudRain className="w-3.5 h-3.5 text-teal-400" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-teal-400">Clima em Tempo Real</span>
             </div>
-            <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+            <button 
+              onClick={() => setShowWeatherLayer(false)}
+              className="text-slate-400 hover:text-white text-xs font-bold px-1"
+            >
+              ✕
+            </button>
           </div>
-          <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+          <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-1">
             {stops.map((s, i) => (
-              <div key={i} className="flex items-center justify-between text-[11px] border-b border-white/5 last:border-0 pb-1.5 last:pb-0">
-                <span className="truncate max-w-[124px] text-slate-300 font-medium">
-                  {i === 0 ? 'Origem' : i === stops.length - 1 ? 'Destino Final' : `Parada #${i + 1}`}
+              <div key={i} className="flex items-center justify-between text-[10.5px] border-b border-white/5 last:border-0 pb-1 last:pb-0">
+                <span className="truncate max-w-[110px] text-slate-300 font-medium">
+                  {i === 0 ? 'Origem' : (s?.stopType === 'pickup') ? `Ponto de Coleta` : i === stops.length - 1 ? 'Destino Final' : `Parada #${i + 1}`}
                 </span>
-                <div className="flex items-center gap-1.5 shrink-0 font-bold text-teal-300">
+                <div className="flex items-center gap-1 shrink-0 font-bold text-teal-300">
                    <span>{getWeatherEmoji(s.weather?.weather?.[0]?.description, s.weather?.weather?.[0]?.main)}</span>
                    <span>{s.weather?.main?.temp ? `${Math.round(s.weather.main.temp)}°C` : '28°C'}</span>
                 </div>
@@ -1348,47 +1367,33 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
       {/* TRÂNSITO REAL-TIME HUD OVERLAY */}
       {showTrafficLayer && !isNavigationScreen && stops.length > 0 && (
-        <div className="absolute top-24 right-4 z-[995] bg-slate-900/90 backdrop-blur-md border border-amber-500/30 p-4 rounded-2xl w-64 shadow-[0_10px_30px_rgba(245,158,11,0.15)] text-white font-sans animate-in fade-in slide-in-from-right-4 duration-300 hidden sm:block select-none">
-          <div className="flex items-center gap-2 mb-2.5 border-b border-white/10 pb-1.5 justify-between">
-            <div className="flex items-center gap-2">
-              <Car className="w-4 h-4 text-amber-400 animate-pulse" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 font-display">Trânsito em Tempo Real</span>
+        <div className="absolute top-16 right-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-amber-500/30 p-3.5 rounded-2xl w-60 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-right-4 duration-200 select-none">
+          <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
+            <div className="flex items-center gap-1.5">
+              <Car className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-amber-400">Trânsito em Tempo Real</span>
             </div>
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <button 
+              onClick={() => setShowTrafficLayer(false)}
+              className="text-slate-400 hover:text-white text-xs font-bold px-1"
+            >
+              ✕
+            </button>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
+          <div className="space-y-1.5 text-[11px]">
+            <div className="flex items-center justify-between">
               <span className="text-slate-400 font-semibold">Velocidade Média:</span>
               <span className="text-amber-400 font-black font-mono">38 km/h</span>
             </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400 font-semibold">Índice de Congestionamento:</span>
-              <span className="text-red-400 font-black font-semibold text-[11px] bg-red-950/40 border border-red-500/20 px-1.5 py-0.5 rounded">Ligeiro (+4 min)</span>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 font-semibold">Flutuação:</span>
+              <span className="text-red-400 font-black text-[10px] bg-red-950/40 border border-red-500/20 px-1 rounded">Ligeira (+4 min)</span>
             </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400 font-semibold">Incidentes Ativos:</span>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 font-semibold">Incidentes:</span>
               <span className="text-red-400 font-black font-mono">{localOccurrences.length + criticalPoints.length}</span>
             </div>
           </div>
-          
-          {(localOccurrences.length > 0 || criticalPoints.length > 0) && (
-            <div className="mt-2.5 pt-2 border-t border-white/10 space-y-1.5 max-h-32 overflow-y-auto custom-scrollbar">
-              {localOccurrences.map((occ, idx) => (
-                <div key={idx} className="flex items-center gap-1.5 text-[10px] text-slate-310">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
-                  <span className="font-bold text-red-400 uppercase tracking-tighter text-[8px] border border-red-500/30 px-1 rounded">{occ.type || 'Fato'}:</span>
-                  <span className="truncate">{occ.description || 'Lentidão'}</span>
-                </div>
-              ))}
-              {criticalPoints.map((cp, idx) => (
-                <div key={idx} className="flex items-center gap-1.5 text-[10px] text-slate-310">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                  <span className="font-bold text-amber-400 uppercase tracking-tighter text-[8px] border border-amber-500/30 px-1 rounded">Risco:</span>
-                  <span className="truncate">Trecho #{idx+1} ({Math.round(cp.riskScore)}% perigo)</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -1412,6 +1417,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 ? "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&scale=2"
                 : tileStyle === 'carto-voyager'
                 ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                : tileStyle === 'dark'
+                ? "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png"
                 : "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
             }
             maxNativeZoom={22}
@@ -1429,7 +1436,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
               <Popup className="custom-popup">
                 <div className="p-2 min-w-[140px]">
                   <p className="font-display font-bold text-slate-900 border-b border-slate-100 pb-1 mb-1">
-                    {idx === 0 ? 'Origem' : idx === stops.length - 1 ? 'Destino Final' : `Parada #${idx + 1}`}
+                    {idx === 0 ? 'Origem' : (stop.stopType === 'pickup') ? `Ponto de Coleta` : idx === stops.length - 1 ? 'Destino Final' : `Parada #${idx + 1}`}
                   </p>
                   <p className="text-[10px] text-slate-500 mb-2 leading-tight">{stop.address}</p>
                   <div className="flex justify-between items-center bg-slate-950 text-white p-2 rounded-lg">
@@ -1736,6 +1743,24 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
               )}
             </div>
 
+            {/* Solicitar Desvio Button */}
+            <button
+              onClick={() => {
+                playAlertSound();
+                setDetourProposal({
+                  timeSavedMinutes: 6,
+                  cause: 'Solicitação de Desvio do Condutor',
+                  reason: 'Buscando alternativa de trajeto com menor tempo e maior fluidez para as paradas restantes...'
+                });
+              }}
+              disabled={isRerouting}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 active:scale-95 transition-all text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shrink-0 ml-1 cursor-pointer"
+              title="Solicitar recomendação de desvio de rota"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Solicitar Desvio</span>
+            </button>
+
             {/* Simulated progress percentage */}
             <div className="flex flex-col items-end shrink-0 pl-2 border-l border-white/10">
               <span className="text-lg font-black font-mono text-tech leading-none">{simProgress}%</span>
@@ -1790,410 +1815,184 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             </div>
           )}
 
-          {/* DYNAMIC COCKPIT SIMULATOR DRAWER (Bottom Right) */}
-          {isCockpitOpen ? (
-            <div className="absolute bottom-4 right-4 z-[1001] w-80 bg-slate-950/95 backdrop-blur-md border border-white/10 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.85)] overflow-hidden transition-all duration-300">
-              {/* Header */}
-              <div className="bg-slate-900/60 border-b border-white/5 px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sliders className="w-4 h-4 text-tech animate-pulse" />
-                  <span className="text-[10px] font-black uppercase tracking-wider text-white">Cockpit do Co-Piloto</span>
+          {/* ROUTE DETOUR RECOMMENDATION PROMPT (User Accept/Decline Modal) */}
+          {detourProposal && (
+            <div className="absolute top-28 left-4 right-4 z-[2000] bg-slate-950/98 backdrop-blur-2xl border border-amber-500/40 rounded-3xl p-5 shadow-[0_20px_60px_rgba(0,0,0,0.9)] max-w-md mx-auto text-white animate-in zoom-in-95 duration-200">
+              <div className="flex items-start justify-between gap-3 mb-3 border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
+                    <Navigation className="w-5 h-5 text-amber-400 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 block">Recomendação do Sistema</span>
+                    <h4 className="text-sm font-black text-white">Desvio de Rota Sugerido</h4>
+                  </div>
                 </div>
-                <button 
-                  onClick={() => setIsCockpitOpen(false)}
-                  className="text-slate-500 hover:text-white transition-colors"
+                <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[11px] font-black px-2.5 py-1 rounded-full shrink-0 flex items-center gap-1">
+                  ⚡ ~{detourProposal.timeSavedMinutes} min economizados
+                </span>
+              </div>
+
+              <div className="space-y-1.5 mb-4 text-xs leading-relaxed text-slate-300">
+                <p className="font-bold text-amber-200 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping inline-block shrink-0" />
+                  {detourProposal.cause}
+                </p>
+                <p className="text-slate-400 text-[11.5px] leading-relaxed">{detourProposal.reason}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  onClick={() => {
+                    setDetourProposal(null);
+                    setSecondsStuck(0);
+                    setInstructionHUD("Mantendo rota original conforme opção do condutor.");
+                  }}
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 border border-slate-700/80 text-slate-300 hover:text-white font-black text-[11px] uppercase tracking-wider transition-all cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  Manter Rota Atual
+                </button>
+                <button
+                  onClick={async () => {
+                    setDetourProposal(null);
+                    setSecondsStuck(0);
+                    await triggerWazeReroute();
+                  }}
+                  className="py-2.5 px-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 hover:brightness-110 font-black text-[11px] uppercase tracking-wider shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Aceitar Desvio
                 </button>
               </div>
-              
-              {/* Body */}
-              <div className="p-4 flex flex-col gap-4">
-                {/* GPS Mode Toggle */}
-                <div>
-                  <span className="text-[9px] uppercase font-black tracking-widest text-slate-500 block mb-2">Modo do GPS</span>
-                  <div className="grid grid-cols-2 gap-2 bg-slate-900/80 p-1 rounded-xl border border-white/5">
-                    <button
-                      onClick={() => {
-                        setUseRealGPS(false);
-                        setInstructionHUD("Co-Piloto Inteligente ativado!");
-                        playWebAudioTone([400, 500], 'sine', 0.1);
-                      }}
-                      className={`py-1.5 rounded-lg text-[9px] uppercase font-black tracking-widest transition-all ${!useRealGPS ? 'bg-tech text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'}`}
-                    >
-                      GPS Virtual
-                    </button>
-                    <button
-                      onClick={() => {
-                        setUseRealGPS(true);
-                        setInstructionHUD("GPS Satélite em tempo real ativado.");
-                        playWebAudioTone([500, 600], 'sine', 0.1);
-                      }}
-                      className={`py-1.5 rounded-lg text-[9px] uppercase font-black tracking-widest transition-all ${useRealGPS ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 font-extrabold' : 'text-slate-400 hover:text-white'}`}
-                    >
-                      Satélite Real
-                    </button>
-                  </div>
-                </div>
-
-                {/* Autopilot Simulation Play/Pause and Acceleration Factor */}
-                {!useRealGPS && (
-                  <div>
-                    <span className="text-[9px] uppercase font-black tracking-widest text-slate-500 block mb-2">Piloto Automático</span>
-                    <div className="flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => {
-                          setIsDriving(!isDriving);
-                          if (!isDriving) {
-                            setIs3DMode(true);
-                            playWebAudioTone([523.25, 659.25], 'sine', 0.12);
-                          } else {
-                            playWebAudioTone([392.00, 329.63], 'sine', 0.12);
-                          }
-                        }}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isDriving ? 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30' : 'bg-tech text-slate-950 hover:opacity-90 shadow-lg shadow-tech/10'}`}
-                      >
-                        {isDriving ? (
-                          <>
-                            <Square className="w-3.5 h-3.5 fill-current" />
-                            <span>Pausar</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                            <span>Conduzir</span>
-                          </>
-                        )}
-                      </button>
-                      
-                      {/* Sim Speed Factor selection */}
-                      <div className="flex bg-slate-900/80 p-1 rounded-xl border border-white/5 shrink-0">
-                        {[1, 8, 15, 30].map(speed => (
-                          <button
-                            key={speed}
-                            onClick={() => {
-                              setSimSpeedFactor(speed);
-                              playWebAudioTone([440], 'sine', 0.05);
-                            }}
-                            className={`w-7 h-7 flex items-center justify-center rounded-lg text-[9px] font-mono font-bold transition-all ${simSpeedFactor === speed ? 'bg-slate-800 text-tech border border-tech/30' : 'text-slate-500 hover:text-white'}`}
-                          >
-                            {speed}x
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Simulated Incident Injector */}
-                {!useRealGPS && (
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[9px] uppercase font-black tracking-widest text-slate-500">Injetar Lentidão Surpresa</span>
-                      {activeSimIncident !== 'none' && (
-                        <span className="text-[8px] text-red-400 font-extrabold uppercase tracking-wider animate-pulse flex items-center gap-1">
-                          <Radio className="w-3 h-3 text-red-400" />
-                          ativo
-                        </span>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <button
-                        onClick={async () => {
-                          setActiveSimIncident('congested');
-                          playAlertSound();
-                          setInstructionHUD("ALERTA: Lentidão extrema de tráfego injetada na rota atual.");
-                          
-                          if (carCoords) {
-                            try {
-                              const { db } = await import('@/lib/db');
-                              await db.occurrences.add({
-                                type: 'congestion',
-                                description: 'Simulador GPS: Lentidão severa por engarrafamento',
-                                lat: carCoords[0],
-                                lon: carCoords[1],
-                                timestamp: new Date(),
-                                synced: false
-                              });
-                            } catch (e) {
-                              console.warn(e);
-                            }
-                          }
-                        }}
-                        className={`py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight border flex flex-col items-center justify-center transition-all ${activeSimIncident === 'congested' ? 'bg-amber-500/25 text-amber-400 border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-extrabold' : 'bg-slate-900 text-slate-400 border-white/5 hover:text-white hover:bg-slate-800'}`}
-                      >
-                        <Car className="w-4 h-4 mb-1" />
-                        Tráfego
-                      </button>
-                      
-                      <button
-                        onClick={async () => {
-                          setActiveSimIncident('blocked');
-                          playAlertSound();
-                          setInstructionHUD("VIA BLOQUEADA: Obstrução completa detectada à frente por acidente.");
-                          
-                          if (carCoords) {
-                            try {
-                              const { db } = await import('@/lib/db');
-                              await db.occurrences.add({
-                                type: 'accident',
-                                description: 'Simulador GPS: Obstrução de via por acidente ou árvore caída',
-                                lat: carCoords[0],
-                                lon: carCoords[1],
-                                timestamp: new Date(),
-                                synced: false
-                              });
-                            } catch (e) {
-                              console.warn(e);
-                            }
-                          }
-                        }}
-                        className={`py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight border flex flex-col items-center justify-center transition-all ${activeSimIncident === 'blocked' ? 'bg-red-500/25 text-red-400 border-red-500/40 shadow-[0_0_12px_rgba(239,68,68,0.25)] font-extrabold' : 'bg-slate-900 text-slate-400 border-white/5 hover:text-white hover:bg-slate-800'}`}
-                      >
-                        <AlertOctagon className="w-4 h-4 mb-1" />
-                        Bloqueio
-                      </button>
-
-                      <button
-                        onClick={async () => {
-                          setActiveSimIncident('none');
-                          setSecondsStuck(0);
-                          playWebAudioTone([600, 500, 400], 'sine', 0.1);
-                          try {
-                            const { db } = await import('@/lib/db');
-                            await db.occurrences.clear();
-                            setLocalOccurrences([]);
-                          } catch (e) {
-                            console.warn(e);
-                          }
-                          setInstructionHUD("Injeções de trânsito removidas. Pista livre.");
-                        }}
-                        className="py-2 px-1 rounded-xl text-[9px] font-black uppercase tracking-tight bg-slate-900 text-slate-400 border border-white/5 hover:text-white hover:bg-slate-800 flex flex-col items-center justify-center transition-all"
-                      >
-                        <Sun className="w-4 h-4 mb-1 text-teal-400" />
-                        Limpar
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Auto reroute configurations and recalculate buttons */}
-                <div className="pt-2.5 border-t border-white/5 flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={autoRerouteEnabled}
-                        onChange={(e) => {
-                          setAutoRerouteEnabled(e.target.checked);
-                          playWebAudioTone([e.target.checked ? 600 : 350], 'sine', 0.08);
-                        }}
-                        className="rounded border-white/10 bg-slate-900 text-tech focus:ring-tech/50 w-3.5 h-3.5"
-                      />
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Desvio Autônomo Ativo</span>
-                    </label>
-                  </div>
-
-                  <button
-                    onClick={() => triggerWazeReroute()}
-                    disabled={isRerouting || !carCoords}
-                    className="w-full py-2.5 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest bg-gradient-to-r from-tech to-amber-500 text-slate-950 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all flex items-center justify-center gap-1.5 shadow-[0_0_20px_rgba(209,160,84,0.2)] hover:shadow-[0_0_25px_rgba(209,160,84,0.35)]"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
-                    Recalcular Rota GPS
-                  </button>
-                </div>
-              </div>
             </div>
-          ) : (
-            /* Compact floating Cockpit launcher trigger badge */
-            <button
-              onClick={() => {
-                setIsCockpitOpen(true);
-                playWebAudioTone([440, 554.37], 'sine', 0.08);
-              }}
-              className="absolute bottom-4 right-4 z-[1001] bg-slate-950 border border-tech/40 text-tech hover:scale-105 active:scale-95 px-3.5 py-2.5 rounded-2xl flex items-center gap-2 shadow-[0_8px_32px_rgba(209,160,84,0.2)] transition-all"
-            >
-              <Sliders className="w-4 h-4 animate-pulse text-tech" />
-              <span className="text-[9px] font-black uppercase tracking-widest text-tech">Cockpit Simulador</span>
-            </button>
           )}
         </>
       )}
 
-      {/* PERSISTENT MAP SYSTEM CONTROLS (Floating Overlays) */}
+      {/* PERSISTENT MAP SYSTEM CONTROLS (Compact Floating Dock) */}
       {!isNavigationScreen && (
-        <div className={`absolute ${stops.length > 0 ? 'bottom-[185px] md:bottom-24' : 'bottom-40 md:bottom-36'} right-4 z-[1001] flex flex-col gap-2.5`}>
-          
+        <div className="absolute bottom-6 right-4 z-[1001] flex items-center gap-1.5 p-1.5 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 rounded-2xl shadow-2xl">
           {/* Toggle Live Weather Layer */}
           <button
             onClick={() => setShowWeatherLayer(!showWeatherLayer)}
-            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+            className={`p-2 rounded-xl transition-all ${
               showWeatherLayer 
-                ? 'bg-teal-500/20 text-teal-400 border-teal-500/40' 
-                : 'glass text-slate-400 border-white/10 hover:text-white'
+                ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
-            title="Alternar Clima Real-Time (On / Off)"
+            title="Alternar Clima"
           >
-            <div className="flex flex-col items-center justify-center">
-              <CloudRain className={`w-4 h-4 mb-0.5 ${showWeatherLayer ? 'text-teal-400 animate-pulse' : 'text-slate-400'}`} />
-              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-                Clima {showWeatherLayer ? 'ON' : 'OFF'}
-              </span>
-            </div>
+            <CloudRain className="w-4 h-4" />
           </button>
 
           {/* Toggle Live Traffic Layer */}
           <button
             onClick={() => setShowTrafficLayer(!showTrafficLayer)}
-            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+            className={`p-2 rounded-xl transition-all ${
               showTrafficLayer 
-                ? 'bg-amber-500/20 text-amber-400 border-amber-500/40' 
-                : 'glass text-slate-400 border-white/10 hover:text-white'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
-            title="Alternar Trânsito Real-Time (On / Off)"
+            title="Alternar Trânsito"
           >
-            <div className="flex flex-col items-center justify-center">
-              <Car className={`w-4 h-4 mb-0.5 ${showTrafficLayer ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`} />
-              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-                Trânsito {showTrafficLayer ? 'ON' : 'OFF'}
-              </span>
-            </div>
+            <Car className="w-4 h-4" />
           </button>
 
-          {/* Camadas do Mapa & Nível de Detalhamento */}
+          <div className="w-px h-4 bg-slate-800/80 my-auto" />
+
+          {/* Camadas do Mapa */}
           <div className="relative">
             <button
               onClick={() => setShowTileMenu(!showTileMenu)}
-              className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+              className={`p-2 rounded-xl transition-all ${
                 showTileMenu || tileStyle !== 'dark'
-                  ? 'bg-tech text-slate-950 border-tech font-bold'
-                  : 'glass text-slate-400 border-white/10 hover:text-white'
+                  ? 'bg-amber-500 text-slate-950 font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
-              title="Alternar Detalhamento e Camadas do Mapa"
+              title="Estilos de Mapa"
             >
-              <div className="flex flex-col items-center justify-center">
-                <Layers className="w-4 h-4 mb-0.5" />
-                <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-                  Detalhe HD
-                </span>
-              </div>
+              <Layers className="w-4 h-4" />
             </button>
 
             {showTileMenu && (
-              <div className="absolute right-14 bottom-0 bg-slate-950/95 border border-tech/40 backdrop-blur-md rounded-2xl p-3 shadow-2xl w-56 flex flex-col gap-2 z-[10000] text-xs">
+              <div className="absolute right-0 bottom-12 bg-slate-950/95 border border-slate-800 backdrop-blur-md rounded-2xl p-2.5 shadow-2xl w-52 flex flex-col gap-1.5 z-[10000] text-xs">
                 <div className="text-[9px] font-black uppercase text-tech tracking-wider border-b border-white/10 pb-1 flex justify-between items-center">
-                  <span>Visualização do Mapa</span>
+                  <span>Estilo do Mapa</span>
                   <button onClick={() => setShowTileMenu(false)} className="text-slate-400 hover:text-white">✕</button>
                 </div>
 
                 <button
                   onClick={() => { setTileStyle('google-hybrid'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                    tileStyle === 'google-hybrid' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-hybrid' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
-                  <Globe className="w-4 h-4 shrink-0 text-amber-400" />
-                  <div>
-                    <div className="text-[11px] font-bold">🛰️ Satélite HD + Rótulos</div>
-                    <div className="text-[9px] text-slate-400">Google Híbrido, Bairros e Ruas</div>
-                  </div>
+                  <Globe className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                  <span className="text-[11px]">Satélite Híbrido</span>
                 </button>
 
                 <button
                   onClick={() => { setTileStyle('google-streets'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                    tileStyle === 'google-streets' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-streets' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
-                  <MapPin className="w-4 h-4 shrink-0 text-cyan-400" />
-                  <div>
-                    <div className="text-[11px] font-bold">🗺️ Ruas & POIs</div>
-                    <div className="text-[9px] text-slate-400">Google Vetor em Alta Resolução</div>
-                  </div>
+                  <MapPin className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                  <span className="text-[11px]">Vetor / Ruas</span>
                 </button>
 
                 <button
                   onClick={() => { setTileStyle('google-terrain'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                    tileStyle === 'google-terrain' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-terrain' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
-                  <Sun className="w-4 h-4 shrink-0 text-emerald-400" />
-                  <div>
-                    <div className="text-[11px] font-bold">🏔️ Relevo / Terreno</div>
-                    <div className="text-[9px] text-slate-400">Curvas de nível e Topografia</div>
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => { setTileStyle('carto-voyager'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                    tileStyle === 'carto-voyager' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
-                  }`}
-                >
-                  <Layers className="w-4 h-4 shrink-0 text-purple-400" />
-                  <div>
-                    <div className="text-[11px] font-bold">🏬 Detalhe Urbano</div>
-                    <div className="text-[9px] text-slate-400">CartoDB Imóveis & Estabelecimentos</div>
-                  </div>
+                  <Sun className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                  <span className="text-[11px]">Topografia</span>
                 </button>
 
                 <button
                   onClick={() => { setTileStyle('dark'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                    tileStyle === 'dark' ? 'bg-tech/20 border border-tech text-tech font-bold' : 'hover:bg-white/5 text-slate-300'
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'dark' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
-                  <Compass className="w-4 h-4 shrink-0 text-slate-400" />
-                  <div>
-                    <div className="text-[11px] font-bold">🌃 Visão Noturna</div>
-                    <div className="text-[9px] text-slate-400">Modo Escuro Cyberpunk</div>
-                  </div>
+                  <Compass className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                  <span className="text-[11px]">Modo Escuro</span>
                 </button>
               </div>
             )}
           </div>
 
-          {/* Toggle Device Orientation Gyroscope Tracking */}
+          {/* Giroscópio */}
           <button
             onClick={toggleGyroscope}
-            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+            className={`p-2 rounded-xl transition-all ${
               useGyroscope
-                ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-black shadow-[0_0_15px_rgba(6,182,212,0.4)]'
-                : 'glass text-slate-400 border-white/10 hover:text-white'
+                ? 'bg-cyan-500 text-slate-950 font-bold'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
-            title="Giroscópio do Dispositivo (Gira o mapa conforme o sensor)"
+            title="Giroscópio"
           >
-            <div className="flex flex-col items-center justify-center">
-              <Smartphone className={`w-4 h-4 mb-0.5 ${useGyroscope ? 'animate-bounce text-slate-950' : 'text-slate-400'}`} />
-              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-                Giroscópio {useGyroscope ? 'ON' : 'OFF'}
-              </span>
-            </div>
+            <Smartphone className="w-4 h-4" />
           </button>
 
-          {/* Toggle Map Orientation Mode */}
+          {/* Orientação */}
           <button
             onClick={() => {
               setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
             }}
-            className={`px-3 py-2.5 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
-              mapOrientation === 'north'
-                ? 'bg-tech/20 text-tech border-tech/30'
-                : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+            className={`p-2 rounded-xl transition-all ${
+              mapOrientation === 'track'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
-            title={mapOrientation === 'north' ? "Orientação: Norte para Cima (Super Estável)" : "Orientação: Seguir Rota (Dinâmico)"}
+            title="Orientação"
           >
-            <div className="flex flex-col items-center justify-center">
-              <Navigation className={`w-4 h-4 mb-0.5 ${mapOrientation === 'track' ? 'animate-pulse text-amber-400' : 'text-tech'}`} style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.4s' }} />
-              <span className="text-[7px] font-black uppercase tracking-tight select-none leading-none">
-                {mapOrientation === 'north' ? 'Norte ↑' : 'Rota ↱'}
-              </span>
-            </div>
+            <Navigation className="w-4 h-4" style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.3s' }} />
           </button>
 
-          {/* Toggle 3D Perspective Mode */}
+          {/* Modo 3D */}
           <button
             onClick={() => {
               setIs3DMode(!is3DMode);
@@ -2201,20 +2000,17 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 setCarCoords(polyline[0]);
               }
             }}
-            className={`p-3 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+            className={`p-2 rounded-xl transition-all ${
               is3DMode 
-                ? 'bg-tech text-slate-950 border-tech shadow-tech/20 font-bold' 
-                : 'glass text-slate-400 border-white/10 hover:text-white'
+                ? 'bg-amber-500 text-slate-950 font-bold' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
-            title="Alternar Modo de Cabine 3D (GPS)"
+            title="Modo 3D"
           >
-            <Compass 
-              className="w-5 h-5 transition-transform duration-500 ease-out" 
-              style={{ transform: `rotate(${-smoothHeading}deg)` }} 
-            />
+            <Compass className="w-4 h-4" style={{ transform: `rotate(${-smoothHeading}deg)` }} />
           </button>
 
-          {/* Start / Pause Interactive Auto-Pilot driving simulation */}
+          {/* Piloto / Simulação */}
           {polyline.length >= 2 && (
             <button
               onClick={() => {
@@ -2222,21 +2018,17 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                   setIsDriving(false);
                 } else {
                   setIsDriving(true);
-                  setIs3DMode(true); // Forces 3D viewport for cinematic beauty
+                  setIs3DMode(true);
                 }
               }}
-              className={`p-3 rounded-2xl border flex items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all ${
+              className={`p-2 rounded-xl transition-all ${
                 isDriving 
-                  ? 'bg-red-500 text-white border-red-500 shadow-red-500/20' 
-                  : 'glass text-tech border-tech/20'
+                  ? 'bg-red-500 text-white' 
+                  : 'text-amber-400 hover:bg-slate-900'
               }`}
-              title={isDriving ? "Mudar piloto para Manual" : "Ligar piloto automático GPS"}
+              title={isDriving ? "Parar Simulação" : "Simular GPS"}
             >
-              {isDriving ? (
-                <Square className="w-5 h-5 fill-current" />
-              ) : (
-                <Play className="w-5 h-5 fill-tech" />
-              )}
+              {isDriving ? <Square className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
             </button>
           )}
         </div>
