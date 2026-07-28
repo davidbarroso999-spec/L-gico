@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe, LocateFixed } from 'lucide-react';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -60,7 +60,7 @@ function calculateSmoothAngle(currentSmooth: number, target: number) {
   return (nextAngle + 360) % 360;
 }
 
-// Recenter mechanism that adapts to general view or simulation view with enhanced elite-level zoom zoom
+// Recenter mechanism that adapts to general view or simulation view with unlocked map interaction
 function MapController({ 
   stops, 
   geometry, 
@@ -68,7 +68,9 @@ function MapController({
   isDriving, 
   is3DMode,
   mapOrientation,
-  isNavigationScreen
+  isNavigationScreen,
+  isAutoFollowing,
+  onUserPan
 }: { 
   stops: any[]; 
   geometry?: any; 
@@ -77,21 +79,35 @@ function MapController({
   is3DMode: boolean;
   mapOrientation: 'north' | 'track';
   isNavigationScreen: boolean;
+  isAutoFollowing: boolean;
+  onUserPan: () => void;
 }) {
   const map = useMap();
 
+  // Listen for physical user gestures on Leaflet map to release lock and allow free pan/zoom/rotate
   useEffect(() => {
+    if (!map) return;
+    const handleUserGesture = (e: any) => {
+      if (e.originalEvent) {
+        onUserPan();
+      }
+    };
+    map.on('movestart dragstart touchstart', handleUserGesture);
+    return () => {
+      map.off('movestart dragstart touchstart', handleUserGesture);
+    };
+  }, [map, onUserPan]);
+
+  useEffect(() => {
+    if (!isAutoFollowing) return; // User is manually panning/exploring map, do not override position
+
     if (isNavigationScreen && carCoords) {
-      // Direct high-precision high-zoom lock for active navigation screens
-      const zoomLevel = 20.5;
+      const zoomLevel = 19.5;
       map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
     } else if (isDriving && carCoords) {
-      // Direct high-precision focus on the active vehicle during cockpit simulation
       const zoomLevel = is3DMode ? 19.5 : 18.2;
-      // Disable animation for frequent periodic updates (300ms) to bypass Leaflet's pan animation queue lag
       map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
     } else {
-      // Normal bounds fitting
       if (geometry?.coordinates?.length > 0) {
         const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
         map.fitBounds(bounds, { padding: [55, 55], animate: false });
@@ -100,10 +116,9 @@ function MapController({
         map.fitBounds(bounds, { padding: [55, 55], animate: false });
       }
     }
-  }, [stops, map, geometry, carCoords, isDriving, is3DMode, isNavigationScreen]);
+  }, [stops, map, geometry, carCoords, isDriving, is3DMode, isNavigationScreen, isAutoFollowing]);
 
   useEffect(() => {
-    // Force recalculate map size to prevent gray box issues when 3D mode toggles, mounts, or viewport changes
     const invalidate = () => {
       if (map) {
         map.invalidateSize();
@@ -113,10 +128,8 @@ function MapController({
     const timer1 = setTimeout(invalidate, 100);
     const timer2 = setTimeout(invalidate, 450);
 
-    // Watch window resize events natively to reflow Leaflet container tiles
     window.addEventListener('resize', invalidate);
 
-    // Use a ResizeObserver on the map's container as an elite practice
     let observer: ResizeObserver | null = null;
     try {
       const container = map.getContainer();
@@ -140,40 +153,31 @@ function MapController({
     };
   }, [map, is3DMode, stops, geometry]);
 
-  // Dynamically enable/disable interface dragging under active tracking rotation to solve Leaflet coordinate offsets
+  // Keep interaction ALWAYS enabled so user can pan, zoom, and rotate like Google Maps
   useEffect(() => {
-    const isActivelyRotating = is3DMode && isDriving && mapOrientation === 'track';
-    if (isActivelyRotating) {
-      map.dragging.disable();
-      map.touchZoom.disable();
-      map.doubleClickZoom.disable();
-      map.scrollWheelZoom.disable();
-      map.boxZoom.disable();
-      map.keyboard.disable();
-    } else {
-      map.dragging.enable();
-      map.touchZoom.enable();
-      map.doubleClickZoom.enable();
-      map.scrollWheelZoom.enable();
-      map.boxZoom.enable();
-      map.keyboard.enable();
-    }
-  }, [map, is3DMode, isDriving, mapOrientation]);
+    if (!map) return;
+    map.dragging.enable();
+    map.touchZoom.enable();
+    map.doubleClickZoom.enable();
+    map.scrollWheelZoom.enable();
+    map.boxZoom.enable();
+    map.keyboard.enable();
+  }, [map]);
 
   // Recenter Event Listener
   useEffect(() => {
     const handleRecenter = () => {
       if (!map) return;
       if (carCoords) {
-        const zoomLevel = isNavigationScreen ? 19.7 : (is3DMode ? 19.5 : 18.2);
-        map.setView(carCoords, zoomLevel, { animate: true, duration: 1 });
+        const zoomLevel = isNavigationScreen ? 19.5 : (is3DMode ? 19.5 : 18.2);
+        map.setView(carCoords, zoomLevel, { animate: true, duration: 0.8 });
       } else {
         if (geometry?.coordinates?.length > 0) {
           const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
-          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 1 });
+          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 0.8 });
         } else if (stops.length > 0) {
           const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
-          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 1 });
+          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 0.8 });
         }
       }
     };
@@ -514,6 +518,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   // 3D Navigation Simulation States
   const [is3DMode, setIs3DMode] = useState(isNavigationScreen ? false : false);
   const [isDriving, setIsDriving] = useState(false);
+  const [isAutoFollowing, setIsAutoFollowing] = useState(true);
   const [carCoords, setCarCoords] = useState<[number, number] | null>(null);
   const [heading, setHeading] = useState(0);
   const [smoothHeading, setSmoothHeading] = useState(0); // Multi-turn mathematical state
@@ -702,6 +707,23 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     }
     return "straight";
   }, [activeStep]);
+
+  // Dynamic 100% precision real-time turn distance countdown
+  const realTimeTurnDistanceMeters = useMemo(() => {
+    if (!carCoords || !activeStep || !polyline || polyline.length === 0) return null;
+    const currentLegIdx = Math.max(0, navIndex - 1);
+    const startIdx = stopIndices[currentLegIdx] || 0;
+    
+    const waypoints = activeStep.way_points;
+    if (!waypoints || waypoints.length < 2) return null;
+
+    const targetPolyIdx = Math.min(polyline.length - 1, startIdx + waypoints[1]);
+    const targetCoord = polyline[targetPolyIdx];
+    if (!targetCoord) return null;
+
+    const distKm = calculateDistanceInKm(carCoords[0], carCoords[1], targetCoord[0], targetCoord[1]);
+    return Math.round(distKm * 1000); // exact meters
+  }, [carCoords, activeStep, polyline, stopIndices, navIndex]);
 
   // Live traffic and weather layer controls
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
@@ -1275,14 +1297,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
   // Computed transform configuration based on 3D View, device gyroscope orientation or route bearing
   const mapTransformStyles = is3DMode ? {
-    transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${(mapOrientation === 'track' || useGyroscope || gyroActive) ? -activeRotationHeading : 0}deg)`,
+    transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${(mapOrientation === 'track' || useGyroscope || gyroActive) ? -activeRotationHeading : 0}deg) scale(1.45)`,
     transformOrigin: '50% 50%',
     transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 1s linear',
     height: '100%',
     width: '100%',
     background: '#2D2C2A'
   } : {
-    transform: (mapOrientation === 'track' || useGyroscope || gyroActive) ? `rotateZ(${-activeRotationHeading}deg)` : 'none',
+    transform: (mapOrientation === 'track' || useGyroscope || gyroActive) ? `rotateZ(${-activeRotationHeading}deg) scale(1.25)` : 'none',
     transformOrigin: '50% 50%',
     transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
     height: '100%',
@@ -1645,9 +1667,26 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             is3DMode={is3DMode} 
             mapOrientation={mapOrientation}
             isNavigationScreen={isNavigationScreen}
+            isAutoFollowing={isAutoFollowing}
+            onUserPan={() => setIsAutoFollowing(false)}
           />
         </MapContainer>
       </div>
+
+      {/* Floating Recenter Map Button when map is manually moved */}
+      {!isAutoFollowing && (
+        <button
+          type="button"
+          onClick={() => {
+            setIsAutoFollowing(true);
+            window.dispatchEvent(new CustomEvent('recenter-map'));
+          }}
+          className="fixed bottom-28 right-4 z-[1600] bg-tech text-slate-950 font-black text-xs uppercase tracking-wider px-4 py-2.5 rounded-2xl shadow-[0_10px_30px_rgba(209,160,84,0.5)] border border-white/30 flex items-center gap-2 hover:scale-105 active:scale-95 transition-all animate-bounce cursor-pointer"
+        >
+          <LocateFixed className="w-4 h-4" />
+          <span>Recentralizar Rota</span>
+        </button>
+      )}
 
       {/* WAZE-LIKE PROGRESS HUD & SPEED INDICATOR */}
       {isNavigationScreen && (
@@ -1665,13 +1704,21 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
               {stepDirection === 'straight' && <ArrowUp className="w-8 h-8 text-white stroke-[3.5px]" />}
             </div>
             
-            {/* Turn-by-Turn Info Section (Optimized for visibility from distance) */}
+            {/* Turn-by-Turn Info Section (Optimized for visibility from distance & real-time meters precision) */}
             <div className="flex-1 min-w-0">
               {activeStep ? (
                 <>
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-black">
-                      {activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}
+                    <span className="text-[11px] uppercase tracking-widest text-emerald-400 font-black flex items-center gap-1">
+                      {realTimeTurnDistanceMeters !== null ? (
+                        realTimeTurnDistanceMeters <= 25 ? (
+                          <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded font-black animate-bounce text-[10px]">VIRAR AGORA</span>
+                        ) : (
+                          <span>{stepDirection === 'right' ? 'Vire à direita' : stepDirection === 'left' ? 'Vire à esquerda' : 'Siga em frente'} em {realTimeTurnDistanceMeters >= 1000 ? `${(realTimeTurnDistanceMeters/1000).toFixed(1)} km` : `${realTimeTurnDistanceMeters} metros`}</span>
+                        )
+                      ) : (
+                        <span>{activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}</span>
+                      )}
                     </span>
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                   </div>
@@ -1704,16 +1751,17 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             </div>
           </div>
 
-          {/* Speed Limit & Current Speed Bubble (Bottom Left) */}
-          <div className="absolute bottom-40 md:bottom-32 left-4 z-[1001] flex flex-col items-center gap-2">
-            {/* Speed Limit Sign */}
-            <div className="w-12 h-12 bg-slate-900 rounded-full border-4 border-alert shadow-xl flex items-center justify-center">
-              <span className="text-white font-extrabold text-lg tracking-tighter">60</span>
+          {/* Speed Limit & Current Speed Bubble (Bottom Left HUD) */}
+          <div className="absolute bottom-28 md:bottom-24 left-4 z-[1001] flex flex-col items-center gap-2 select-none">
+            {/* Speed Limit Sign (Standard Brazilian R-19 traffic sign: White circle, thick red ring, dark bold number) */}
+            <div className="w-13 h-13 bg-white rounded-full border-[5px] border-red-600 shadow-2xl flex flex-col items-center justify-center text-slate-950 border-solid ring-2 ring-black/40" title="Limite de Velocidade Máxima Permitida na Via (60 km/h)">
+              <span className="text-[6.5px] font-black uppercase text-red-600 tracking-tighter -mb-1">MÁX</span>
+              <span className="font-extrabold text-lg tracking-tighter leading-none text-black">60</span>
             </div>
-            {/* Current Speed Bubble */}
-            <div className={`w-14 h-14 rounded-full border-[3px] flex flex-col items-center justify-center shadow-2xl transition-colors ${speedHUD > 60 ? 'bg-alert/10 border-alert text-alert shadow-[0_0_20px_rgba(239,68,68,0.3)]' : 'bg-slate-900 border-tech/50 text-tech shadow-[0_0_20px_rgba(209,160,84,0.2)]'}`}>
-              <span className="font-mono text-xl font-black leading-none tracking-tighter -mb-1">{speedHUD}</span>
-              <span className="text-[8px] uppercase font-black tracking-widest opacity-80">km/h</span>
+            {/* Real-time Current Speed Meter Bubble */}
+            <div className={`w-14 h-14 rounded-full border-[3px] flex flex-col items-center justify-center shadow-2xl transition-all duration-200 ${speedHUD > 60 ? 'bg-red-600 text-white border-white shadow-[0_0_25px_rgba(239,68,68,0.8)] animate-bounce' : 'bg-slate-950/90 border-tech text-tech shadow-[0_0_20px_rgba(209,160,84,0.35)]'}`} title="Sua Velocidade Atual em Tempo Real">
+              <span className="font-mono text-xl font-black leading-none tracking-tighter -mb-0.5">{speedHUD}</span>
+              <span className="text-[7.5px] uppercase font-black tracking-widest opacity-90">km/h</span>
             </div>
           </div>
 

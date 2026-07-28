@@ -29,6 +29,10 @@ import {
   Camera,
   CheckCircle2,
   ChevronRight,
+  ChevronLeft,
+  ChevronUp,
+  ChevronDown,
+  Check,
   Clock,
   Sparkles,
   Database,
@@ -214,6 +218,9 @@ export default function VoieExpressApp() {
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [addresses, setAddresses] = useState<string[]>(['']);
+  const [stopTypes, setStopTypes] = useState<Record<number, 'delivery' | 'pickup'>>({});
+  const [isNavDrawerOpen, setIsNavDrawerOpen] = useState(false);
+  const [sheetPosition, setSheetPosition] = useState<'peek' | 'expanded' | 'collapsed'>('peek');
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
   const [invoiceData, setInvoiceData] = useState<Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean; filename?: string; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: NFeData }>>({});
   const [previewInvoice, setPreviewInvoice] = useState<{
@@ -628,6 +635,15 @@ export default function VoieExpressApp() {
   const [showPickupHubModal, setShowPickupHubModal] = useState<boolean>(false);
   const [customHubSearch, setCustomHubSearch] = useState<string>('');
   const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
+  const [nearbyRefPoints, setNearbyRefPoints] = useState<Array<{
+    name: string;
+    type: string;
+    distanceMeters: number;
+    address: string;
+    fullLabel: string;
+    lat: number;
+    lon: number;
+  }>>([]);
 
   const handleUseCurrentGpsAsOrigin = async () => {
     setIsLocatingGps(true);
@@ -636,6 +652,10 @@ export default function VoieExpressApp() {
       try {
         const refResult = await getNearestReferencePoint(lat, lon);
         const addressLabel = refResult.fullLabel;
+
+        if (refResult.nearbyRecommendations && refResult.nearbyRecommendations.length > 0) {
+          setNearbyRefPoints(refResult.nearbyRecommendations);
+        }
 
         setAddresses(prev => {
           const next = [...prev];
@@ -691,6 +711,9 @@ export default function VoieExpressApp() {
     let isMounted = true;
     getNearestReferencePoint(userLocation.lat, userLocation.lon).then(refResult => {
       if (isMounted) {
+        if (refResult.nearbyRecommendations && refResult.nearbyRecommendations.length > 0) {
+          setNearbyRefPoints(refResult.nearbyRecommendations);
+        }
         setAddresses(prev => {
           if (prev[0] && prev[0].trim().length > 0) return prev;
           const next = [...prev];
@@ -1689,6 +1712,54 @@ export default function VoieExpressApp() {
                           </button>
                         </div>
 
+                        {/* Recommended Reference Points Bar (Mercadinhos, Postos, Padarias, Hubs) */}
+                        {nearbyRefPoints.length > 0 && (
+                          <div className="mt-2.5 p-3 rounded-2xl bg-slate-900/90 border border-tech/30 flex flex-col gap-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black uppercase text-tech tracking-wider flex items-center gap-1.5">
+                                <MapPin className="w-3.5 h-3.5 text-tech animate-pulse" />
+                                Pontos de Referência Recomendados para Partida:
+                              </span>
+                              <span className="text-[9px] text-slate-500 font-bold uppercase">Mais Próximos</span>
+                            </div>
+
+                            <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1 pt-0.5">
+                              {nearbyRefPoints.map((refItem, rIdx) => {
+                                const distStr = refItem.distanceMeters >= 1000 
+                                  ? `${(refItem.distanceMeters / 1000).toFixed(1)} km` 
+                                  : `${Math.round(refItem.distanceMeters)}m`;
+
+                                return (
+                                  <button
+                                    key={rIdx}
+                                    type="button"
+                                    onClick={() => {
+                                      setAddresses(prev => {
+                                        const next = [...prev];
+                                        next[0] = refItem.fullLabel;
+                                        return next;
+                                      });
+                                      setResolvedCoords(prev => ({
+                                        ...prev,
+                                        [refItem.fullLabel]: { lat: refItem.lat, lon: refItem.lon }
+                                      }));
+                                      setLocationMismatchDismissed(refItem.fullLabel);
+                                      setApiWarning(`Partida definida no Ponto de Referência: "${refItem.name}" (${refItem.type})`);
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-tech/60 hover:bg-tech/10 text-slate-200 text-[10.5px] font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                                  >
+                                    <span className="text-amber-400">🏪</span>
+                                    <div className="flex flex-col text-left">
+                                      <span className="text-white font-bold leading-tight">{refItem.name}</span>
+                                      <span className="text-[9px] text-slate-400 font-medium">{refItem.type} • a {distStr}</span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Location Mismatch Warning Banner */}
                         {isMismatchActive && (
                           <motion.div 
@@ -1800,9 +1871,38 @@ export default function VoieExpressApp() {
                               </div>
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between flex-wrap gap-1">
-                                  <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
-                                    Parada {idx + 1}
-                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
+                                      Parada {idx + 1}
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setStopTypes(prev => ({
+                                          ...prev,
+                                          [realIdx]: prev[realIdx] === 'pickup' ? 'delivery' : 'pickup'
+                                        }));
+                                      }}
+                                      className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border ${
+                                        stopTypes[realIdx] === 'pickup'
+                                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                                          : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                      }`}
+                                      title="Alternar entre Ponto de Coleta e Destino de Entrega"
+                                    >
+                                      {stopTypes[realIdx] === 'pickup' ? (
+                                        <>
+                                          <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
+                                          <span>Coleta (Não é entrega)</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                                          <span>Entrega</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
                                   {invoiceData[realIdx] && (invoiceData[realIdx].key || invoiceData[realIdx].pdfUrl) ? (
                                     <div className="flex items-center gap-2">
                                       <button
@@ -2608,6 +2708,93 @@ export default function VoieExpressApp() {
               <div className="relative flex-1">
                  <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
                  
+                 {/* Top-Left Retractable Drawer Toggle Button ("Menu Ioiô") */}
+                 <button
+                   type="button"
+                   onClick={() => setIsNavDrawerOpen(!isNavDrawerOpen)}
+                   className="absolute top-4 left-4 z-[1500] w-12 h-12 rounded-2xl bg-slate-950/95 border border-tech/40 text-tech hover:text-white hover:border-tech shadow-[0_8px_25px_rgba(0,0,0,0.6)] flex items-center justify-center transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer group"
+                   title={isNavDrawerOpen ? "Recolher Menu de Navegação" : "Abrir Menu de Navegação"}
+                 >
+                   {isNavDrawerOpen ? (
+                     <ChevronLeft className="w-6 h-6 text-tech transition-transform group-hover:-translate-x-0.5" />
+                   ) : (
+                     <ChevronRight className="w-6 h-6 text-tech transition-transform group-hover:translate-x-0.5 animate-pulse" />
+                   )}
+                 </button>
+
+                 {/* Retractable Navigation Drawer */}
+                 <AnimatePresence>
+                   {isNavDrawerOpen && (
+                     <motion.div
+                       initial={{ x: '-100%', opacity: 0 }}
+                       animate={{ x: 0, opacity: 1 }}
+                       exit={{ x: '-100%', opacity: 0 }}
+                       transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                       className="absolute top-0 left-0 bottom-0 z-[1400] w-80 md:w-96 bg-slate-950/95 backdrop-blur-2xl border-r border-tech/30 p-6 flex flex-col shadow-[10px_0_40px_rgba(0,0,0,0.8)] text-white"
+                     >
+                       <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5">
+                         <div className="flex items-center gap-2.5">
+                           <Navigation className="w-5 h-5 text-tech animate-pulse" />
+                           <h3 className="font-display font-black text-base text-white uppercase tracking-wider">Painel da Rota</h3>
+                         </div>
+                         <button 
+                           onClick={() => setIsNavDrawerOpen(false)}
+                           className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white hover:border-slate-600 transition-all cursor-pointer"
+                         >
+                           <X className="w-4 h-4" />
+                         </button>
+                       </div>
+
+                       <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+                         <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800">
+                           <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Progresso do Roteiro</span>
+                           <p className="text-sm font-black text-white mt-1">Parada {navIndex + 1} de {routeResult.sequence.length}</p>
+                           <p className="text-xs text-slate-400 mt-0.5">{routeResult.sequence[navIndex]?.address}</p>
+                         </div>
+
+                         <div className="space-y-2">
+                           <span className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 block">Próximas Paradas</span>
+                           {routeResult.sequence.map((stop: any, idx: number) => (
+                             <div 
+                               key={idx}
+                               className={`p-3 rounded-xl border flex items-center justify-between text-xs transition-all ${
+                                 idx === navIndex 
+                                   ? 'bg-tech/15 border-tech/40 text-white font-bold' 
+                                   : idx < navIndex 
+                                   ? 'bg-slate-900/30 border-slate-800 text-slate-500 line-through' 
+                                   : 'bg-slate-900/60 border-slate-800/80 text-slate-300'
+                               }`}
+                             >
+                               <div className="flex items-center gap-2.5 min-w-0">
+                                 <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 ${
+                                   idx === navIndex ? 'bg-tech text-slate-950' : 'bg-slate-800 text-slate-400'
+                                 }`}>
+                                   {idx + 1}
+                                 </span>
+                                 <span className="truncate">{stop.name || stop.address?.split(',')[0]}</span>
+                               </div>
+                               {idx < navIndex && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+
+                       <div className="pt-4 border-t border-white/10 mt-auto space-y-2">
+                         <button
+                           onClick={() => {
+                             setIsNavDrawerOpen(false);
+                             setCurrentScreen('result');
+                           }}
+                           className="w-full py-3 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                         >
+                           <ChevronLeft className="w-4 h-4 text-tech" />
+                           <span>Voltar ao Planejador</span>
+                         </button>
+                       </div>
+                     </motion.div>
+                   )}
+                 </AnimatePresence>
+                 
                  {/* Alerta de Clima em tempo real */}
                  <AnimatePresence>
                    {routeResult.sequence[navIndex]?.amazonasHydrology && (
@@ -2878,7 +3065,43 @@ export default function VoieExpressApp() {
                   )}
                 </AnimatePresence>
 
-                 <div className="absolute bottom-0 left-0 right-0 z-[1000] bg-slate-950/95 backdrop-blur-xl border-t border-tech/30 text-white rounded-t-[32px] shadow-[0_-15px_50px_rgba(209,160,84,0.15)] md:max-w-2xl md:mx-auto">
+                 <div className={`absolute bottom-0 left-0 right-0 z-[1000] bg-slate-950/98 backdrop-blur-2xl border-t border-tech/30 text-white rounded-t-[32px] shadow-[0_-15px_50px_rgba(0,0,0,0.8)] md:max-w-2xl md:mx-auto transition-all duration-300 ease-in-out flex flex-col ${
+                   sheetPosition === 'collapsed' 
+                     ? 'h-[76px] overflow-hidden' 
+                     : sheetPosition === 'expanded' 
+                     ? 'h-[80vh] overflow-y-auto custom-scrollbar' 
+                     : 'max-h-[380px] overflow-y-auto custom-scrollbar'
+                 }`}>
+                    {/* Drag Handle Bar with 3-state Cycle */}
+                    <div 
+                      onClick={() => {
+                        setSheetPosition(prev => prev === 'collapsed' ? 'peek' : prev === 'peek' ? 'expanded' : 'collapsed');
+                      }}
+                      className="w-full pt-3 pb-1 flex flex-col items-center justify-center cursor-pointer group hover:bg-white/5 transition-colors rounded-t-[32px] select-none shrink-0"
+                    >
+                      <div className="w-12 h-1.5 bg-slate-700 group-hover:bg-tech rounded-full transition-colors mb-1" />
+                      <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-slate-400 group-hover:text-tech">
+                        {sheetPosition === 'collapsed' && (
+                          <>
+                            <ChevronUp className="w-3.5 h-3.5 text-tech" />
+                            <span>Expandir Painel (A caminho de...)</span>
+                          </>
+                        )}
+                        {sheetPosition === 'peek' && (
+                          <>
+                            <ChevronUp className="w-3.5 h-3.5 text-tech" />
+                            <span>Toque p/ Expandir Tudo | Clique p/ Minimizar</span>
+                            <ChevronDown className="w-3.5 h-3.5 text-tech" />
+                          </>
+                        )}
+                        {sheetPosition === 'expanded' && (
+                          <>
+                            <ChevronDown className="w-3.5 h-3.5 text-tech" />
+                            <span>Recolher Painel</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                     {/* Floating Controls above bottom bar */}
                     <div className="absolute right-4 -top-40 flex flex-col gap-3">
                       {/* Sound Toggle Button */}

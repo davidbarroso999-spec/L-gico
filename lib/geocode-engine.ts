@@ -1187,6 +1187,134 @@ export interface ReferencePointResult {
   distanceMeters: number;
   lat: number;
   lon: number;
+  nearbyRecommendations?: Array<{
+    name: string;
+    type: string;
+    distanceMeters: number;
+    address: string;
+    fullLabel: string;
+    lat: number;
+    lon: number;
+  }>;
+}
+
+export async function getNearbyReferenceRecommendations(lat: number, lon: number): Promise<Array<{
+  name: string;
+  type: string;
+  distanceMeters: number;
+  address: string;
+  fullLabel: string;
+  lat: number;
+  lon: number;
+}>> {
+  const recommendations: Array<{
+    name: string;
+    type: string;
+    distanceMeters: number;
+    address: string;
+    fullLabel: string;
+    lat: number;
+    lon: number;
+  }> = [];
+
+  // Primary: Fetch nearby commercial points of reference via Google Places API Proxy
+  try {
+    const googleRes = await fetch(`/api/places/google-nearby?lat=${lat}&lng=${lon}&radius=1000`);
+    if (googleRes.ok) {
+      const googleData = await googleRes.json();
+      if (googleData.places && Array.isArray(googleData.places) && googleData.places.length > 0) {
+        for (const p of googleData.places) {
+          const itemLat = p.location?.lat || lat;
+          const itemLon = p.location?.lng || lon;
+          const dist = geoDistanceMeters(lat, lon, itemLat, itemLon);
+          const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)}m`;
+
+          recommendations.push({
+            name: p.name,
+            type: p.type || 'Ponto de Referência Google',
+            distanceMeters: dist,
+            address: p.address,
+            fullLabel: `${p.name} (${p.address ? p.address + ' - ' : ''}a ${distStr})`,
+            lat: itemLat,
+            lon: itemLon
+          });
+        }
+        if (recommendations.length > 0) {
+          return recommendations.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 8);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Google Places nearby search error, using fallback:", err);
+  }
+
+  // Secondary Fallback 1: Check local rich offline registry for closest commercial & logistics landmarks
+  const nearbyRegistry = RICH_OFFLINE_REGISTRY.map(entry => ({
+    ...entry,
+    dist: geoDistanceMeters(lat, lon, entry.lat, entry.lon)
+  })).sort((a, b) => a.dist - b.dist);
+
+  for (const item of nearbyRegistry.slice(0, 3)) {
+    if (item.dist <= 5000) {
+      const distStr = item.dist >= 1000 ? `${(item.dist / 1000).toFixed(1)} km` : `${Math.round(item.dist)}m`;
+      recommendations.push({
+        name: item.name,
+        type: 'Ponto de Referência / Hub',
+        distanceMeters: item.dist,
+        address: item.context,
+        fullLabel: `${item.name} (${item.context} - a ${distStr})`,
+        lat: item.lat,
+        lon: item.lon
+      });
+    }
+  }
+
+  // Secondary Fallback 2: OpenStreetMap Nominatim POI search
+  try {
+    const poiCategories = ['supermarket', 'convenience', 'bakery', 'pharmacy', 'fuel', 'school'];
+    for (const cat of poiCategories.slice(0, 3)) {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${cat}&lat=${lat}&lon=${lon}&radius=800&limit=3&addressdetails=1`, {
+        headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            const itemLat = parseFloat(item.lat);
+            const itemLon = parseFloat(item.lon);
+            const dist = geoDistanceMeters(lat, lon, itemLat, itemLon);
+            const poiName = item.display_name.split(',')[0];
+            const road = item.address?.road || item.address?.suburb || '';
+            const suburb = item.address?.suburb || item.address?.neighbourhood || '';
+            const city = item.address?.city || item.address?.town || 'Manaus';
+            const distStr = dist >= 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)}m`;
+
+            const typeLabel = cat === 'convenience' || cat === 'supermarket' ? 'Mercadinho / Conveniência' :
+                             cat === 'fuel' ? 'Posto de Combustível' :
+                             cat === 'bakery' ? 'Padaria' :
+                             cat === 'pharmacy' ? 'Drogaria' : 'Estabelecimento Local';
+
+            if (dist <= 2500 && !recommendations.some(r => r.name.toLowerCase() === poiName.toLowerCase())) {
+              recommendations.push({
+                name: poiName,
+                type: typeLabel,
+                distanceMeters: dist,
+                address: `${road}${suburb ? ', ' + suburb : ''}, ${city}`,
+                fullLabel: `${poiName} (${road ? road + ', ' : ''}${suburb ? suburb + ' - ' : ''}a ${distStr})`,
+                lat: itemLat,
+                lon: itemLon
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("POI search error:", err);
+  }
+
+  // Sort all recommendations by distance
+  return recommendations.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 6);
 }
 
 export async function getNearestReferencePoint(lat: number, lon: number): Promise<ReferencePointResult> {
@@ -1202,45 +1330,81 @@ export async function getNearestReferencePoint(lat: number, lon: number): Promis
   }
 
   let road = '';
+  let number = '';
   let suburb = '';
   let city = 'Manaus';
   let state = 'AM';
+  let formattedGoogleAddress = '';
 
+  // Primary Engine: Google Geocoding Reverse Proxy
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`, {
-      headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.address) {
-        road = data.address.road || data.address.pedestrian || data.address.suburb || '';
-        suburb = data.address.suburb || data.address.neighbourhood || data.address.residential || '';
-        city = data.address.city || data.address.town || data.address.municipality || 'Manaus';
-        state = data.address.state || 'AM';
+    const gRes = await fetch(`/api/places/google-reverse?lat=${lat}&lng=${lon}`);
+    if (gRes.ok) {
+      const gData = await gRes.json();
+      if (gData && !gData.error) {
+        road = gData.road || '';
+        number = gData.number || '';
+        suburb = gData.suburb || '';
+        city = gData.city || 'Manaus';
+        state = gData.state || 'AM';
+        formattedGoogleAddress = gData.formattedAddress || '';
       }
     }
   } catch (err) {
-    console.warn("Reverse geocode fetch error:", err);
+    console.warn("Google Reverse Geocode proxy fetch error, trying fallback:", err);
   }
 
-  const landmarkName = closestLandmark ? closestLandmark.name : 'Ponto de Apoio';
-  const streetAddress = road ? `${road}${suburb ? ', ' + suburb : ''}` : 'Sua Posição GPS';
+  // Fallback if Google Reverse failed
+  if (!road && !formattedGoogleAddress) {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`, {
+        headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.address) {
+          road = data.address.road || data.address.pedestrian || data.address.suburb || '';
+          suburb = data.address.suburb || data.address.neighbourhood || data.address.residential || '';
+          city = data.address.city || data.address.town || data.address.municipality || 'Manaus';
+          state = data.address.state || 'AM';
+        }
+      }
+    } catch (err) {
+      console.warn("Reverse geocode fallback fetch error:", err);
+    }
+  }
+
+  const recommendations = await getNearbyReferenceRecommendations(lat, lon);
+  const bestPoi = recommendations.length > 0 ? recommendations[0] : null;
+
+  const landmarkName = bestPoi ? bestPoi.name : (closestLandmark ? closestLandmark.name : 'Ponto de Apoio');
+  const streetAddress = road ? `${road}${number ? ', ' + number : ''}${suburb ? ' - ' + suburb : ''}` : (formattedGoogleAddress || 'Sua Posição GPS');
 
   let fullLabel = '';
 
-  if (closestLandmark && minLandmarkDist <= 350) {
+  if (bestPoi && bestPoi.distanceMeters <= 500) {
+    // Top recommended nearby commercial landmark via Google Places (e.g. Mercadinho, Posto, Padaria)
+    const distFormatted = `${Math.round(bestPoi.distanceMeters)}m`;
+    if (road) {
+      fullLabel = `${road}${number ? ', ' + number : ''}${suburb ? ' - ' + suburb : ''}, ${city} (Ref: ${bestPoi.name} - a ${distFormatted})`;
+    } else {
+      fullLabel = `${bestPoi.name} - ${bestPoi.address || 'Próximo'} (a ${distFormatted})`;
+    }
+  } else if (closestLandmark && minLandmarkDist <= 350) {
     // User is right at the landmark
     fullLabel = `${closestLandmark.name} - ${closestLandmark.context}`;
   } else if (closestLandmark && minLandmarkDist <= 3000) {
     // User is within 3km of a known reference point
     const distFormatted = minLandmarkDist >= 1000 ? `${(minLandmarkDist / 1000).toFixed(1)} km` : `${Math.round(minLandmarkDist)}m`;
     if (road) {
-      fullLabel = `${road}${suburb ? ', ' + suburb : ''}, ${city} (Próximo a ${closestLandmark.name} - ${distFormatted})`;
+      fullLabel = `${road}${number ? ', ' + number : ''}${suburb ? ' - ' + suburb : ''}, ${city} (Próximo a ${closestLandmark.name} - ${distFormatted})`;
     } else {
       fullLabel = `${closestLandmark.name} (Próximo) - ${closestLandmark.context}`;
     }
   } else if (road) {
-    fullLabel = `${road}${suburb ? ', ' + suburb : ''}, ${city} - ${state}`;
+    fullLabel = `${road}${number ? ', ' + number : ''}${suburb ? ' - ' + suburb : ''}, ${city} - ${state}`;
+  } else if (formattedGoogleAddress) {
+    fullLabel = formattedGoogleAddress;
   } else {
     fullLabel = `Minha Localização GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
   }
@@ -1249,9 +1413,10 @@ export async function getNearestReferencePoint(lat: number, lon: number): Promis
     fullLabel,
     landmarkName,
     streetAddress,
-    distanceMeters: minLandmarkDist,
+    distanceMeters: bestPoi ? bestPoi.distanceMeters : minLandmarkDist,
     lat,
-    lon
+    lon,
+    nearbyRecommendations: recommendations
   };
 }
 

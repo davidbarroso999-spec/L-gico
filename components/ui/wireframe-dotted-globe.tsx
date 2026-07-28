@@ -116,7 +116,32 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       return dots
     }
 
-    const allDots: DotData[] = cachedAllDots ? [...cachedAllDots] : [];
+    // Pre-calculated representative land points array for instant, zero-latency 60fps rendering on startup
+    const INSTANT_LAND_DOTS: DotData[] = [
+      // South America (Brazil, Amazon, Peru, Argentina, etc.)
+      { lng: -60.0, lat: -3.1, visible: true }, { lng: -58.5, lat: -2.5, visible: true }, { lng: -62.1, lat: -4.0, visible: true },
+      { lng: -65.0, lat: -5.0, visible: true }, { lng: -55.0, lat: -2.0, visible: true }, { lng: -48.5, lat: -1.5, visible: true },
+      { lng: -43.2, lat: -22.9, visible: true }, { lng: -46.6, lat: -23.5, visible: true }, { lng: -47.9, lat: -15.8, visible: true },
+      { lng: -38.5, lat: -12.9, visible: true }, { lng: -35.2, lat: -5.8, visible: true }, { lng: -51.2, lat: -30.0, visible: true },
+      { lng: -58.4, lat: -34.6, visible: true }, { lng: -70.6, lat: -33.4, visible: true }, { lng: -77.0, lat: -12.0, visible: true },
+      { lng: -74.0, lat: 4.6, visible: true }, { lng: -66.9, lat: 10.5, visible: true },
+      // North America
+      { lng: -100.0, lat: 40.0, visible: true }, { lng: -95.0, lat: 37.0, visible: true }, { lng: -118.2, lat: 34.0, visible: true },
+      { lng: -122.4, lat: 37.7, visible: true }, { lng: -74.0, lat: 40.7, visible: true }, { lng: -87.6, lat: 41.8, visible: true },
+      { lng: -99.1, lat: 19.4, visible: true }, { lng: -79.3, lat: 43.6, visible: true }, { lng: -123.1, lat: 49.2, visible: true },
+      // Europe
+      { lng: 2.3, lat: 48.8, visible: true }, { lng: 13.4, lat: 52.5, visible: true }, { lng: -0.1, lat: 51.5, visible: true },
+      { lng: 12.5, lat: 41.9, visible: true }, { lng: 37.6, lat: 55.7, visible: true }, { lng: -3.7, lat: 40.4, visible: true },
+      // Africa
+      { lng: 31.2, lat: 30.0, visible: true }, { lng: 3.0, lat: 36.7, visible: true }, { lng: 18.4, lat: -33.9, visible: true },
+      { lng: 36.8, lat: -1.3, visible: true }, { lng: 3.3, lat: 6.5, visible: true },
+      // Asia & Australia
+      { lng: 139.6, lat: 35.6, visible: true }, { lng: 116.4, lat: 39.9, visible: true }, { lng: 121.4, lat: 31.2, visible: true },
+      { lng: 103.8, lat: 1.3, visible: true }, { lng: 77.2, lat: 28.6, visible: true }, { lng: 72.8, lat: 19.0, visible: true },
+      { lng: 151.2, lat: -33.8, visible: true }, { lng: 144.9, lat: -37.8, visible: true }
+    ];
+
+    const allDots: DotData[] = cachedAllDots ? [...cachedAllDots] : [...INSTANT_LAND_DOTS];
     let landFeatures: any = cachedLandFeatures;
 
     const render = () => {
