@@ -1416,13 +1416,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 : tileStyle === 'google-terrain'
                 ? "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&scale=2"
                 : tileStyle === 'carto-voyager'
-                ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
                 : tileStyle === 'dark'
-                ? "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png"
+                ? "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png"
                 : "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
             }
             maxNativeZoom={22}
             maxZoom={22}
+            detectRetina={true}
             className={tileStyle === 'dark' ? "dark-map-tiles" : ""}
           />
           

@@ -1275,7 +1275,7 @@ export default function VoieExpressApp() {
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className="fixed top-6 left-6 z-[5000] flex flex-col items-start"
+            className={`fixed top-6 ${currentScreen === 'navigation' ? 'left-24 z-[1300]' : 'left-6 z-[5000]'} flex flex-col items-start transition-all duration-300`}
           >
             {/* The Menu Ball itself */}
             <motion.button
@@ -2511,7 +2511,7 @@ export default function VoieExpressApp() {
                       onClick={runOptimization}
                       className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
                     >
-                      <Play className="w-5 h-5 fill-current" />
+                      <Sparkles className="w-5 h-5" />
                       CALCULAR MELHOR ROTA
                     </button>
                   ) : (
@@ -2537,7 +2537,7 @@ export default function VoieExpressApp() {
                             onClick={runOptimization}
                             className="w-full sm:w-auto px-8 py-3.5 bg-tech text-slate-950 font-black rounded-xl text-sm md:text-base shadow-[0_4px_20px_rgba(209,160,84,0.3)] hover:shadow-[0_4px_25px_rgba(209,160,84,0.45)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shrink-0"
                           >
-                            <Play className="w-4 h-4 fill-current" />
+                            <Sparkles className="w-4 h-4" />
                             CALCULAR MELHOR ROTA
                           </button>
                         </div>
@@ -3191,7 +3191,7 @@ export default function VoieExpressApp() {
                         >
                           {navIndex === 0 ? (
                             <>
-                              <Play className="w-5 h-5 fill-current" />
+                              <Navigation className="w-5 h-5 animate-pulse" />
                               Começar Rota
                             </>
                           ) : (navIndex < routeResult.sequence.length - 1 ? (
