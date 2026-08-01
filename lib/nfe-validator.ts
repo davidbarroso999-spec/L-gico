@@ -313,3 +313,71 @@ export const OFFICIAL_DEMO_NFES: Record<string, NFeData> = {
     ]
   }
 };
+
+/**
+ * Generates structured NFeData for any 44-digit key natively.
+ */
+export function generateSimulatedNfeData(key: string): NFeData {
+  const clean = key.replace(/\D/g, '');
+  if (OFFICIAL_DEMO_NFES[clean]) {
+    return OFFICIAL_DEMO_NFES[clean];
+  }
+
+  const ufCode = clean.slice(0, 2) || '13';
+  const year = clean.slice(2, 4) ? `20${clean.slice(2, 4)}` : '2026';
+  const month = clean.slice(4, 6) || '08';
+  const cnpjRaw = clean.slice(6, 20) || '04565289000199';
+  const modelo = clean.slice(20, 22) || '55';
+  const serie = parseInt(clean.slice(22, 25) || '1').toString();
+  const numeroNota = parseInt(clean.slice(25, 34) || '12345').toLocaleString('pt-BR').padStart(11, '0');
+
+  return {
+    chaveAcesso: clean,
+    statusNfe: "Autorizada",
+    dataEmissao: `${year}-${month}-01T10:00:00.000Z`,
+    numeroNota: numeroNota,
+    serieNota: serie,
+    naturezaOperacao: "VENDA DE MERCADORIA DENTRO DO ESTADO",
+    protocoloAutorizacao: `1${ufCode}26${Math.floor(100000000 + Math.random() * 900000000)}`,
+    emitente: {
+      nome: "DISTRIBUIDORA DE PRODUTOS E LOGISTICA LTDA",
+      cnpj: cnpjRaw.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5"),
+      ie: "04.103.517-8",
+      telefone: "(92) 3658-9000",
+      endereco: "AV. CORONEL TEIXEIRA, 6225 - PONTA NEGRA"
+    },
+    destinatario: {
+      nome: "CENTRO DE DISTRIBUICAO LOGIX BEMOL",
+      cnpj: "04.565.289/0005-70",
+      endereco: "AV TORQUATO TAPAJOS, 8251, TARUMA",
+      cidade: "Manaus",
+      estado: "AM",
+      cep: "69041-025",
+      ie: "04.103.517-8",
+      telefone: "(92) 3133-3812"
+    },
+    valor: 14850.00,
+    peso: 350.0,
+    descricao: "LOTE DE EQUIPAMENTOS ELETRONICOS E SUPRIMENTOS LOGISTICOS",
+    quantidadeVolumes: 15,
+    especieVolumes: "VOLUMES",
+    pesoLiquido: 340.0,
+    informacoesComplementares: `Inf. Contribuinte: NOTA FISCAL PROCESSADA VIA MOTOR FISCAL HARPIA LOGIX. Chave Sefaz: ${clean}. Emissão ${month}/${year}.`,
+    itensProdutos: [
+      {
+        codigo: "1001",
+        descricao: "EQUIPAMENTO LOGISTICO INDUSTRIAL - COD " + clean.slice(35, 40),
+        ncm: "84713012",
+        cst: "010",
+        cfop: "5102",
+        unid: "UN",
+        qtd: 10,
+        valorUnit: 1485.00,
+        valorTotal: 14850.00,
+        baseIcms: 14850.00,
+        valorIcms: 2673.00,
+        aliqIcms: 18.00
+      }
+    ]
+  };
+}

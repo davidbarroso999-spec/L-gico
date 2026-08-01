@@ -94,37 +94,33 @@ export async function getGeminiAnalysis(input: any) {
       ` : '';
 
       prompt = `
-        ### MISSÃO: EXPLICAÇÃO EXECUTIVA DA ROTA CALCULADA PELO SOLVER (HARPIA ORION)
-        DATA ATUAL PARA REFERÊNCIA DE SAZONALIDADE/CLIMA: ${dataAtual}
-        
-        DADOS DA ROTA CALCULADA MATEMATICAMENTE PELO SOLVER DE VRP:
-        - PRIORIDADE DA ROTA: ${input.priority || 'N/A'}
-        - VEÍCULO SELECIONADO: ${input.vehicle || 'N/A'}
-        - PARÂMETROS PERSONALIZADOS ATIVOS:
-          * Evitar vias não pavimentadas (avoidDirt): ${input.avoidDirt ? 'ATIVADO' : 'DESACTIVADO'}
-          * Evitar zonas inundáveis (avoidFloods): ${input.avoidFloods ? 'ATIVADO' : 'DESACTIVADO'}
-          * Evitar trechos inclinados/morros (avoidHills): ${input.avoidHills ? 'ATIVADO' : 'DESACTIVADO'}
-        - DISTÂNCIAS E TEMPOS TÁTICOS:
-          * Distância total calculada: ${(input.summary.distance / 1000).toFixed(2)} km
-          * Tempo total estimado: ${Math.round(input.summary.duration / 60)} minutos
-          * Score de integridade operacional do trajeto: ${Math.round(input.score)}/100
+        ### SISTEMA: HARPIA — MOTOR DE DECISÃO DE ROTAS COM IA (FASE 2: EXPLICAÇÃO DA ROTA)
+        Você é a IA explicadora do HARPIA. Sua função é traduzir o resultado do cálculo matemático em linguagem natural de motorista/operador, sem jargões computacionais ou citar mecanismos internos.
+
+        PARÂMETROS DA ROTA:
+        - DATA ATUAL: ${dataAtual}
+        - VEÍCULO / MODAL: ${input.vehicle || 'N/A'}
+        - PRIORIDADE SOLICITADA: ${input.priority || 'N/A'}
+        - DISTÂNCIA TOTAL: ${(input.summary.distance / 1000).toFixed(2)} km
+        - TEMPO ESTIMADO: ${Math.round(input.summary.duration / 60)} minutos
         ${solverInfo}
         ${contextSummary}
         
-        SEQUÊNCIA DE PARADAS CALCULADA PELO SOLVER:
+        SEQUÊNCIA DE PARADAS:
         ${input.sequence.map((stop: any, idx: number) => {
-          const amHydro = stop.amazonasHydrology ? ` [Hidrologia AM: ${stop.amazonasHydrology.seasonLabel} - Alerta: ${stop.amazonasHydrology.warning}]` : '';
-          const tw = stop.timeWindow ? ` [Janela de Entrega: ${stop.timeWindow.start}h às ${stop.timeWindow.end}h]` : '';
-          return `* Parada #${idx + 1}: ${stop.address} (Chegada Estimada: ${stop.estimatedArrival || 'N/A'})${tw} - Temp: ${Math.round(stop.weather?.main?.temp || 0)}°C - Clima: ${stop.weather?.weather?.[0]?.description || 'Normal'} - Perigo/Risco: ${Math.round(stop.riskScore)}%${amHydro}`;
+          const amHydro = stop.amazonasHydrology ? ` [Hidrologia AM: Cota ${stop.amazonasHydrology.riverLevelMeters}m - Status: ${stop.amazonasHydrology.navigabilityStatus} - Alerta: ${stop.amazonasHydrology.warning || 'Nenhum'}]` : '';
+          const tw = stop.timeWindow ? ` [Janela: ${stop.timeWindow.start}h às ${stop.timeWindow.end}h]` : '';
+          return `* Parada #${idx + 1}: ${stop.address} (Est. Chegada: ${stop.estimatedArrival || 'N/A'})${tw} - Clima: ${stop.weather?.weather?.[0]?.description || 'Normal'} (${Math.round(stop.weather?.main?.temp || 0)}°C) - Risco: ${Math.round(stop.riskScore)}%${amHydro}`;
         }).join('\n')}
         
-        ${input.customPrompt ? `--- DIRETRIZES PERSONALIZADAS DO OPERADOR ---
-        O operador solicitou: "${input.customPrompt}"` : ''}
+        ${input.customPrompt ? `DIRETRIZES DO OPERADOR: "${input.customPrompt}"` : ''}
 
-        ### DIRETRIZES IMPORTANTES PARA A EXPLICAÇÃO (TIPO ORION):
-        1. Explique em linguagem simples e executiva POR QUE o solver escolheu essa ordem específica de paradas (por exemplo: "O solver definiu a sequência iniciando por X para cumprir a janela das 09h, contornando o trecho com risco de inundação em Y...").
-        2. Destaque o papel do Solver Matemático de VRP e o ganho de eficiência do trajeto.
-        3. RESPOSTA EXECUTIVA E CURTA: No máximo 2 frases explicativas. Responda em Português do Brasil.
+        REGRAS DE OURO DA EXPLICAÇÃO (PROTOCOLO DE INTEGRAÇÃO HARPIA):
+        1. LINGUAGEM DE MOTORISTA: Explique a razão física e prática da escolha da ordem (ex: "Sequência inicia em X para atender a janela das 09h e contorna a área sujeita a alagamento no Igarapé Y...").
+        2. NUNCA CITE MECANISMOS INTERNOS: Proibido mencionar "pesos w1/w4", "vetor de risco", "matriz de custo", "algoritmo" ou "bloco VII". Traduza em fatos reais de trânsito, clima, rio ou carga.
+        3. SEM HEDGING DESNECESSÁRIO: Não use aberturas como "Como você pediu velocidade...". Vá direto ao ponto físico da decisão.
+        4. DESTAQUE O DIFERENCIAL HARPIA: Se a rota desviou por causa de cota de rio, restrição de carga pesada ou chuva forte, explicite isso com clareza.
+        5. CONCISÃO ABSOLUTA: Máximo de 2 frases curtas. Responda em Português do Brasil.
       `;
     }
 

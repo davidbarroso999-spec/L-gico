@@ -94,7 +94,7 @@ export async function POST(req: Request) {
             messages: [
               {
                 role: "system",
-                content: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`
+                content: `Você é o motor de inteligência e explicação de rotas do HARPIA. Responda em linguagem natural, objetiva e executiva em Português do Brasil, explicando os fatos do trajeto sem nunca citar mecanismos computacionais internos.`
               },
               {
                 role: "user",
@@ -142,7 +142,7 @@ export async function POST(req: Request) {
             messages: [
               {
                 role: "system",
-                content: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`
+                content: `Você é o motor de inteligência e explicação de rotas do HARPIA. Responda em linguagem natural, objetiva e executiva em Português do Brasil, explicando os fatos do trajeto sem nunca citar mecanismos computacionais internos.`
               },
               {
                 role: "user",
@@ -187,7 +187,7 @@ export async function POST(req: Request) {
     });
     
     const config = {
-      systemInstruction: `Você é Voie Express, o assistente logístico. Responda de forma técnica, executiva e em Português do Brasil.`,
+      systemInstruction: `Você é o motor de inteligência e explicação de rotas do HARPIA. Responda em linguagem natural, objetiva e executiva em Português do Brasil, explicando os fatos do trajeto sem nunca citar mecanismos computacionais internos (pesos, matrizes ou algoritmos).`,
       temperature: 0.7,
       maxOutputTokens: 150,
     };
