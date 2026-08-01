@@ -22,69 +22,115 @@ export async function GET(request: NextRequest) {
     const cepPattern = /\b\d{5}-?\d{3}\b/g;
     const isCep = cepPattern.test(input);
 
+    // Extract user typed house numbers and complements (casa, apto, lote, quadra, sala, etc.)
+    const typedNumberMatch = input.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*)\s*(\d{1,5}[a-zA-Z]?)\b/i) || input.match(/\b(\d{1,5}[a-zA-Z]?)\b/g);
+    const typedNumber = Array.isArray(typedNumberMatch) ? typedNumberMatch.find(n => !['2023','2024','2025','2026','2027'].includes(n)) : (typedNumberMatch ? typedNumberMatch[1] : undefined);
+    
+    const compMatch = input.match(/\b(apto|apt|bloco|bl|sala|lote|lt|qd|quadra|km|casa|fundos|sobrado|galpao|galpão|andar|ap)\s*[:.-]?\s*([a-zA-Z0-9]+)\b/i);
+    const typedComplement = compMatch ? `${compMatch[1].toUpperCase()} ${compMatch[2]}` : undefined;
+
+    // Cleaned input for Google search (strips informal terms that choke Google's API)
+    let cleanedInputForGoogle = input
+      .replace(/\b(apto|apt|bloco|bl|sala|lote|lt|qd|quadra|km|casa|fundos|sobrado|galpao|galpão|andar|ap)\s*[:.-]?\s*([a-zA-Z0-9]+)\b/gi, '')
+      .replace(/\b(nº|n°|num|no\.|#)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (cleanedInputForGoogle.length < 2) {
+      cleanedInputForGoogle = input;
+    }
+
     const proximityParams = (lat && lon) ? `&location=${lat},${lon}&radius=50000` : '';
 
-    // 1. Google Places Autocomplete API (New / Legacy REST) - Provides state-of-the-art predictive auto-suggestions
+    // Helper to resolve prediction with geocoding
+    const resolvePredictions = async (predictions: any[]) => {
+      const results = await Promise.all(
+        predictions.slice(0, 5).map(async (prediction: any) => {
+          try {
+            const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?place_id=${prediction.place_id}&key=${apiKey}&language=pt-BR`;
+            const geoResponse = await fetch(geocodeUrl);
+            if (geoResponse.ok) {
+              const geoData = await geoResponse.json();
+              if (geoData.status === 'OK' && Array.isArray(geoData.results) && geoData.results.length > 0) {
+                const r = geoData.results[0];
+                const comps = r.address_components || [];
+                const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.long_name;
+                const postalCodeComp = getComp(['postal_code']);
+                let streetNumber = getComp(['street_number']) || typedNumber;
+                const route = getComp(['route']);
+                const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
+                const locality = getComp(['locality', 'administrative_area_level_2']);
+                const adminArea = getComp(['administrative_area_level_1']);
+
+                let mainText = prediction.structured_formatting?.main_text || prediction.description.split(',')[0];
+                if (streetNumber && !mainText.includes(streetNumber)) {
+                  mainText = `${mainText}, ${streetNumber}`;
+                }
+                if (typedComplement && !mainText.includes(typedComplement)) {
+                  mainText = `${mainText} (${typedComplement})`;
+                }
+
+                const secondaryText = prediction.structured_formatting?.secondary_text || '';
+
+                let fullAddress = r.formatted_address || prediction.description;
+                if (typedComplement && !fullAddress.includes(typedComplement)) {
+                  fullAddress = fullAddress.replace(/, Brasil$/i, ` (${typedComplement}), Brasil`);
+                }
+
+                return {
+                  location: {
+                    latitude: r.geometry.location.lat,
+                    longitude: r.geometry.location.lng
+                  },
+                  displayName: {
+                    text: mainText
+                  },
+                  formattedAddress: fullAddress,
+                  types: r.types || prediction.types || [],
+                  cep: postalCodeComp,
+                  structured: {
+                    mainText,
+                    secondaryText,
+                    streetNumber,
+                    route,
+                    sublocality,
+                    locality,
+                    adminArea,
+                    postalCode: postalCodeComp
+                  }
+                };
+              }
+            }
+          } catch (pe) {
+            console.error('[Google Autocomplete Proxy - Place ID resolving] Error:', pe);
+          }
+          return null;
+        })
+      );
+      return results.filter(Boolean);
+    };
+
+    // 1. Google Places Autocomplete API (New / Legacy REST)
     const autocompletePromise = (async () => {
       try {
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${apiKey}&language=pt-BR&region=br&components=country:br${proximityParams}`;
-        const response = await fetch(url);
+        let url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${apiKey}&language=pt-BR&region=br&components=country:br${proximityParams}`;
+        let response = await fetch(url);
         if (response.ok) {
-          const data = await response.json();
-          if (data.status === 'OK' && Array.isArray(data.predictions)) {
-            // Take the top 5 predictions and resolve their geolocations in parallel via Place ID Geocoding
-            const results = await Promise.all(
-              data.predictions.slice(0, 5).map(async (prediction: any) => {
-                try {
-                  const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?place_id=${prediction.place_id}&key=${apiKey}&language=pt-BR`;
-                  const geoResponse = await fetch(geocodeUrl);
-                  if (geoResponse.ok) {
-                    const geoData = await geoResponse.json();
-                    if (geoData.status === 'OK' && Array.isArray(geoData.results) && geoData.results.length > 0) {
-                      const r = geoData.results[0];
-                      const comps = r.address_components || [];
-                      const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.long_name;
-                      const postalCodeComp = getComp(['postal_code']);
-                      const streetNumber = getComp(['street_number']);
-                      const route = getComp(['route']);
-                      const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
-                      const locality = getComp(['locality', 'administrative_area_level_2']);
-                      const adminArea = getComp(['administrative_area_level_1']);
+          let data = await response.json();
+          if (data.status === 'OK' && Array.isArray(data.predictions) && data.predictions.length > 0) {
+            return await resolvePredictions(data.predictions);
+          }
+        }
 
-                      const mainText = prediction.structured_formatting?.main_text || prediction.description.split(',')[0];
-                      const secondaryText = prediction.structured_formatting?.secondary_text || '';
-
-                      return {
-                        location: {
-                          latitude: r.geometry.location.lat,
-                          longitude: r.geometry.location.lng
-                        },
-                        displayName: {
-                          text: mainText
-                        },
-                        formattedAddress: r.formatted_address || prediction.description,
-                        types: r.types || prediction.types || [],
-                        cep: postalCodeComp,
-                        structured: {
-                          mainText,
-                          secondaryText,
-                          streetNumber,
-                          route,
-                          sublocality,
-                          locality,
-                          adminArea,
-                          postalCode: postalCodeComp
-                        }
-                      };
-                    }
-                  }
-                } catch (pe) {
-                  console.error('[Google Autocomplete Proxy - Place ID resolving] Error:', pe);
-                }
-                return null;
-              })
-            );
-            return results.filter(Boolean);
+        // Fallback search with cleaned query if raw query had no predictions
+        if (cleanedInputForGoogle !== input) {
+          url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(cleanedInputForGoogle)}&key=${apiKey}&language=pt-BR&region=br&components=country:br${proximityParams}`;
+          response = await fetch(url);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.status === 'OK' && Array.isArray(data.predictions)) {
+              return await resolvePredictions(data.predictions);
+            }
           }
         }
       } catch (err) {
@@ -96,8 +142,9 @@ export async function GET(request: NextRequest) {
     // 2. Google Places Text Search (New) - Perfect for finding active business names, POIs, landmarks
     const placesPromise = (async () => {
       try {
+        const queryToUse = cleanedInputForGoogle || input;
         const body: any = {
-          textQuery: input,
+          textQuery: queryToUse,
           languageCode: 'pt-BR'
         };
 
@@ -127,13 +174,24 @@ export async function GET(request: NextRequest) {
             const comps = p.addressComponents || [];
             const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.longText;
             const postalCodeComp = getComp(['postal_code']);
-            const streetNumber = getComp(['street_number']);
+            let streetNumber = getComp(['street_number']) || typedNumber;
             const route = getComp(['route']);
             const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
             const locality = getComp(['locality', 'administrative_area_level_2']);
             const adminArea = getComp(['administrative_area_level_1']);
 
-            const mainText = p.displayName?.text || '';
+            let mainText = p.displayName?.text || '';
+            if (streetNumber && !mainText.includes(streetNumber)) {
+              mainText = `${mainText}, ${streetNumber}`;
+            }
+            if (typedComplement && !mainText.includes(typedComplement)) {
+              mainText = `${mainText} (${typedComplement})`;
+            }
+
+            let fullAddress = p.formattedAddress || '';
+            if (typedComplement && !fullAddress.includes(typedComplement)) {
+              fullAddress = fullAddress.replace(/, Brasil$/i, ` (${typedComplement}), Brasil`);
+            }
 
             return {
               location: {
@@ -143,7 +201,7 @@ export async function GET(request: NextRequest) {
               displayName: {
                 text: mainText
               },
-              formattedAddress: p.formattedAddress || '',
+              formattedAddress: fullAddress,
               types: p.types || [],
               cep: postalCodeComp,
               structured: {
@@ -167,8 +225,9 @@ export async function GET(request: NextRequest) {
     // 3. Google Geocoding API - Solid for fallback / direct address strings & ZIP/CEP codes
     const geocodePromise = (async () => {
       try {
+        const queryToUse = cleanedInputForGoogle || input;
         const proximity = (lat && lon) ? `&location=${lat},${lon}` : '';
-        const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(input)}&key=${apiKey}&language=pt-BR&region=br${proximity}`;
+        const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(queryToUse)}&key=${apiKey}&language=pt-BR&region=br${proximity}`;
         const response = await fetch(url);
         if (response.ok) {
           const data = await response.json();
@@ -177,7 +236,7 @@ export async function GET(request: NextRequest) {
               const comps = r.address_components || [];
               const getComp = (types: string[]) => comps.find((c: any) => types.some(t => c.types?.includes(t)))?.long_name;
               const postalCodeComp = getComp(['postal_code']);
-              const streetNumber = getComp(['street_number']);
+              let streetNumber = getComp(['street_number']) || typedNumber;
               const route = getComp(['route']);
               const sublocality = getComp(['sublocality_level_1', 'sublocality', 'neighborhood', 'bairro']);
               const locality = getComp(['locality', 'administrative_area_level_2']);
@@ -189,8 +248,19 @@ export async function GET(request: NextRequest) {
                 if (streetNumber) mainText += `, ${streetNumber}`;
               } else if (sublocality) {
                 mainText = sublocality;
+                if (streetNumber) mainText += `, ${streetNumber}`;
               } else {
                 mainText = r.address_components?.[0]?.long_name || 'Endereço';
+                if (streetNumber) mainText += `, ${streetNumber}`;
+              }
+
+              if (typedComplement && !mainText.includes(typedComplement)) {
+                mainText += ` (${typedComplement})`;
+              }
+
+              let fullAddress = r.formatted_address;
+              if (typedComplement && !fullAddress.includes(typedComplement)) {
+                fullAddress = fullAddress.replace(/, Brasil$/i, ` (${typedComplement}), Brasil`);
               }
 
               return {
@@ -201,7 +271,7 @@ export async function GET(request: NextRequest) {
                 displayName: {
                   text: mainText
                 },
-                formattedAddress: r.formatted_address,
+                formattedAddress: fullAddress,
                 types: r.types || [],
                 cep: postalCodeComp,
                 structured: {

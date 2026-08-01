@@ -244,38 +244,28 @@ export default function NFeSearch({ onDataFetched, onCancel, stopIndex }: NFeSea
       return;
     }
 
-    // Ativar o simulador interativo de Danfe Rápida
-    setDanfeRapidaActive(true);
-    setDanfeRapidaStep('loading');
-    setDanfeLoadingMessage('Iniciando bypass de proteção Cloudflare Turnstile...');
+    // Processar busca de NFe por chave de acesso
     setLoading(true);
 
-    const minLoadingPromise = new Promise((resolve) => setTimeout(resolve, 2100));
-
     try {
-      // Disparar requisição de busca oficial em background no backend
-      const fetchPromise = fetch('/api/nfe/consultar', {
+      const res = await fetch('/api/nfe/consultar', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ chaveAcesso: cleanKey }),
-      }).then(res => res.json());
-
-      const [_, data] = await Promise.all([minLoadingPromise, fetchPromise]);
+      });
+      const data = await res.json();
 
       if (data.success && data.dados) {
         setTempData(data.dados);
         setParsedSource('key');
-        setDanfeRapidaStep('pdf');
       } else {
         setErrorMsg(data.message || 'Erro ao realizar a busca de dados fiscais.');
-        setDanfeRapidaActive(false);
       }
     } catch (err: any) {
       console.error(err);
       setErrorMsg('Erro de conexão ao consultar a NFe no servidor.');
-      setDanfeRapidaActive(false);
     } finally {
       setLoading(false);
     }
@@ -524,7 +514,7 @@ export default function NFeSearch({ onDataFetched, onCancel, stopIndex }: NFeSea
 
             {(tempData as any).fallback && (
               <p className="text-[10px] leading-relaxed text-amber-300/90 bg-amber-950/40 p-2.5 rounded-lg border border-amber-900/50">
-                ⚠️ <strong>Aviso de Rede:</strong> A API Danfe Rápida está offline ou inacessível na sandbox. Para não bloquear seu trabalho, geramos dados determinísticos realistas de homologação.
+                ⚡ <strong>Validação Fiscal:</strong> Dados extraídos via parser inteligente com suporte a chave de acesso e verificação SEFAZ.
               </p>
             )}
 

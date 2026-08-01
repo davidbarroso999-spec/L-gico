@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe, LocateFixed } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe, LocateFixed, Plus } from 'lucide-react';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -1307,34 +1307,29 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
   // Active rotation angle (uses physical device gyroscope/compass orientation when active, or route bearing when navigating)
-  const activeRotationHeading = (useGyroscope || gyroActive) ? smoothGyroHeading : smoothHeading;
-
-  // Computed transform configuration based on 3D View, device gyroscope orientation or route bearing
-  const mapTransformStyles = is3DMode ? {
-    transform: `perspective(1000px) rotateX(${isDriving ? '50deg' : '40deg'}) rotateZ(${(mapOrientation === 'track' || useGyroscope || gyroActive) ? -activeRotationHeading : 0}deg) scale(1.45)`,
-    transformOrigin: '50% 50%',
-    transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 1s linear',
-    height: '100%',
-    width: '100%',
-    background: '#2D2C2A'
-  } : {
-    transform: (mapOrientation === 'track' || useGyroscope || gyroActive) ? `rotateZ(${-activeRotationHeading}deg) scale(1.25)` : 'none',
-    transformOrigin: '50% 50%',
-    transition: (useGyroscope || gyroActive) ? 'transform 0.15s ease-out' : 'transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
+    // Map styling - strictly 2D flat without 3D transforms
+  const mapTransformStyles = {
     height: '100%',
     width: '100%',
     background: '#2D2C2A'
   };
 
   return (
-    <div className={`h-full w-full relative overflow-hidden bg-[#2D2C2A] ${is3DMode ? 'isometric-map-wrapper' : ''}`}>
+    <div className="h-full w-full relative overflow-hidden bg-[#2D2C2A]">
       
-      {/* 3D Horizon Blend Overlay Gradient */}
-      {is3DMode && (
-        <div className="absolute top-0 left-0 right-0 h-[40%] bg-gradient-to-b from-[#2D2C2A] via-[#2D2C2A]/70 to-transparent z-[990] pointer-events-none" />
+      {/* Empty State Overlay when no stops added */}
+      {stops.length === 0 && !isNavigationScreen && (
+        <div className="absolute inset-0 z-[990] pointer-events-none flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-16 h-16 rounded-full border-2 border-dashed border-slate-500/50 bg-slate-900/30 backdrop-blur-xs flex items-center justify-center mb-3">
+            <Plus className="w-8 h-8 text-slate-400" />
+          </div>
+          <p className="text-sm font-medium text-slate-400/90 max-w-xs leading-relaxed">
+            Adicione as primeiras paradas para começar a criar sua rota
+          </p>
+        </div>
       )}
 
-      {/* CLIMA REAL-TIME HUD OVERLAY */}
+      {/* CLIMA REAL-TIME HUD OVERLAY (Max 1 panel over map) */}
       {showWeatherLayer && !isNavigationScreen && stops.length > 0 && (
         <div className="absolute top-16 left-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-teal-500/30 p-3.5 rounded-2xl w-56 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-left-4 duration-200 select-none">
           <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
@@ -1365,7 +1360,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         </div>
       )}
 
-      {/* TRÂNSITO REAL-TIME HUD OVERLAY */}
+      {/* TRÂNSITO REAL-TIME HUD OVERLAY (Max 1 panel over map) */}
       {showTrafficLayer && !isNavigationScreen && stops.length > 0 && (
         <div className="absolute top-16 right-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-amber-500/30 p-3.5 rounded-2xl w-60 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-right-4 duration-200 select-none">
           <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
@@ -1700,7 +1695,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       {isNavigationScreen && (
         <>
           {/* HIGHLY ACCESSIBLE, PREMIUM GPS NAVIGATION TOP HUD */}
-          <div className="absolute top-4 left-4 right-4 z-[1001] bg-slate-950/98 backdrop-blur-xl border border-tech/40 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.8)] p-4 max-w-2xl mx-auto flex items-center gap-4 transition-all duration-300 md:p-5">
+          <div className="absolute top-4 left-18 md:left-20 right-4 z-[1001] bg-slate-950/98 backdrop-blur-xl border border-tech/40 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.8)] p-4 max-w-2xl mx-auto flex items-center gap-4 transition-all duration-300 md:p-5">
             {/* Action Arrow Icon based on next step direction */}
             <div className="flex flex-col items-center justify-center bg-emerald-600/90 border border-emerald-400/30 w-14 h-14 rounded-2xl shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
               {stepDirection === 'left' && <ArrowLeft className="w-8 h-8 text-white stroke-[3.5px] animate-pulse" />}

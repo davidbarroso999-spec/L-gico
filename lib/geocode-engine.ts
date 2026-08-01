@@ -627,7 +627,14 @@ export async function enhancedAutocomplete(
 
         // Determine exact street + house number component
         let streetAndNum = '';
-        if (route) {
+        if (mainTitle && !isPOI) {
+          streetAndNum = mainTitle;
+          if (streetNum && !streetAndNum.includes(streetNum)) {
+            streetAndNum += `, ${streetNum}`;
+          } else if (parsedQueryInfo.typedNumber && !streetAndNum.includes(parsedQueryInfo.typedNumber)) {
+            streetAndNum += `, ${parsedQueryInfo.typedNumber}`;
+          }
+        } else if (route) {
           streetAndNum = route;
           if (streetNum) {
             streetAndNum += `, ${streetNum}`;
@@ -636,7 +643,7 @@ export async function enhancedAutocomplete(
           }
         } else if (mainTitle) {
           streetAndNum = mainTitle;
-          if (parsedQueryInfo.typedNumber && !streetAndNum.includes(parsedQueryInfo.typedNumber) && !isPOI) {
+          if (parsedQueryInfo.typedNumber && !streetAndNum.includes(parsedQueryInfo.typedNumber)) {
             streetAndNum += `, ${parsedQueryInfo.typedNumber}`;
           }
         }
@@ -1382,15 +1389,17 @@ export async function getNearestReferencePoint(lat: number, lon: number): Promis
 
   let fullLabel = '';
 
-  if (bestPoi && bestPoi.distanceMeters <= 500) {
+  if (bestPoi && bestPoi.distanceMeters <= 1500) {
     // Top recommended nearby commercial landmark via Google Places (e.g. Mercadinho, Posto, Padaria)
-    const distFormatted = `${Math.round(bestPoi.distanceMeters)}m`;
+    const distFormatted = bestPoi.distanceMeters >= 1000 
+      ? `${(bestPoi.distanceMeters / 1000).toFixed(1)} km` 
+      : `${Math.round(bestPoi.distanceMeters)}m`;
     if (road) {
       fullLabel = `${road}${number ? ', ' + number : ''}${suburb ? ' - ' + suburb : ''}, ${city} (Ref: ${bestPoi.name} - a ${distFormatted})`;
     } else {
       fullLabel = `${bestPoi.name} - ${bestPoi.address || 'Próximo'} (a ${distFormatted})`;
     }
-  } else if (closestLandmark && minLandmarkDist <= 350) {
+  } else if (closestLandmark && minLandmarkDist <= 500) {
     // User is right at the landmark
     fullLabel = `${closestLandmark.name} - ${closestLandmark.context}`;
   } else if (closestLandmark && minLandmarkDist <= 3000) {

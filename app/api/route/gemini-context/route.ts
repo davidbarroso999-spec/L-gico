@@ -79,9 +79,8 @@ INSTRUÇÃO DE RESPOSTA (RETORNE APENAS JSON VÁLIDO CONFORME A ESTRUTURA ABAIXO
 `;
 
     const modelSequence = [
-      "gemini-2.5-flash",
       "gemini-3.5-flash",
-      "gemini-2.5-pro"
+      "gemini-3.1-flash-lite"
     ];
 
     for (const modelName of modelSequence) {

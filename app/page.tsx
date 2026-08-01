@@ -68,6 +68,9 @@ import {
   PackageCheck
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
+import QuickStartVehicleProfile, { VehicleWorkProfile } from '@/components/QuickStartVehicleProfile';
+import RouteDetailsModal from '@/components/RouteDetailsModal';
+import ActiveStopBottomSheet from '@/components/ActiveStopBottomSheet';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
 import { db } from '@/lib/db';
@@ -156,6 +159,7 @@ export default function VoieExpressApp() {
   const [addresses, setAddresses] = useState<string[]>(['']);
   const [stopTypes, setStopTypes] = useState<Record<number, 'delivery' | 'pickup'>>({});
   const [isNavDrawerOpen, setIsNavDrawerOpen] = useState(false);
+  const [isDrawerMenuOptionsOpen, setIsDrawerMenuOptionsOpen] = useState(true);
   const [sheetPosition, setSheetPosition] = useState<'peek' | 'expanded' | 'collapsed'>('peek');
   const [timeWindows, setTimeWindows] = useState<Record<number, { start?: string; end?: string }>>({});
   const [invoiceData, setInvoiceData] = useState<Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean; filename?: string; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: NFeData }>>({});
@@ -284,6 +288,17 @@ export default function VoieExpressApp() {
   const [scheduledName, setScheduledName] = useState('');
   const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
   const [copiedRouteId, setCopiedRouteId] = useState<number | null>(null);
+
+  // Quick Start & Route Details Modal States (Adapted from layout screenshots)
+  const [showQuickStartModal, setShowQuickStartModal] = useState<boolean>(false);
+  const [showRouteDetailsModal, setShowRouteDetailsModal] = useState<boolean>(false);
+  const [showDeliveryBanner, setShowDeliveryBanner] = useState<boolean>(true);
+  const [vehicleProfile, setVehicleProfile] = useState<VehicleWorkProfile>('packages');
+  const [routeStartTime, setRouteStartTime] = useState<string>('21:03');
+  const [routeEndTime, setRouteEndTime] = useState<string>('');
+  const [routeEndAddress, setRouteEndAddress] = useState<string>('');
+  const [routeHasPause, setRouteHasPause] = useState<boolean>(false);
+  const [routePauseMinutes, setRoutePauseMinutes] = useState<number>(30);
 
   const loadSavedRoutes = useCallback(async () => {
     try {
@@ -812,7 +827,67 @@ export default function VoieExpressApp() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const addAddress = useCallback(() => setAddresses(prev => [...prev, '']), []);
+  const handleAddStop = useCallback((targetIndex?: number) => {
+    setAddresses(prev => {
+      const next = [...prev];
+      const insertIdx = targetIndex !== undefined
+        ? targetIndex
+        : (next.length > 1 ? next.length - 1 : next.length);
+
+      next.splice(insertIdx, 0, '');
+
+      // Shift stopTypes right for keys >= insertIdx
+      setStopTypes(prevSt => {
+        const nextSt: Record<number, 'delivery' | 'pickup'> = {};
+        Object.keys(prevSt).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextSt[k] = prevSt[k];
+          } else {
+            nextSt[k + 1] = prevSt[k];
+          }
+        });
+        return nextSt;
+      });
+
+      // Shift invoiceData right for keys >= insertIdx
+      setInvoiceData(prevInv => {
+        const nextInv: Record<number, any> = {};
+        Object.keys(prevInv).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextInv[k] = prevInv[k];
+          } else {
+            nextInv[k + 1] = prevInv[k];
+          }
+        });
+        return nextInv;
+      });
+
+      // Shift timeWindows right for keys >= insertIdx
+      setTimeWindows(prevTw => {
+        const nextTw: Record<number, any> = {};
+        Object.keys(prevTw).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextTw[k] = prevTw[k];
+          } else {
+            nextTw[k + 1] = prevTw[k];
+          }
+        });
+        return nextTw;
+      });
+
+      setTimeout(() => {
+        inputRefs.current[insertIdx]?.focus({ preventScroll: true });
+      }, 100);
+
+      return next;
+    });
+  }, []);
+
+  const addAddress = handleAddStop;
+
   const updateAddress = useCallback((idx: number, val: string) => {
     setAddresses(prev => {
       const next = [...prev];
@@ -820,14 +895,29 @@ export default function VoieExpressApp() {
       return next;
     });
   }, []);
+
   const removeAddress = useCallback((idx: number) => {
     setAddresses(prev => prev.filter((_, i) => i !== idx));
+
+    // Shift stopTypes keys left
+    setStopTypes(prev => {
+      const next: Record<number, 'delivery' | 'pickup'> = {};
+      Object.keys(prev).forEach(keyStr => {
+        const k = parseInt(keyStr, 10);
+        if (k < idx) {
+          next[k] = prev[k];
+        } else if (k > idx) {
+          next[k - 1] = prev[k];
+        }
+      });
+      return next;
+    });
 
     // Shift timeWindows keys left
     setTimeWindows(prev => {
       const next: Record<number, { start?: string; end?: string }> = {};
       Object.keys(prev).forEach(keyStr => {
-        const k = parseInt(keyStr);
+        const k = parseInt(keyStr, 10);
         if (k < idx) {
           next[k] = prev[k];
         } else if (k > idx) {
@@ -841,7 +931,7 @@ export default function VoieExpressApp() {
     setInvoiceData(prev => {
       const next: Record<number, { key?: string; pdfUrl?: string; isFetching?: boolean; isImage?: boolean; filename?: string; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string }> = {};
       Object.keys(prev).forEach(keyStr => {
-        const k = parseInt(keyStr);
+        const k = parseInt(keyStr, 10);
         if (k < idx) {
           next[k] = prev[k];
         } else if (k > idx) {
@@ -1270,12 +1360,12 @@ export default function VoieExpressApp() {
 
       {/* Dynamic Floating Menu Ball Navigation System - Unified for Desktop & Mobile */}
       <AnimatePresence>
-        {showAppContent && (
+        {showAppContent && (currentScreen as string) !== 'navigation' && (
           <motion.div 
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className={`fixed top-6 ${currentScreen === 'navigation' ? 'left-24 z-[1300]' : 'left-6 z-[5000]'} flex flex-col items-start transition-all duration-300`}
+            className={`fixed top-6 ${(currentScreen as string) === 'navigation' ? 'left-24 z-[1300]' : 'left-6 z-[5000]'} flex flex-col items-start transition-all duration-300`}
           >
             {/* The Menu Ball itself */}
             <motion.button
@@ -1453,23 +1543,44 @@ export default function VoieExpressApp() {
                   </div>
                 </h1>
 
-                {!showAppContent && (
-                  <motion.button
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 0.8, y: 0 }}
-                    transition={{ delay: 0.5 }}
-                    onClick={triggerImmediateReveal}
-                    className="mt-2 px-4 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400 hover:text-tech transition-colors cursor-pointer font-mono tracking-wider"
-                  >
-                    Clique aqui ou aguarde para ver as opções
-                  </motion.button>
-                )}
+                {/* Scroll Indicator Prompt when Animation Completes */}
+                <AnimatePresence>
+                  {showSlogan && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      transition={{ duration: 0.5, delay: 0.2 }}
+                      className="mt-4 flex flex-col items-center justify-center z-30"
+                    >
+                      <button
+                        onClick={() => {
+                          triggerImmediateReveal();
+                          setTimeout(() => {
+                            const el = document.getElementById('rotas-section');
+                            if (el) el.scrollIntoView({ behavior: 'smooth' });
+                          }, 100);
+                        }}
+                        className="group flex flex-col items-center gap-2 px-5 py-2.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-tech/40 text-tech hover:bg-tech/10 hover:border-tech transition-all cursor-pointer shadow-[0_0_20px_rgba(209,160,84,0.25)] hover:shadow-[0_0_30px_rgba(209,160,84,0.4)]"
+                      >
+                        <span className="text-xs font-black uppercase tracking-widest text-white group-hover:text-tech transition-colors flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
+                          Deslize para explorar as opções
+                        </span>
+                        <div className="w-7 h-7 rounded-full bg-tech/20 border border-tech/50 flex items-center justify-center text-tech group-hover:bg-tech group-hover:text-slate-950 transition-all animate-bounce">
+                          <ChevronDown className="w-4 h-4 stroke-[3px]" />
+                        </div>
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </motion.div>
 
               {/* Functional App Options & Route Grid - Revealed after Logo Animation */}
               <AnimatePresence>
                 {showAppContent && (
                   <motion.div
+                    id="rotas-section"
                     initial={{ opacity: 0, y: 40 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, ease: "easeOut" }}
@@ -1480,6 +1591,78 @@ export default function VoieExpressApp() {
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
+
+                  {/* Quick Action Control Bar (Adapted from layout screenshots) */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-800/60">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickStartModal(true)}
+                        className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-amber-500/20 to-teal-500/20 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-white text-xs font-black transition-all flex items-center gap-2 cursor-pointer shadow-md hover:scale-[1.02] active:scale-95"
+                      >
+                        <Sparkles className="w-4 h-4 text-amber-400 animate-pulse shrink-0" />
+                        <span>Início Rápido</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowRouteDetailsModal(true)}
+                        className="px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-95"
+                      >
+                        <Settings className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                        <span>Detalhes da Rota</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
+                      <Truck className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="text-[11px] font-black uppercase text-slate-300 tracking-wider">
+                        {vehicleProfile === 'packages' && 'Pacotes / Encomendas'}
+                        {vehicleProfile === 'food_delivery' && 'Pedidos de Comida'}
+                        {vehicleProfile === 'services' && 'Prestação de Serviços'}
+                        {vehicleProfile === 'sales' && 'Equipe de Vendas'}
+                        {vehicleProfile === 'custom' && 'Personalizado'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Value Proposition Delivery Banner (Adapted from layout screenshot) */}
+                  {showDeliveryBanner && (
+                    <div className="relative mb-6 p-4 md:p-5 rounded-2xl bg-slate-950/90 border border-slate-800/80 overflow-hidden shadow-xl flex items-center justify-between gap-4">
+                      {/* Abstract Vector Map Nodes Background */}
+                      <div className="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]" />
+
+                      <div className="relative z-10 flex items-start gap-3.5">
+                        <div className="p-3 rounded-2xl bg-gradient-to-br from-teal-500/20 to-amber-500/20 border border-teal-500/30 text-teal-300 shrink-0 shadow-lg">
+                          <PackageCheck className="w-6 h-6 text-teal-300 animate-bounce" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-950/60 border border-amber-900/40 px-2 py-0.5 rounded">
+                              Otimização Avançada
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">Spoke / Harpia Logix</span>
+                          </div>
+                          <h4 className="text-sm md:text-base font-black text-white mt-1 font-display">
+                            Criado especialmente para entregas
+                          </h4>
+                          <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">
+                            Economize até 30% de combustível e tempo organizando paradas por CEP, janela de atendimento e geolocalização exata.
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowDeliveryBanner(false)}
+                        className="text-slate-500 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-850 cursor-pointer shrink-0 z-10"
+                        title="Fechar aviso"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+
                   <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap">
                     <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(209,160,84,0.5)] shrink-0" />
                     <span>
@@ -2189,19 +2372,7 @@ export default function VoieExpressApp() {
 
                   <div className="flex flex-col gap-3.5 mt-auto">
                     <button 
-                      onClick={() => {
-                        const next = [...addresses];
-                        if (next.length > 1) {
-                          next.splice(addresses.length - 1, 0, '');
-                        } else {
-                          next.push('');
-                        }
-                        setAddresses(next);
-                        setTimeout(() => {
-                           const focusIdx = next.length - 1;
-                           inputRefs.current[focusIdx]?.focus({ preventScroll: true });
-                        }, 100);
-                      }}
+                      onClick={() => handleAddStop()}
                       className="w-full py-4 border border-dashed border-slate-800 hover:border-tech hover:bg-tech/5 hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer"
                     >
                       + Adicionar Parada Intermediária
@@ -2683,6 +2854,81 @@ export default function VoieExpressApp() {
                            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Progresso do Roteiro</span>
                            <p className="text-sm font-black text-white mt-1">Parada {navIndex + 1} de {routeResult.sequence.length}</p>
                            <p className="text-xs text-slate-400 mt-0.5">{routeResult.sequence[navIndex]?.address}</p>
+                           <span className="inline-block mt-2 px-2 py-0.5 bg-tech/15 border border-tech/30 text-tech text-[9.5px] font-mono font-bold rounded">
+                             ID Rota: #{routeResult.routeId || 'ROT-8492'}
+                           </span>
+                         </div>
+
+                         {/* Sub-menu Collapsible: Opções do Menu */}
+                         <div className="bg-slate-900/90 rounded-2xl border border-tech/30 overflow-hidden shadow-lg">
+                           <button
+                             type="button"
+                             onClick={() => setIsDrawerMenuOptionsOpen(!isDrawerMenuOptionsOpen)}
+                             className="w-full p-3.5 flex items-center justify-between text-left text-xs font-black uppercase tracking-wider text-tech hover:bg-white/5 transition-colors cursor-pointer"
+                           >
+                             <div className="flex items-center gap-2">
+                               <Menu className="w-4 h-4 text-tech" />
+                               <span>Opções do Menu</span>
+                             </div>
+                             {isDrawerMenuOptionsOpen ? (
+                               <ChevronUp className="w-4 h-4 text-tech" />
+                             ) : (
+                               <ChevronDown className="w-4 h-4 text-tech" />
+                             )}
+                           </button>
+
+                           <AnimatePresence>
+                             {isDrawerMenuOptionsOpen && (
+                               <motion.div
+                                 initial={{ height: 0, opacity: 0 }}
+                                 animate={{ height: 'auto', opacity: 1 }}
+                                 exit={{ height: 0, opacity: 0 }}
+                                 className="px-3 pb-3 space-y-1.5 border-t border-slate-800/80 pt-2"
+                               >
+                                 {[
+                                   { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
+                                   { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' },
+                                   { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
+                                   { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
+                                   { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
+                                 ].map((tab) => {
+                                   const isActive = tab.id === 'navigation';
+                                   const Icon = tab.icon;
+                                   return (
+                                     <button
+                                       key={tab.id}
+                                       onClick={() => {
+                                         setIsNavDrawerOpen(false);
+                                         if (tab.id === 'tutorial') {
+                                           setShowDemoAssistant(true);
+                                           setDemoStep(0);
+                                           setDemoMinimized(false);
+                                           setCurrentScreen('home');
+                                         } else {
+                                           setCurrentScreen(tab.id as any);
+                                         }
+                                       }}
+                                       className={`w-full p-2.5 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
+                                         isActive
+                                           ? 'bg-tech/20 border-tech text-tech font-bold'
+                                           : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80 text-slate-300 hover:text-white'
+                                       }`}
+                                     >
+                                       <Icon className="w-4 h-4 text-tech shrink-0" />
+                                       <div className="flex flex-col min-w-0">
+                                         <span className="text-[11px] font-bold uppercase tracking-wider leading-none">
+                                           {tab.label}
+                                         </span>
+                                         <span className="text-[9px] text-slate-400 truncate mt-0.5">
+                                           {tab.desc}
+                                         </span>
+                                       </div>
+                                     </button>
+                                   );
+                                 })}
+                               </motion.div>
+                             )}
+                           </AnimatePresence>
                          </div>
 
                          <div className="space-y-2">
@@ -2998,217 +3244,63 @@ export default function VoieExpressApp() {
                   )}
                 </AnimatePresence>
 
-                 <div className={`absolute bottom-0 left-0 right-0 z-[1000] bg-slate-950/98 backdrop-blur-2xl border-t border-tech/30 text-white rounded-t-[32px] shadow-[0_-15px_50px_rgba(0,0,0,0.8)] md:max-w-2xl md:mx-auto transition-all duration-300 ease-in-out flex flex-col ${
-                   sheetPosition === 'collapsed' 
-                     ? 'h-[76px] overflow-hidden' 
-                     : sheetPosition === 'expanded' 
-                     ? 'h-[80vh] overflow-y-auto custom-scrollbar' 
-                     : 'max-h-[380px] overflow-y-auto custom-scrollbar'
-                 }`}>
-                    {/* Drag Handle Bar with 3-state Cycle */}
-                    <div 
-                      onClick={() => {
-                        setSheetPosition(prev => prev === 'collapsed' ? 'peek' : prev === 'peek' ? 'expanded' : 'collapsed');
-                      }}
-                      className="w-full pt-3 pb-1 flex flex-col items-center justify-center cursor-pointer group hover:bg-white/5 transition-colors rounded-t-[32px] select-none shrink-0"
-                    >
-                      <div className="w-12 h-1.5 bg-slate-700 group-hover:bg-tech rounded-full transition-colors mb-1" />
-                      <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-slate-400 group-hover:text-tech">
-                        {sheetPosition === 'collapsed' && (
-                          <>
-                            <ChevronUp className="w-3.5 h-3.5 text-tech" />
-                            <span>Expandir Painel (A caminho de...)</span>
-                          </>
-                        )}
-                        {sheetPosition === 'peek' && (
-                          <>
-                            <ChevronUp className="w-3.5 h-3.5 text-tech" />
-                            <span>Toque p/ Expandir Tudo | Clique p/ Minimizar</span>
-                            <ChevronDown className="w-3.5 h-3.5 text-tech" />
-                          </>
-                        )}
-                        {sheetPosition === 'expanded' && (
-                          <>
-                            <ChevronDown className="w-3.5 h-3.5 text-tech" />
-                            <span>Recolher Painel</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    {/* Floating Controls above bottom bar */}
-                    <div className="absolute right-4 -top-40 flex flex-col gap-3">
-                      {/* Sound Toggle Button */}
-                      <button 
-                        onClick={() => setSoundMuted(!soundMuted)}
-                        className={`w-12 h-12 border rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.4)] flex items-center justify-center hover:scale-105 active:scale-95 transition-all outline-none ${soundMuted ? 'bg-alert/10 border-alert/30 text-alert' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
-                        title={soundMuted ? "Ativar som" : "Desativar som"}
-                      >
-                        {soundMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                      </button>
-
-                      {/* Recenter Map Button */}
-                      <button 
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent('recenter-map'));
-                        }}
-                        className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.4)] flex items-center justify-center text-tech hover:scale-105 active:scale-95 transition-all outline-none"
-                        title="Centralizar"
-                      >
-                        <LocateFixed className="w-5 h-5" />
-                      </button>
-
-                      {/* Report Button */}
-                      <button 
-                        onClick={() => {
-                          setIsReporting(true);
-                        }}
-                        className="w-14 h-14 bg-alert rounded-full shadow-[0_10px_20px_rgba(239,68,68,0.4)] flex items-center justify-center text-white hover:scale-105 hover:bg-red-400 active:scale-95 transition-all outline-none mt-2"
-                        title="Reportar Ocorrência"
-                      >
-                        <AlertTriangle className="w-7 h-7" />
-                      </button>
-                    </div>
-
-                    <div className="px-6 pt-6 pb-9 flex flex-col md:flex-row md:items-center justify-between gap-5">
-                      <div className="flex flex-col flex-1 min-w-0">
-                        {/* Dynamic, Highly Legible ETA & Stats Block */}
-                        <div className="flex items-baseline gap-2.5">
-                          {/* Dynamic ETA based on actual segment duration */}
-                          <p className="text-4xl font-extrabold tracking-tight text-emerald-400 drop-shadow-[0_4px_12px_rgba(16,185,129,0.2)]">
-                            {(() => {
-                              const durationSec = routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900;
-                              const etaDate = new Date();
-                              etaDate.setSeconds(etaDate.getSeconds() + durationSec);
-                              return etaDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                            })()}
-                          </p>
-                          <div className="flex items-center gap-1.5 bg-slate-900 border border-white/5 px-2.5 py-1 rounded-lg">
-                            <Clock className="w-3.5 h-3.5 text-tech animate-pulse" />
-                            <p className="text-sm font-black text-white">
-                              {Math.round((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900) / 60)} min
-                            </p>
-                          </div>
-                          <div className="text-xs font-bold text-slate-400">
-                            • {((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.distance || 2500) / 1000).toFixed(1)} km
-                          </div>
-                        </div>
-
-                        {/* Highly readable current leg target address */}
-                        <div className="mt-2.5">
-                          <span className="text-[9px] uppercase tracking-wider text-slate-500 font-extrabold flex items-center gap-1">
-                            <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-                            Destino Atual: Parada #{navIndex + 1} de {routeResult.sequence.length}
-                          </span>
-                          <p className="text-base font-black text-white leading-tight mt-0.5 truncate max-w-full">
-                            {routeResult.sequence[navIndex]?.name || routeResult.sequence[navIndex]?.address?.split(',')[0]}
-                          </p>
-                        </div>
-
-                        {/* NFe Quick Button */}
-                        {routeResult.sequence[navIndex]?.invoice?.pdfUrl && (
-                          <div className="mt-3.5">
-                             <button 
-                               onClick={() => {
-                                 const inv = routeResult.sequence[navIndex]?.invoice;
-                                 if (!inv) return;
-                                 let htmlContent = "";
-                                 if (inv.fullData) {
-                                   htmlContent = generateDanfeHtml(inv.fullData);
-                                 }
-                                 setPreviewInvoice({
-                                   url: inv.pdfUrl || "",
-                                   isImage: inv.isImage,
-                                   htmlContent: htmlContent || undefined,
-                                   filename: `NFe_${inv.key || navIndex}`,
-                                   chave: inv.key,
-                                   fullData: inv.fullData
-                                 });
-                               }}
-                               className="inline-flex items-center gap-2 px-3 py-1.5 bg-tech/15 border border-tech/30 hover:bg-tech/25 text-tech rounded-xl uppercase font-black text-[10px] tracking-widest transition-all shadow-md cursor-pointer"
-                             >
-                                <FileText className="w-4 h-4 shrink-0" />
-                                NFe: {routeResult.sequence[navIndex]?.invoice?.key?.substring(0,8)}... Anexada
-                             </button>
-                          </div>
-                        )}
-
-                        {/* Compartilhar Rota Live Action */}
-                        <div className="mt-3 flex items-center gap-2 flex-wrap">
-                          <button 
-                            onClick={() => {
-                              const routeData = {
-                                name: `Rota Otimizada (${routeResult.sequence.length} Paradas)`,
-                                addresses: routeResult.sequence.map((stop: any) => stop.address),
-                                options: options,
-                                aiCustomPrompt: aiCustomPrompt
-                              };
-                              handleShareRoute(routeData);
-                            }}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-xl uppercase font-black text-[10px] tracking-widest transition-all shadow-md cursor-pointer"
-                          >
-                             <Share2 className="w-3.5 h-3.5 shrink-0" />
-                             Compartilhar Rota Ativa
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Right Side Massive Tap-Target Action Buttons (Highly Accessible) */}
-                      <div className="flex items-center gap-3 shrink-0">
-                        {/* Red "Ocorrência / Ausente" Button */}
-                        <button 
-                          onClick={() => {
-                            setFailureReason('Destinatário Ausente');
-                            setFailureNotes('');
-                            setShowFailureModal(true);
-                          }}
-                          className="h-14 w-14 sm:h-16 sm:w-16 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 hover:text-red-300 rounded-2xl flex items-center justify-center transition-all shadow-[0_4px_20px_rgba(239,68,68,0.15)] shrink-0 group active:scale-95"
-                          title="Destinatário Ausente / Falha na Entrega"
-                        >
-                          <XCircle className="w-7 h-7 transition-transform group-hover:scale-110" />
-                        </button>
-
-                        {/* Huge Primary Action Button (Começar / Cheguei / Finalizar) */}
-                        <button 
-                          onClick={async () => {
-                            if (navIndex === 0) {
-                              // Leaving warehouse/origin - start navigating immediately to first stop
-                              setNavIndex(1);
-                            } else {
-                              // Any actual delivery stop requires POD (Proof of Delivery)
-                              setShowDeliveryModal(true);
-                              setDeliveryPhoto(null);
-                              setDeliveryNotes('');
-                              startWebcam();
-                            }
-                          }}
-                          className={`px-8 h-14 sm:px-10 sm:h-16 rounded-2xl font-black uppercase text-sm tracking-widest shadow-2xl flex items-center justify-center gap-2.5 active:scale-95 transition-all cursor-pointer ${
-                            navIndex === 0 
-                              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_8px_30px_rgba(37,99,235,0.4)]' 
-                              : (navIndex < routeResult.sequence.length - 1 
-                                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_8px_30px_rgba(16,185,129,0.4)]' 
-                                  : 'bg-tech hover:brightness-110 text-slate-950 shadow-[0_8px_30px_rgba(209,160,84,0.4)]')
-                          }`}
-                        >
-                          {navIndex === 0 ? (
-                            <>
-                              <Navigation className="w-5 h-5 animate-pulse" />
-                              Começar Rota
-                            </>
-                          ) : (navIndex < routeResult.sequence.length - 1 ? (
-                            <>
-                              <MapPin className="w-5 h-5 animate-bounce" />
-                              Cheguei no Local
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle2 className="w-5 h-5" />
-                              Concluir Entrega
-                            </>
-                          ))}
-                        </button>
-                      </div>
-                    </div>
-                 </div>
+                 {/* Active Stop Bottom Sheet following 6-level hierarchy */}
+                 <ActiveStopBottomSheet
+                   stop={routeResult.sequence[navIndex]}
+                   stopIndex={navIndex}
+                   totalStops={routeResult.sequence.length}
+                   remainingTimeMinutes={Math.round((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900) / 60)}
+                   remainingDistanceKm={(routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.distance || 2500) / 1000}
+                   etaString={(() => {
+                     const durationSec = routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900;
+                     const etaDate = new Date();
+                     etaDate.setSeconds(etaDate.getSeconds() + durationSec);
+                     return etaDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                   })()}
+                   onMarkDelivered={() => {
+                     if (navIndex === 0) {
+                       setNavIndex(1);
+                     } else {
+                       setShowDeliveryModal(true);
+                       setDeliveryPhoto(null);
+                       setDeliveryNotes('');
+                       startWebcam();
+                     }
+                   }}
+                   onMarkUndelivered={() => {
+                     setFailureReason('Destinatário Ausente');
+                     setFailureNotes('');
+                     setShowFailureModal(true);
+                   }}
+                   onEditStop={() => {
+                     setShowRouteDetailsModal(true);
+                   }}
+                   onDuplicateStop={() => {
+                     if (routeResult.sequence[navIndex]) {
+                       const dupe = { ...routeResult.sequence[navIndex], id: Date.now() };
+                       const updated = [...routeResult.sequence];
+                       updated.splice(navIndex + 1, 0, dupe);
+                       setRouteResult({ ...routeResult, sequence: updated });
+                     }
+                   }}
+                   onRemoveStop={() => {
+                     if (routeResult.sequence.length > 1) {
+                       const updated = routeResult.sequence.filter((_: any, i: number) => i !== navIndex);
+                       setRouteResult({ ...routeResult, sequence: updated });
+                       if (navIndex >= updated.length) setNavIndex(Math.max(0, updated.length - 1));
+                     }
+                   }}
+                   onAddNotes={(notes) => {
+                     if (routeResult.sequence[navIndex]) {
+                       const updatedSeq = [...routeResult.sequence];
+                       updatedSeq[navIndex] = { ...updatedSeq[navIndex], deliveryNotes: notes };
+                       setRouteResult({ ...routeResult, sequence: updatedSeq });
+                     }
+                   }}
+                   onViewAllStops={() => {
+                     setIsNavDrawerOpen(true);
+                   }}
+                 />
                </div>
 
                {/* Mock Exit Button */}
@@ -4326,7 +4418,54 @@ export default function VoieExpressApp() {
         </motion.div>
       )}
 
+      {/* Quick Start Vehicle Profile Selection Modal */}
+      <AnimatePresence>
+        {showQuickStartModal && (
+          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fadeIn">
+            <QuickStartVehicleProfile
+              currentProfile={vehicleProfile}
+              onSelectProfile={(prof) => {
+                setVehicleProfile(prof);
+                if (prof === 'packages') {
+                  setOptions(prev => ({ ...prev, vehicle: 'van' }));
+                } else if (prof === 'food_delivery') {
+                  setOptions(prev => ({ ...prev, vehicle: 'moto' }));
+                } else if (prof === 'services') {
+                  setOptions(prev => ({ ...prev, vehicle: 'van' }));
+                } else if (prof === 'sales') {
+                  setOptions(prev => ({ ...prev, vehicle: 'car' }));
+                }
+                setShowQuickStartModal(false);
+              }}
+              onClose={() => setShowQuickStartModal(false)}
+            />
+          </div>
+        )}
+      </AnimatePresence>
 
+      {/* Route Details (Partida, Destino, Pausa) Modal */}
+      <RouteDetailsModal
+        isOpen={showRouteDetailsModal}
+        onClose={() => setShowRouteDetailsModal(false)}
+        startAddress={addresses[0] || ''}
+        onUseCurrentLocation={handleUseCurrentGpsAsOrigin}
+        startTime={routeStartTime}
+        onUpdateStartTime={(t) => setRouteStartTime(t)}
+        endAddress={routeEndAddress}
+        onUpdateEndAddress={(addr) => setRouteEndAddress(addr)}
+        endTime={routeEndTime}
+        onUpdateEndTime={(t) => setRouteEndTime(t)}
+        hasPause={routeHasPause}
+        onTogglePause={(hp) => setRouteHasPause(hp)}
+        pauseDurationMinutes={routePauseMinutes}
+        onUpdatePauseDuration={(m) => setRoutePauseMinutes(m)}
+        onSaveAsDefault={(save) => {
+          if (save) {
+            setApiWarning("Parâmetros de rota (partida, destino e pausas) salvos como padrão de operação.");
+          }
+          setShowRouteDetailsModal(false);
+        }}
+      />
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
