@@ -75,14 +75,14 @@ export interface OperationalMemory {
   syncTimestamp?: Date;
 }
 
-export class VoieExpressDatabase extends Dexie {
+export class HarpiaDatabase extends Dexie {
   routes!: Table<Route>;
   occurrences!: Table<Occurrence>;
   cache!: Table<CacheEntry>;
   operationalMemory!: Table<OperationalMemory>;
 
   constructor() {
-    super('VoieExpressDB');
+    super('HarpiaDB');
     this.version(1).stores({
       routes: '++id, date, status',
       occurrences: '++id, type, timestamp, synced',
@@ -96,7 +96,7 @@ export class VoieExpressDatabase extends Dexie {
   }
 }
 
-export const db = new VoieExpressDatabase();
+export const db = new HarpiaDatabase();
 
 // Elite practice: Non-blocking background Garbage Collector for expired cache entries
 if (typeof window !== 'undefined') {

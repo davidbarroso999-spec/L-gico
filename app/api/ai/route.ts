@@ -171,7 +171,7 @@ export async function POST(req: Request) {
     // 2. Fallback para Google Gemini
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.warn("Nenhuma chave de IA (Gemini ou OpenAI) configurada no ambiente. Utilizando simulador tático Voie Express.");
+      console.warn("Nenhuma chave de IA (Gemini ou OpenAI) configurada no ambiente. Utilizando simulador tático HARPIA.");
       return NextResponse.json({ 
         content: generateTacticalFallback(prompt)
       });
@@ -229,7 +229,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // Se todos falharam, retorna a resposta do assistente Voie Express local simulada para manter a UX sem travar a navegação
+    // Se todos falharam, retorna a resposta do assistente HARPIA local simulada para manter a UX sem travar a navegação
     console.error("Todos os modelos Gemini qualificados falharam ou estão esgotados no servidor:", finalError);
     return NextResponse.json({ 
       content: generateTacticalFallback(prompt)

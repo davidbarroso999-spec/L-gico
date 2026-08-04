@@ -771,7 +771,7 @@ export default function Sidebar({
               <div className="flex justify-between items-center w-full px-6">
                 <div className="flex flex-col text-left">
                   <span className="text-[9px] text-tech font-black uppercase tracking-widest font-mono">
-                    Voie Express • Rota
+                    HARPIA • Rota
                   </span>
                   <h2 className="text-sm font-black text-white flex items-center gap-1.5 mt-0.5">
                     Resumo Otimizado 

@@ -149,7 +149,7 @@ const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile, isExpanded }:
 
 import { useIsMobile } from '@/hooks/use-mobile';
 
-export default function VoieExpressApp() {
+export default function HarpiaApp() {
   const isMobile = useIsMobile();
   const [isMenuBallOpen, setIsMenuBallOpen] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
@@ -1584,10 +1584,12 @@ export default function VoieExpressApp() {
                     initial={{ opacity: 0, y: 40 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 mb-12"
+                    className="w-full max-w-4xl mx-auto flex flex-col gap-6 md:gap-8 mb-12"
                   >
-                {/* Left Column: Itinerary inputs (Spans 7 columns on desktop) */}
-                <div className="lg:col-span-7 glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
+                {/* Left Section: Itinerary inputs and Main Planning */}
+                <div className="w-full flex flex-col gap-6">
+                  {/* Main Planning Card */}
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
@@ -1641,7 +1643,7 @@ export default function VoieExpressApp() {
                             <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-950/60 border border-amber-900/40 px-2 py-0.5 rounded">
                               Otimização Avançada
                             </span>
-                            <span className="text-[10px] text-slate-500 font-mono">Spoke / Harpia Logix</span>
+                            <span className="text-[10px] text-slate-500 font-mono">Harpia Logix</span>
                           </div>
                           <h4 className="text-sm md:text-base font-black text-white mt-1 font-display">
                             Criado especialmente para entregas
@@ -2388,8 +2390,92 @@ export default function VoieExpressApp() {
                   </div>
                 </div>
 
-                {/* Right Column: Dynamic Logistics Configuration Bento Box List (Spans 5 columns on desktop) */}
-                <div className="lg:col-span-5 flex flex-col gap-6">
+                {/* Bento Box 6: Saved & Shared Routes List */}
+                <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                  <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                    <RouteIcon className="w-4 h-4 text-[#D1A054] shrink-0" />
+                    <span>
+                      Rotas Salvas e Agendadas
+                      <InfoTooltip text="Todas as suas rotas salvas ou agendadas no sistema. Carregue-as no planejador com um clique ou compartilhe-as via link." />
+                    </span>
+                  </h3>
+                  
+                  {savedRoutes.length === 0 ? (
+                    <div className="text-center py-6 border border-dashed border-slate-850 rounded-2xl bg-slate-950/20 font-sans">
+                      <RouteIcon className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                      <p className="text-xs text-slate-500 font-bold">Nenhuma rota programada</p>
+                      <p className="text-[10px] text-slate-600 mt-0.5 max-w-[200px] mx-auto leading-relaxed">As rotas que você planejar e agendar aparecerão aqui.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar font-sans pr-1">
+                      {savedRoutes.map((route: any) => {
+                        const isCopied = copiedRouteId === route.id;
+                        return (
+                          <div 
+                            key={route.id} 
+                            className="p-3 rounded-xl bg-slate-950/40 border border-slate-900/80 hover:border-slate-800 transition-all space-y-2"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <h4 className="text-xs font-bold text-slate-150 truncate leading-tight" title={route.name || 'Rota Sem Nome'}>
+                                  {route.name || 'Rota Sem Nome'}
+                                </h4>
+                                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                  <span className="text-[9px] font-mono font-bold text-tech bg-tech/10 border border-tech/20 px-1 py-0.2 rounded leading-none shrink-0">
+                                    {route.addresses.length} Paradas
+                                  </span>
+                                  {route.scheduledDate && (
+                                    <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 leading-none">
+                                      <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                                      {new Date(route.scheduledDate + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                                      {route.scheduledTime ? ` às ${route.scheduledTime}` : ''}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSavedRoute(route.id)}
+                                className="text-slate-600 hover:text-red-400 p-1 rounded hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                                title="Excluir Rota"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            
+                            <div className="flex gap-2 pt-1 border-t border-slate-900/50">
+                              <button
+                                type="button"
+                                onClick={() => handleLoadSavedRoute(route)}
+                                className="flex-1 py-1.5 bg-tech/10 border border-tech/20 hover:bg-tech/20 hover:border-tech/40 text-tech text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center cursor-pointer"
+                              >
+                                Carregar
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => handleShareRoute(route)}
+                                className={`flex-1 py-1.5 border text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer ${
+                                  isCopied 
+                                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
+                                    : 'bg-indigo-500/10 border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/40 text-indigo-400'
+                                }`}
+                              >
+                                <Share2 className="w-3 h-3 shrink-0" />
+                                {isCopied ? 'Copiado!' : 'Compartilhar'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Section: Dynamic Logistics Configuration Bento Box List */}
+              <div className="w-full flex flex-col gap-6">
                   {/* Bento Box 1: Vehicle selection */}
                   <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
                     <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
@@ -2593,90 +2679,7 @@ export default function VoieExpressApp() {
                     </div>
                   </div>
 
-                  {/* Bento Box 6: Saved & Shared Routes List */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                      <RouteIcon className="w-4 h-4 text-[#D1A054] shrink-0" />
-                      <span>
-                        Rotas Salvas e Agendadas
-                        <InfoTooltip text="Todas as suas rotas salvas ou agendadas no sistema. Carregue-as no planejador com um clique ou compartilhe-as via link." />
-                      </span>
-                    </h3>
-                    
-                    {savedRoutes.length === 0 ? (
-                      <div className="text-center py-6 border border-dashed border-slate-850 rounded-2xl bg-slate-950/20 font-sans">
-                        <RouteIcon className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                        <p className="text-xs text-slate-500 font-bold">Nenhuma rota programada</p>
-                        <p className="text-[10px] text-slate-600 mt-0.5 max-w-[200px] mx-auto leading-relaxed">As rotas que você planejar e agendar aparecerão aqui.</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar font-sans pr-1">
-                        {savedRoutes.map((route: any) => {
-                          const isCopied = copiedRouteId === route.id;
-                          return (
-                            <div 
-                              key={route.id} 
-                              className="p-3 rounded-xl bg-slate-950/40 border border-slate-900/80 hover:border-slate-800 transition-all space-y-2"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0 flex-1">
-                                  <h4 className="text-xs font-bold text-slate-150 truncate leading-tight" title={route.name || 'Rota Sem Nome'}>
-                                    {route.name || 'Rota Sem Nome'}
-                                  </h4>
-                                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                    <span className="text-[9px] font-mono font-bold text-tech bg-tech/10 border border-tech/20 px-1 py-0.2 rounded leading-none shrink-0">
-                                      {route.addresses.length} Paradas
-                                    </span>
-                                    {route.scheduledDate && (
-                                      <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 leading-none">
-                                        <Clock className="w-3 h-3 text-slate-500 shrink-0" />
-                                        {new Date(route.scheduledDate + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
-                                        {route.scheduledTime ? ` às ${route.scheduledTime}` : ''}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteSavedRoute(route.id)}
-                                  className="text-slate-600 hover:text-red-400 p-1 rounded hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
-                                  title="Excluir Rota"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                              
-                              <div className="flex gap-2 pt-1 border-t border-slate-900/50">
-                                <button
-                                  type="button"
-                                  onClick={() => handleLoadSavedRoute(route)}
-                                  className="flex-1 py-1.5 bg-tech/10 border border-tech/20 hover:bg-tech/20 hover:border-tech/40 text-tech text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center cursor-pointer"
-                                >
-                                  Carregar
-                                </button>
-                                
-                                <button
-                                  type="button"
-                                  onClick={() => handleShareRoute(route)}
-                                  className={`flex-1 py-1.5 border text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer ${
-                                    isCopied 
-                                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
-                                      : 'bg-indigo-500/10 border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/40 text-indigo-400'
-                                  }`}
-                                >
-                                  <Share2 className="w-3 h-3 shrink-0" />
-                                  {isCopied ? 'Copiado!' : 'Compartilhar'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Ultimate Execution Button */}
                   {!hasTwoOrMoreAddresses ? (
                     <button 
                       onClick={runOptimization}
@@ -3536,7 +3539,7 @@ export default function VoieExpressApp() {
                         <span className="text-[10px] font-black tracking-widest text-tech uppercase">Recurso de Apresentação & TCC</span>
                         <h2 className="text-xl font-bold font-display text-white mt-0.5">Roteiro Demonstrativo e Histórias de Uso</h2>
                         <p className="text-xs text-slate-400 mt-1">
-                          Apresente o aplicativo Voie Express com total autoridade e clareza.
+                          Apresente o aplicativo HARPIA com total autoridade e clareza.
                         </p>
                       </div>
                     </div>
@@ -3991,7 +3994,7 @@ export default function VoieExpressApp() {
                 <span>🎓</span> Bem-vindo ao Guia do HARPIA!
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                O <strong>HARPIA (Voie Express)</strong> é a sua central de inteligência logística, roteamento autônomo, navegação GPS com voz e monitoramento climático.
+                O <strong>HARPIA</strong> é a sua central de inteligência logística, roteamento autônomo, navegação GPS com voz e monitoramento climático.
               </p>
               <div className="bg-slate-900/80 p-3 rounded-2xl border border-tech/20 text-[11px] text-slate-200 space-y-1.5 font-sans">
                 <p className="font-bold text-tech">💡 O que você vai aprender neste tour:</p>

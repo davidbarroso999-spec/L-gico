@@ -43,7 +43,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   const [vehicleType, setVehicleType] = useState<'motorcycle' | 'van' | 'truck' | 'heavy_truck'>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings_simple');
+        const saved = localStorage.getItem('harpia_vehicle_settings_simple');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.vehicleType) return parsed.vehicleType;
@@ -56,7 +56,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   const [kmPerLiter, setKmPerLiter] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings_simple');
+        const saved = localStorage.getItem('harpia_vehicle_settings_simple');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.kmPerLiter !== undefined) return Number(parsed.kmPerLiter);
@@ -69,7 +69,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   const [fuelPrice, setFuelPrice] = useState<number>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('voie_express_vehicle_settings_simple');
+        const saved = localStorage.getItem('harpia_vehicle_settings_simple');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.fuelPrice !== undefined) return Number(parsed.fuelPrice);
@@ -116,7 +116,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
     setKmPerLiter(kml);
     setFuelPrice(price);
     
-    localStorage.setItem('voie_express_vehicle_settings_simple', JSON.stringify({
+    localStorage.setItem('harpia_vehicle_settings_simple', JSON.stringify({
       vehicleType: type,
       kmPerLiter: kml,
       fuelPrice: price

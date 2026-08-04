@@ -190,7 +190,7 @@ export function generateDanfeHtml(dados: NFeData): string {
       - ENDEREÇO DE ENTREGA: ${dados.destinatario.endereco}, ${dados.destinatario.cidade} - ${dados.destinatario.estado}.<br/>
       - CHAVE DE ACESSO OFICIAL SEFAZ REGISTRADA EM PRODUÇÃO: ${dados.chaveAcesso}.<br/>
       - TRANSPORTE AUTORIZADO E MONITORADO PELA HARPIA LOGIX.<br/>
-      - ROTA EXECUTADA E OTIMIZADA COM INTELIGÊNCIA ARTIFICIAL DE ÚLTIMA GERAÇÃO - VOIEEXPRESS.
+      - ROTA EXECUTADA E OTIMIZADA COM INTELIGÊNCIA ARTIFICIAL DE ÚLTIMA GERAÇÃO - HARPIA.
     `;
   }
 
