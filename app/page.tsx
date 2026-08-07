@@ -6,13 +6,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Package, 
   Map as MapIcon, 
-  Settings, 
+  Settings, List, 
   LayoutDashboard, 
   Plus, 
   Play, 
   Trash2, 
   Search,
-  MapPin,
+  MapPin, Globe, Sun,
   Route as RouteIcon,
   Zap,
   Shield,
@@ -66,7 +66,7 @@ import {
   Store,
   Building2,
   PackageCheck
-} from 'lucide-react';
+, Sliders} from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import QuickStartVehicleProfile, { VehicleWorkProfile } from '@/components/QuickStartVehicleProfile';
 import RouteDetailsModal from '@/components/RouteDetailsModal';
@@ -121,7 +121,7 @@ const getSuggestionIconObj = (name: string, type?: string) => {
   if (type === 'poi') {
     return { icon: Zap, bg: 'bg-tech/10 text-tech border border-tech/20' };
   }
-  return { icon: MapPin, bg: 'bg-slate-800 text-slate-400 border border-slate-700/50' };
+  return { icon: MapPin, Globe, Sun, bg: 'bg-slate-800 text-slate-400 border border-slate-700/50' };
 };
 
 const NavItem = ({ icon: Icon, label, isActive, onClick, isMobile, isExpanded }: any) => (
@@ -153,10 +153,28 @@ export default function HarpiaApp() {
   const isMobile = useIsMobile();
   const [isMenuBallOpen, setIsMenuBallOpen] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [addresses, setAddresses] = useState<string[]>(['']);
+  const [addressIds, setAddressIds] = useState<string[]>(['id-0']);
+  const addressesRef = React.useRef(addresses);
+  useEffect(() => { addressesRef.current = addresses; }, [addresses]);
+
+  useEffect(() => {
+    if (addressIds.length !== addresses.length) {
+      queueMicrotask(() => setAddressIds(prev => {
+        if (prev.length === addresses.length) return prev;
+        if (prev.length < addresses.length) {
+          const added = Array.from({ length: addresses.length - prev.length }).map(() => `id-${Date.now()}-${Math.random()}`);
+          return [...prev, ...added];
+        }
+        return prev.slice(0, addresses.length);
+      }));
+    }
+  }, [addresses.length, addressIds.length]);
+
   const [stopTypes, setStopTypes] = useState<Record<number, 'delivery' | 'pickup'>>({});
   const [isNavDrawerOpen, setIsNavDrawerOpen] = useState(false);
   const [isDrawerMenuOptionsOpen, setIsDrawerMenuOptionsOpen] = useState(true);
@@ -253,6 +271,9 @@ export default function HarpiaApp() {
     setShowAppContent(true);
   };
 
+  const [mapStyle, setMapStyle] = useState<'google-streets' | 'google-hybrid' | 'google-terrain' | 'carto-voyager' | 'dark'>('google-streets');
+  const [showTraffic, setShowTraffic] = useState(false);
+  const [showWeather, setShowWeather] = useState(false);
   const [options, setOptions] = useState<RouteOptions>({
     priority: 'balanced',
     vehicle: 'van',
@@ -758,6 +779,13 @@ export default function HarpiaApp() {
 
 
   useEffect(() => {
+    if (apiWarning) {
+      const t = setTimeout(() => setApiWarning(null), 3500);
+      return () => clearTimeout(t);
+    }
+  }, [apiWarning]);
+
+  useEffect(() => {
     if (typeof window !== 'undefined' && 'geolocation' in navigator) {
       try {
         navigator.geolocation.getCurrentPosition(
@@ -828,62 +856,65 @@ export default function HarpiaApp() {
   }, []);
 
   const handleAddStop = useCallback((targetIndex?: number) => {
+    const currentLen = addressesRef.current.length;
+    const insertIdx = targetIndex !== undefined
+      ? targetIndex
+      : (currentLen > 1 ? currentLen - 1 : currentLen);
+
     setAddresses(prev => {
       const next = [...prev];
-      const insertIdx = targetIndex !== undefined
-        ? targetIndex
-        : (next.length > 1 ? next.length - 1 : next.length);
-
       next.splice(insertIdx, 0, '');
-
-      // Shift stopTypes right for keys >= insertIdx
-      setStopTypes(prevSt => {
-        const nextSt: Record<number, 'delivery' | 'pickup'> = {};
-        Object.keys(prevSt).forEach(keyStr => {
-          const k = parseInt(keyStr, 10);
-          if (k < insertIdx) {
-            nextSt[k] = prevSt[k];
-          } else {
-            nextSt[k + 1] = prevSt[k];
-          }
-        });
-        return nextSt;
-      });
-
-      // Shift invoiceData right for keys >= insertIdx
-      setInvoiceData(prevInv => {
-        const nextInv: Record<number, any> = {};
-        Object.keys(prevInv).forEach(keyStr => {
-          const k = parseInt(keyStr, 10);
-          if (k < insertIdx) {
-            nextInv[k] = prevInv[k];
-          } else {
-            nextInv[k + 1] = prevInv[k];
-          }
-        });
-        return nextInv;
-      });
-
-      // Shift timeWindows right for keys >= insertIdx
-      setTimeWindows(prevTw => {
-        const nextTw: Record<number, any> = {};
-        Object.keys(prevTw).forEach(keyStr => {
-          const k = parseInt(keyStr, 10);
-          if (k < insertIdx) {
-            nextTw[k] = prevTw[k];
-          } else {
-            nextTw[k + 1] = prevTw[k];
-          }
-        });
-        return nextTw;
-      });
-
-      setTimeout(() => {
-        inputRefs.current[insertIdx]?.focus({ preventScroll: true });
-      }, 100);
-
       return next;
     });
+
+    setAddressIds(prev => {
+      const next = [...prev];
+      next.splice(insertIdx, 0, `id-${Date.now()}-${Math.random()}`);
+      return next;
+    });
+
+    setStopTypes(prevSt => {
+      const nextSt: Record<number, 'delivery' | 'pickup'> = {};
+      Object.keys(prevSt).forEach(keyStr => {
+        const k = parseInt(keyStr, 10);
+        if (k < insertIdx) {
+          nextSt[k] = prevSt[k];
+        } else {
+          nextSt[k + 1] = prevSt[k];
+        }
+      });
+      return nextSt;
+    });
+
+    setInvoiceData(prevInv => {
+      const nextInv: Record<number, any> = {};
+      Object.keys(prevInv).forEach(keyStr => {
+        const k = parseInt(keyStr, 10);
+        if (k < insertIdx) {
+          nextInv[k] = prevInv[k];
+        } else {
+          nextInv[k + 1] = prevInv[k];
+        }
+      });
+      return nextInv;
+    });
+
+    setTimeWindows(prevTw => {
+      const nextTw: Record<number, any> = {};
+      Object.keys(prevTw).forEach(keyStr => {
+        const k = parseInt(keyStr, 10);
+        if (k < insertIdx) {
+          nextTw[k] = prevTw[k];
+        } else {
+          nextTw[k + 1] = prevTw[k];
+        }
+      });
+      return nextTw;
+    });
+
+    setTimeout(() => {
+      inputRefs.current[insertIdx]?.focus({ preventScroll: true });
+    }, 100);
   }, []);
 
   const addAddress = handleAddStop;
@@ -898,6 +929,7 @@ export default function HarpiaApp() {
 
   const removeAddress = useCallback((idx: number) => {
     setAddresses(prev => prev.filter((_, i) => i !== idx));
+    setAddressIds(prev => prev.filter((_, i) => i !== idx));
 
     // Shift stopTypes keys left
     setStopTypes(prev => {
@@ -942,13 +974,28 @@ export default function HarpiaApp() {
     });
   }, []);
 
-  const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent) => {
+  const [hybridPrompt, setHybridPrompt] = useState<{
+    start: string;
+    end: string;
+    startIdx: number;
+    endIdx: number;
+    validAddresses: string[];
+  } | null>(null);
+
+  const isFluvialOnly = (addr: string) => {
+    const kw = ['careiro', 'autazes', 'iranduba', 'manacapuru', 'novo airão', 'novo airao', 'itacoatiara', 'parintins', 'coari', 'tefé', 'tefe', 'cacau pirêra', 'cacau pirera'];
+    const n = addr.toLowerCase();
+    return kw.some(k => n.includes(k));
+  };
+
+  const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent, bypassHybridCheck = false) => {
     // Map timeWindows and invoices correctly to validAddresses indices to prevent offset bugs
     const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
     const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }> = {};
     const validStopTypes: Record<number, 'pickup' | 'delivery'> = {};
     let validCount = 0;
+
     const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
       if (isValid) {
@@ -982,6 +1029,40 @@ export default function HarpiaApp() {
     });
 
     if (validAddresses.length < 2) return;
+
+    if (!bypassHybridCheck) {
+      let needsHybrid = false;
+      let hStart = '';
+      let hEnd = '';
+      let hStartIdx = -1;
+      let hEndIdx = -1;
+
+      for (let i = 0; i < validAddresses.length - 1; i++) {
+        const f1 = isFluvialOnly(validAddresses[i]);
+        const f2 = isFluvialOnly(validAddresses[i + 1]);
+        if (f1 !== f2) {
+          needsHybrid = true;
+          hStart = validAddresses[i];
+          hEnd = validAddresses[i + 1];
+          hStartIdx = i;
+          hEndIdx = i + 1;
+          break;
+        }
+      }
+
+      if (needsHybrid) {
+        setHybridPrompt({
+          start: hStart,
+          end: hEnd,
+          startIdx: hStartIdx,
+          endIdx: hEndIdx,
+          validAddresses
+        });
+        return; // Pause execution for user confirmation
+      }
+    }
+
+    setCurrentScreen('loading');;
 
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
@@ -1292,12 +1373,12 @@ export default function HarpiaApp() {
 
       {/* API Key Warning Banner */}
       {apiWarning && (
-        <div className="absolute top-0 left-0 right-0 z-[9999] bg-alert/90 text-white text-xs md:text-sm font-bold text-center py-2 px-4 shadow-lg backdrop-blur-sm animate-in slide-in-from-top flex items-center gap-2">
-          <AlertOctagon className="w-4 h-4 shrink-0" />
-          <div className="flex-1 min-w-0 break-words">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[9999] bg-slate-900/95 text-white border border-tech/40 text-[11px] sm:text-xs font-semibold py-2.5 px-5 rounded-full shadow-[0_10px_30px_rgba(209,160,84,0.15)] backdrop-blur-md animate-in slide-in-from-top-4 flex items-center gap-2 max-w-[90%] md:max-w-md whitespace-nowrap overflow-hidden text-ellipsis">
+          <AlertOctagon className="w-4 h-4 text-tech shrink-0" />
+          <div className="truncate flex-1">
             {apiWarning}
           </div>
-          <button onClick={() => setApiWarning(null)} className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/20">
+          <button onClick={() => setApiWarning(null)} className="shrink-0 text-slate-400 hover:text-white transition-colors ml-1">
             <XCircle className="w-4 h-4" />
           </button>
         </div>
@@ -1410,7 +1491,7 @@ export default function HarpiaApp() {
                       { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
                     ] : []),
                     { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
-                    { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
+                    { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes e Parâmetros' },
                     { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
                   ].map((tab) => {
                     const isActive = tab.id === 'tutorial' ? showDemoAssistant && !demoMinimized : currentScreen === tab.id;
@@ -1473,13 +1554,13 @@ export default function HarpiaApp() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -20, scale: 0.98 }}
               transition={{ duration: 0.6, type: 'spring', stiffness: 100, damping: 20 }}
-              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'pt-20 pb-16' : 'py-12'}`}
+              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${!showAppContent ? 'justify-center py-0' : (isMobile ? 'pt-20 pb-16' : 'py-12')}`}
             >
               {/* Hero Logo Animation Section */}
               <motion.div 
                 layout="position"
                 transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                className={`w-full flex-shrink-0 flex flex-col items-center justify-center relative overflow-visible ${!showAppContent ? 'min-h-[82vh] sm:min-h-[88vh] my-auto' : 'min-h-[340px] md:min-h-[480px] mb-4 sm:mb-8 md:mb-12'}`}
+                className={`w-full flex-shrink-0 flex flex-col items-center justify-center relative overflow-visible ${!showAppContent ? 'flex-1 py-12' : 'min-h-[340px] md:min-h-[480px] mb-4 sm:mb-8 md:mb-12'}`}
               >
                 <AnimatePresence>
                   {showPlanet && (
@@ -1551,7 +1632,7 @@ export default function HarpiaApp() {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
                       transition={{ duration: 0.5, delay: 0.2 }}
-                      className="mt-4 flex flex-col items-center justify-center z-30"
+                      className="mt-6 flex flex-col items-center justify-center z-30"
                     >
                       <button
                         onClick={() => {
@@ -1561,15 +1642,12 @@ export default function HarpiaApp() {
                             if (el) el.scrollIntoView({ behavior: 'smooth' });
                           }, 100);
                         }}
-                        className="group flex flex-col items-center gap-2 px-5 py-2.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-tech/40 text-tech hover:bg-tech/10 hover:border-tech transition-all cursor-pointer shadow-[0_0_20px_rgba(209,160,84,0.25)] hover:shadow-[0_0_30px_rgba(209,160,84,0.4)]"
+                        className="group flex flex-col items-center gap-1.5 text-slate-500 hover:text-tech transition-colors cursor-pointer"
                       >
-                        <span className="text-xs font-black uppercase tracking-widest text-white group-hover:text-tech transition-colors flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
-                          Deslize para explorar as opções
+                        <span className="text-[9px] font-bold uppercase tracking-[0.2em] opacity-80 group-hover:opacity-100 transition-opacity">
+                          Explorar Rotas
                         </span>
-                        <div className="w-7 h-7 rounded-full bg-tech/20 border border-tech/50 flex items-center justify-center text-tech group-hover:bg-tech group-hover:text-slate-950 transition-all animate-bounce">
-                          <ChevronDown className="w-4 h-4 stroke-[3px]" />
-                        </div>
+                        <ChevronDown className="w-4 h-4 animate-bounce opacity-60 group-hover:opacity-100 transition-opacity" />
                       </button>
                     </motion.div>
                   )}
@@ -1942,8 +2020,9 @@ export default function HarpiaApp() {
                       <div className="space-y-5 pl-10">
                         {addresses.slice(1, -1).map((addr, idx) => {
                           const realIdx = idx + 1;
+                          const stopKey = addressIds[realIdx] || `fallback-${realIdx}`;
                           return (
-                            <div key={realIdx} className="space-y-2 relative">
+                            <div key={stopKey} className="space-y-2 relative">
                               <div className="absolute -left-10 top-3 w-4 h-4 rounded-full bg-slate-800 text-slate-300 font-bold flex items-center justify-center text-[9px] z-10 border border-slate-750">
                                 {idx + 1}
                               </div>
@@ -2389,9 +2468,9 @@ export default function HarpiaApp() {
                     </div>
                   </div>
                 </div>
-
-                {/* Bento Box 6: Saved & Shared Routes List */}
-                <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+        {/* Bento Box 6: Saved & Shared Routes List */}
+                <div className="mt-6">
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
                   <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
                     <RouteIcon className="w-4 h-4 text-[#D1A054] shrink-0" />
                     <span>
@@ -2473,257 +2552,49 @@ export default function HarpiaApp() {
                   )}
                 </div>
               </div>
-
-              {/* Right Section: Dynamic Logistics Configuration Bento Box List */}
-              <div className="w-full flex flex-col gap-6">
-                  {/* Bento Box 1: Vehicle selection */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
-                      <Truck className="w-4 h-4 shrink-0" />
-                      <span>
-                        Perfil de Transporte
-                        <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade de ruas automaticamente." />
-                      </span>
-                    </h3>
-                    <div className="grid grid-cols-2 xs:grid-cols-4 gap-2">
-                      {[
-                        { id: 'moto', icon: Bike, label: 'Moto' },
-                        { id: 'van', icon: Car, label: 'Van' },
-                        { id: 'truck', icon: Truck, label: 'Caminhão' },
-                        { id: 'boat', icon: MapIcon, label: 'Barco' },
-                      ].map((v) => (
-                        <button
-                          key={v.id}
-                          onClick={() => setOptions({ ...options, vehicle: v.id as any })}
-                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-2xl border transition-all cursor-pointer ${
-                            options.vehicle === v.id
-                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
-                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
-                          }`}
-                        >
-                          <v.icon className="w-5 h-5 mb-1.5" />
-                          <span className="text-[10px] font-bold uppercase tracking-tight">{v.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Subpanel de Rota Fluvial & Embarcação quando 'boat' está ativo */}
-                    {options.vehicle === 'boat' && (
-                      <div className="mt-4 pt-4 border-t border-slate-800/60 animate-fadeIn space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-black uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                            <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                            Tipo de Embarcação & Calado
-                          </label>
-                          <span className="text-[9px] font-bold text-slate-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded-full">
-                            Matriz Fluvial Amazônica
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          {[
-                            { id: 'express_lancha', label: 'Lancha Express', desc: '48 km/h • Calado 0.8m', icon: Zap },
-                            { id: 'voadeira', label: 'Voadeira Apoio', desc: '36 km/h • Calado 0.4m', icon: Navigation },
-                            { id: 'regional_gaiola', label: 'Barco Gaiola', desc: '18 km/h • Calado 2.2m', icon: Compass },
-                            { id: 'balsa_heavy', label: 'Balsa / Carga', desc: '14 km/h • Calado 3.5m', icon: Layers },
-                          ].map(vessel => (
-                            <button
-                              key={vessel.id}
-                              type="button"
-                              onClick={() => setOptions({ ...options, vesselType: vessel.id as any })}
-                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                                (options.vesselType || 'express_lancha') === vessel.id
-                                  ? 'bg-cyan-950/40 border-cyan-500/80 text-white shadow-[0_0_12px_rgba(6,182,212,0.15)]'
-                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-750 hover:text-slate-200'
-                              }`}
-                            >
-                              <div className="flex items-center gap-1.5 mb-1">
-                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-cyan-400' : 'text-slate-500' }`} />
-                                <span className="text-[10px] font-black uppercase tracking-tight">{vessel.label}</span>
-                              </div>
-                              <p className="text-[8.5px] text-slate-400 font-mono leading-none">{vessel.desc}</p>
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="p-3 bg-cyan-950/20 border border-cyan-900/40 rounded-2xl text-[10.5px] text-slate-300 space-y-1 font-sans">
-                          <p className="font-bold text-cyan-300 flex items-center gap-1.5 text-[11px]">
-                            <Waves className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-                            Diferencial de Hidrovia Ativo:
-                          </p>
-                          <p className="text-slate-400 text-[10px] leading-relaxed">
-                            A rota calcula automaticamente a velocidade da correnteza a favor ou contra o fluxo do rio, profundidade dos canais (talvegue), risco de banzeiro por ventos e cota hidrológica da bacia.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Bento Box 2: Route optimization priority */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
-                      <Zap className="w-4 h-4 shrink-0" />
-                      <span>
-                        Algoritmo de Prioridade
-                        <InfoTooltip text="Escolha entre Tempo e Distância. Roteiros mais rápidos podem usar vias expressas, mas nem sempre são o caminho mais curto." />
-                      </span>
-                    </h3>
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                      {[
-                        { id: 'speed', icon: Zap, label: 'Rápido' },
-                        { id: 'distance', icon: MapIcon, label: 'Curto' },
-                        { id: 'economy', icon: Leaf, label: 'Eco' },
-                        { id: 'safety', icon: Shield, label: 'Seguro' },
-                        { id: 'balanced', icon: BarChart4, label: 'Equil.' },
-                      ].map((p: any) => (
-                        <button
-                          key={p.id}
-                          onClick={() => setOptions({ ...options, priority: p.id })}
-                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
-                            options.priority === p.id 
-                            ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]' 
-                            : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
-                          }`}
-                        >
-                          <p.icon className="w-4 h-4 mb-1 shrink-0" />
-                          <span className="text-[9px] font-black uppercase tracking-tight leading-none">{p.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="mt-4 p-3.5 rounded-xl bg-slate-950/40 border border-slate-900 text-xs text-slate-400 leading-relaxed font-sans">
-                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Evita congestionamentos em avenidas principais e privilegia fluxos ágeis, reduzindo tempo total de trajeto.</p>}
-                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima:</strong> Traçado seco com menor metragem absoluta, secundarizando congestionamento ou semáforos.</p>}
-                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Trajeto plano visando estabilidade, evitando desgaste operacional e acelerações sob declives pesados.</p>}
-                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Prevenção de risco. Desvia de zonas com alertas de acidentes, vias perigosas ou ocorrências climáticas.</p>}
-                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo médio, tipo de carga e integridade operacional.</p>}
-                    </div>
-                  </div>
-
-                  {/* Bento Box 4: AI Custom Prompts */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                      <Sparkles className="w-4 h-4 text-[#D1A054] animate-pulse shrink-0" />
-                      <span>
-                        Instruções da IA
-                        <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
-                      </span>
-                    </h3>
-                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
-                      Adicione diretrizes customizadas para que o cérebro artificial analise a segurança física da sua equipe e do trajeto.
-                    </p>
-                    <textarea
-                      value={aiCustomPrompt}
-                      onChange={(e) => setAiCustomPrompt(e.target.value)}
-                      placeholder="Ex: 'priorizar vias com boa iluminação pública', 'informar rotas transitáveis por carretas', 'checar incidências climáticas recentes'..."
-                      rows={2}
-                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
-                    />
-                  </div>
-
-                  {/* Bento Box 5: Future Routing & Scheduling */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                      <Calendar className="w-4 h-4 text-tech shrink-0" />
-                      <span>
-                        Agendar Rota para o Futuro
-                        <InfoTooltip text="Programe e salve rotas para dias ou horários futuros no sistema. Você poderá recarregá-las a qualquer momento." />
-                      </span>
-                    </h3>
-                    <p className="text-slate-400 text-xs mb-4 leading-relaxed font-sans">
-                      Preencha os detalhes abaixo para salvar a lista de endereços atual para uso futuro.
-                    </p>
-                    
-                    <div className="space-y-3 font-sans">
-                      <div>
-                        <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Nome da Rota</label>
-                        <input
-                          type="text"
-                          value={scheduledName}
-                          onChange={(e) => setScheduledName(e.target.value)}
-                          placeholder="Ex: Rota Zona Sul - Manhã"
-                          className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700"
-                        />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Data Agendada</label>
-                          <input
-                            type="date"
-                            value={scheduledDate}
-                            onChange={(e) => setScheduledDate(e.target.value)}
-                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Horário de Saída</label>
-                          <input
-                            type="time"
-                            value={scheduledTime}
-                            onChange={(e) => setScheduledTime(e.target.value)}
-                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
-                          />
-                        </div>
-                      </div>
-                      
-                      <button
-                        type="button"
-                        onClick={handleSaveFutureRoute}
-                        disabled={addresses.filter(a => a.trim().length > 3).length < 2}
-                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-tech/40 text-tech disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950/20 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        Salvar e Agendar Rota
-                      </button>
-                    </div>
-                  </div>
-
-
-                  {!hasTwoOrMoreAddresses ? (
-                    <button 
-                      onClick={runOptimization}
-                      className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
-                    >
-                      <Sparkles className="w-5 h-5" />
-                      CALCULAR MELHOR ROTA
-                    </button>
-                  ) : (
-                    <>
-                      {/* Generous bottom spacing so form content doesn't get hidden behind the fixed bar */}
-                      <div className="h-32 w-full" />
-                      <motion.div
-                        initial={{ y: 80, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ type: 'spring', stiffness: 280, damping: 25 }}
-                        className="fixed bottom-0 left-0 right-0 z-[1200] bg-slate-950/95 border-t border-tech/30 p-4 md:p-6 shadow-[0_-10px_35px_rgba(209,160,84,0.15)] flex items-center justify-center backdrop-blur-xl"
-                      >
-                        <div className="w-full max-w-2xl flex items-center justify-between gap-4">
-                          <div className="hidden sm:flex flex-col text-left">
-                            <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-widest leading-none">Roteamento Ativo</span>
-                            <span className="text-sm font-black text-white mt-1.5 flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
-                              {enteredAddresses.length} endereços inseridos
-                            </span>
-                          </div>
-                          
-                          <button 
-                            onClick={runOptimization}
-                            className="w-full sm:w-auto px-8 py-3.5 bg-tech text-slate-950 font-black rounded-xl text-sm md:text-base shadow-[0_4px_20px_rgba(209,160,84,0.3)] hover:shadow-[0_4px_25px_rgba(209,160,84,0.45)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shrink-0"
-                          >
-                            <Sparkles className="w-4 h-4" />
-                            CALCULAR MELHOR ROTA
-                          </button>
-                        </div>
-                      </motion.div>
-                    </>
-                  )}
+        {!hasTwoOrMoreAddresses ? (
+          <button 
+            onClick={runOptimization}
+            className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
+          >
+            <Sparkles className="w-5 h-5" />
+            CALCULAR MELHOR ROTA
+          </button>
+        ) : (
+          <>
+            <div className="h-32 w-full" />
+            <motion.div
+              initial={{ y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 280, damping: 25 }}
+              className="fixed bottom-0 left-0 right-0 z-[1200] bg-slate-950/95 border-t border-tech/30 p-4 md:p-6 shadow-[0_-10px_35px_rgba(209,160,84,0.15)] flex items-center justify-center backdrop-blur-xl"
+            >
+              <div className="w-full max-w-2xl flex items-center justify-between gap-4">
+                <div className="hidden sm:flex flex-col text-left">
+                  <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-widest leading-none">Roteamento Ativo</span>
+                  <span className="text-sm font-black text-white mt-1.5 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
+                    {enteredAddresses.length} endereços inseridos
+                  </span>
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-      )}
+                
+                <button 
+                  onClick={runOptimization}
+                  className="w-full sm:w-auto px-8 py-3.5 bg-tech text-slate-950 font-black rounded-xl text-sm md:text-base shadow-[0_4px_20px_rgba(209,160,84,0.3)] hover:shadow-[0_4px_25px_rgba(209,160,84,0.45)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shrink-0"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  CALCULAR MELHOR ROTA
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </div>
+    </motion.div>
+  )}
+</AnimatePresence>
+</motion.div>
+)}
 
           {currentScreen === 'loading' && (
             <motion.div
@@ -2748,7 +2619,7 @@ export default function HarpiaApp() {
               className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
             >
               <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
+                <MapView mapStyleProp={mapStyle} showTrafficProp={showTraffic} showWeatherProp={showWeather} stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
               </div>
               <div 
                 className={`${
@@ -2773,7 +2644,7 @@ export default function HarpiaApp() {
                   </button>
                 )}
                 <div 
-                  className={`h-full ${isMobile ? '' : 'overflow-hidden transition-all duration-300'}`} 
+                  className={`h-full ${isMobile ? '' : 'overflow-hidden transition-all duration-300'}`}
                   style={isMobile ? undefined : { 
                     width: '400px', 
                     visibility: isSidebarOpen ? 'visible' : 'hidden', 
@@ -2788,15 +2659,6 @@ export default function HarpiaApp() {
                     hybridAnalysis={routeResult.hybridAnalysis}
                     onNavigate={() => setCurrentScreen('navigation')}
                     isLoading={false}
-                    onShowInvoice={handleShowInvoice}
-                    isSimulating={isSimulating}
-                    onStartSimulation={handleStartSimulation}
-                    onStopSimulation={handleStopSimulation}
-                    simulatedResults={simulatedResults}
-                    isCalculatingSim={isCalculatingSim}
-                    activeSimProfile={activeSimProfile}
-                    onSimulateProfile={handleSimulateProfile}
-                    onApplyRoute={handleApplySimulatedRoute}
                   />
                 </div>
               </div>
@@ -2813,700 +2675,17 @@ export default function HarpiaApp() {
               className="h-full flex flex-col relative overflow-hidden"
             >
               <div className="relative flex-1">
-                 <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
-                 
-                 {/* Top-Left Retractable Drawer Toggle Button ("Menu Ioiô") */}
-                 <button
-                   type="button"
-                   onClick={() => setIsNavDrawerOpen(!isNavDrawerOpen)}
-                   className="absolute top-4 left-4 z-[1500] w-12 h-12 rounded-2xl bg-slate-950/95 border border-tech/40 text-tech hover:text-white hover:border-tech shadow-[0_8px_25px_rgba(0,0,0,0.6)] flex items-center justify-center transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer group"
-                   title={isNavDrawerOpen ? "Recolher Menu de Navegação" : "Abrir Menu de Navegação"}
-                 >
-                   {isNavDrawerOpen ? (
-                     <ChevronLeft className="w-6 h-6 text-tech transition-transform group-hover:-translate-x-0.5" />
-                   ) : (
-                     <ChevronRight className="w-6 h-6 text-tech transition-transform group-hover:translate-x-0.5 animate-pulse" />
-                   )}
-                 </button>
-
-                 {/* Retractable Navigation Drawer */}
-                 <AnimatePresence>
-                   {isNavDrawerOpen && (
-                     <motion.div
-                       initial={{ x: '-100%', opacity: 0 }}
-                       animate={{ x: 0, opacity: 1 }}
-                       exit={{ x: '-100%', opacity: 0 }}
-                       transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-                       className="absolute top-0 left-0 bottom-0 z-[1400] w-80 md:w-96 bg-slate-950/95 backdrop-blur-2xl border-r border-tech/30 p-6 flex flex-col shadow-[10px_0_40px_rgba(0,0,0,0.8)] text-white"
-                     >
-                       <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5">
-                         <div className="flex items-center gap-2.5">
-                           <Navigation className="w-5 h-5 text-tech animate-pulse" />
-                           <h3 className="font-display font-black text-base text-white uppercase tracking-wider">Painel da Rota</h3>
-                         </div>
-                         <button 
-                           onClick={() => setIsNavDrawerOpen(false)}
-                           className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white hover:border-slate-600 transition-all cursor-pointer"
-                         >
-                           <X className="w-4 h-4" />
-                         </button>
-                       </div>
-
-                       <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
-                         <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800">
-                           <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Progresso do Roteiro</span>
-                           <p className="text-sm font-black text-white mt-1">Parada {navIndex + 1} de {routeResult.sequence.length}</p>
-                           <p className="text-xs text-slate-400 mt-0.5">{routeResult.sequence[navIndex]?.address}</p>
-                           <span className="inline-block mt-2 px-2 py-0.5 bg-tech/15 border border-tech/30 text-tech text-[9.5px] font-mono font-bold rounded">
-                             ID Rota: #{routeResult.routeId || 'ROT-8492'}
-                           </span>
-                         </div>
-
-                         {/* Sub-menu Collapsible: Opções do Menu */}
-                         <div className="bg-slate-900/90 rounded-2xl border border-tech/30 overflow-hidden shadow-lg">
-                           <button
-                             type="button"
-                             onClick={() => setIsDrawerMenuOptionsOpen(!isDrawerMenuOptionsOpen)}
-                             className="w-full p-3.5 flex items-center justify-between text-left text-xs font-black uppercase tracking-wider text-tech hover:bg-white/5 transition-colors cursor-pointer"
-                           >
-                             <div className="flex items-center gap-2">
-                               <Menu className="w-4 h-4 text-tech" />
-                               <span>Opções do Menu</span>
-                             </div>
-                             {isDrawerMenuOptionsOpen ? (
-                               <ChevronUp className="w-4 h-4 text-tech" />
-                             ) : (
-                               <ChevronDown className="w-4 h-4 text-tech" />
-                             )}
-                           </button>
-
-                           <AnimatePresence>
-                             {isDrawerMenuOptionsOpen && (
-                               <motion.div
-                                 initial={{ height: 0, opacity: 0 }}
-                                 animate={{ height: 'auto', opacity: 1 }}
-                                 exit={{ height: 0, opacity: 0 }}
-                                 className="px-3 pb-3 space-y-1.5 border-t border-slate-800/80 pt-2"
-                               >
-                                 {[
-                                   { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
-                                   { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' },
-                                   { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
-                                   { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
-                                   { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
-                                 ].map((tab) => {
-                                   const isActive = tab.id === 'navigation';
-                                   const Icon = tab.icon;
-                                   return (
-                                     <button
-                                       key={tab.id}
-                                       onClick={() => {
-                                         setIsNavDrawerOpen(false);
-                                         if (tab.id === 'tutorial') {
-                                           setShowDemoAssistant(true);
-                                           setDemoStep(0);
-                                           setDemoMinimized(false);
-                                           setCurrentScreen('home');
-                                         } else {
-                                           setCurrentScreen(tab.id as any);
-                                         }
-                                       }}
-                                       className={`w-full p-2.5 rounded-xl border text-left flex items-center gap-3 transition-all cursor-pointer ${
-                                         isActive
-                                           ? 'bg-tech/20 border-tech text-tech font-bold'
-                                           : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80 text-slate-300 hover:text-white'
-                                       }`}
-                                     >
-                                       <Icon className="w-4 h-4 text-tech shrink-0" />
-                                       <div className="flex flex-col min-w-0">
-                                         <span className="text-[11px] font-bold uppercase tracking-wider leading-none">
-                                           {tab.label}
-                                         </span>
-                                         <span className="text-[9px] text-slate-400 truncate mt-0.5">
-                                           {tab.desc}
-                                         </span>
-                                       </div>
-                                     </button>
-                                   );
-                                 })}
-                               </motion.div>
-                             )}
-                           </AnimatePresence>
-                         </div>
-
-                         <div className="space-y-2">
-                           <span className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 block">Próximas Paradas</span>
-                           {routeResult.sequence.map((stop: any, idx: number) => (
-                             <div 
-                               key={idx}
-                               className={`p-3 rounded-xl border flex items-center justify-between text-xs transition-all ${
-                                 idx === navIndex 
-                                   ? 'bg-tech/15 border-tech/40 text-white font-bold' 
-                                   : idx < navIndex 
-                                   ? 'bg-slate-900/30 border-slate-800 text-slate-500 line-through' 
-                                   : 'bg-slate-900/60 border-slate-800/80 text-slate-300'
-                               }`}
-                             >
-                               <div className="flex items-center gap-2.5 min-w-0">
-                                 <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 ${
-                                   idx === navIndex ? 'bg-tech text-slate-950' : 'bg-slate-800 text-slate-400'
-                                 }`}>
-                                   {idx + 1}
-                                 </span>
-                                 <span className="truncate">{stop.name || stop.address?.split(',')[0]}</span>
-                               </div>
-                               {idx < navIndex && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
-                             </div>
-                           ))}
-                         </div>
-                       </div>
-
-                       <div className="pt-4 border-t border-white/10 mt-auto space-y-2">
-                         <button
-                           onClick={() => {
-                             setIsNavDrawerOpen(false);
-                             setCurrentScreen('result');
-                           }}
-                           className="w-full py-3 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
-                         >
-                           <ChevronLeft className="w-4 h-4 text-tech" />
-                           <span>Ver Plano de Rota</span>
-                         </button>
-                       </div>
-                     </motion.div>
-                   )}
-                 </AnimatePresence>
-                 
-                 {/* Alerta de Clima em tempo real */}
-                 <AnimatePresence>
-                   {routeResult.sequence[navIndex]?.amazonasHydrology && (
-                     <motion.div 
-                       initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
-                       className="absolute top-20 right-4 z-[1000] bg-slate-950/90 backdrop-blur-md p-3.5 rounded-2xl border border-cyan-500/40 shadow-[0_10px_30px_rgba(6,182,212,0.2)] max-w-[280px] font-sans text-white space-y-2"
-                     >
-                       <div className="flex items-center justify-between border-b border-cyan-900/40 pb-1.5">
-                         <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold text-[10px] uppercase tracking-wider">
-                           <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                           <span>Monitor Fluvial Amazônico</span>
-                         </div>
-                         <span className="text-[9px] bg-cyan-950 text-cyan-300 font-bold px-1.5 py-0.5 rounded-md border border-cyan-800/40">
-                           {routeResult.sequence[navIndex].amazonasHydrology.season === 'cheia' ? 'Cheia Plena' : 'Vazante'}
-                         </span>
-                       </div>
-
-                       <div className="grid grid-cols-2 gap-1.5 text-[9.5px]">
-                         <div className="bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
-                           <span className="text-slate-400 text-[8px] uppercase block">Cota Hidrológica</span>
-                           <span className="font-mono font-bold text-cyan-300">{routeResult.sequence[navIndex].amazonasHydrology.riverLevelMeters || 26.2} m</span>
-                         </div>
-                         <div className="bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
-                           <span className="text-slate-400 text-[8px] uppercase block">Correnteza</span>
-                           <span className="font-mono font-bold text-cyan-300">{routeResult.sequence[navIndex].amazonasHydrology.currentSpeedKnots || 3.8} nós</span>
-                         </div>
-                       </div>
-
-                       <div className="text-[9.5px] text-slate-300 leading-tight bg-cyan-950/30 p-2 rounded-xl border border-cyan-900/30">
-                         <span className="font-bold text-cyan-300 block mb-0.5">Previsão 24h & Talvegue:</span>
-                         <p className="text-[9px] text-slate-300">{routeResult.sequence[navIndex].amazonasHydrology.forecast24h}</p>
-                       </div>
-                     </motion.div>
-                   )}
-
-                   {routeResult.sequence[navIndex].weather?.main?.temp > 38 && (
-                     <motion.div 
-                       initial={{ x: 300 }} animate={{ x: 0 }} exit={{ x: 300 }}
-                       className="absolute top-48 right-4 z-[1000] glass p-3 rounded-2xl border-amber-500/30 flex items-center gap-2.5 max-w-[260px]"
-                     >
-                       <Zap className="w-5 h-5 text-amber-400 shrink-0" />
-                       <div>
-                         <p className="text-[10px] font-bold text-amber-400 uppercase">Calor Extremo ({Math.round(routeResult.sequence[navIndex].weather?.main?.temp)}°C)</p>
-                         <p className="text-[9px] text-slate-400">Monitore pressão pneumática e hidratação da equipe.</p>
-                       </div>
-                     </motion.div>
-                   )}
-                 </AnimatePresence>
-
-                {/* Delivery Photo Modal (Etapa Obrigatória ao Finalizar Rota) */}
-                <AnimatePresence>
-                  {showDeliveryModal && (
-                    <motion.div 
-                      initial={{ opacity: 0 }} 
-                      animate={{ opacity: 1 }} 
-                      exit={{ opacity: 0 }}
-                      className="absolute inset-0 z-[2000] glass flex items-center justify-center p-4 md:p-6"
-                    >
-                      <motion.div 
-                        initial={{ scale: 0.95, y: 15 }} 
-                        animate={{ scale: 1, y: 0 }}
-                        exit={{ scale: 0.95, y: 15 }}
-                        className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar"
-                      >
-                        <div className="flex justify-between items-center mb-4">
-                          <div>
-                            <h2 className="text-xl md:text-2xl font-black text-white flex items-center gap-2">
-                              <Camera className="w-5 md:w-6 h-5 md:h-6 text-tech" />
-                              Comprovar Entrega
-                            </h2>
-                            <p className="text-xs text-slate-400 mt-1">O motorista precisa registrar o pacote entregue.</p>
-                          </div>
-                          <button 
-                            onClick={() => {
-                              stopWebcam();
-                              setShowDeliveryModal(false);
-                            }} 
-                            className="text-slate-405 hover:text-white transition-colors"
-                          >
-                            <XCircle className="w-6 h-6" />
-                          </button>
-                        </div>
-
-                        {/* Camera Viewfinder / Preview Section */}
-                        <div className="relative aspect-video w-full bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex flex-col items-center justify-center mb-4">
-                          {deliveryPhoto ? (
-                            <div className="relative w-full h-full">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img 
-                                src={deliveryPhoto} 
-                                alt="Comprovante de entrega" 
-                                className="w-full h-full object-cover"
-                              />
-                              <div className="absolute top-3 right-3 bg-tech text-slate-950 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-lg">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                Foto Anexada
-                              </div>
-                            </div>
-                          ) : isWebcamActive ? (
-                            <div className="relative w-full h-full bg-black">
-                              <video 
-                                ref={videoRef} 
-                                autoPlay 
-                                playsInline 
-                                muted 
-                                className="w-full h-full object-cover"
-                              />
-                              {/* Camera design decorations */}
-                              <div className="absolute inset-4 border border-white/10 pointer-events-none rounded-lg flex items-center justify-center">
-                                <div className="w-8 h-8 border-t-2 border-l-2 border-tech absolute top-0 left-0"></div>
-                                <div className="w-8 h-8 border-t-2 border-r-2 border-tech absolute top-0 right-0"></div>
-                                <div className="w-8 h-8 border-b-2 border-l-2 border-tech absolute bottom-0 left-0"></div>
-                                <div className="w-8 h-8 border-b-2 border-r-2 border-tech absolute bottom-0 right-0"></div>
-                                <div className="text-[10px] text-white/40 font-mono tracking-widest uppercase">ENQUADRE O PACOTE</div>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="p-6 text-center flex flex-col items-center justify-center gap-3">
-                              <Camera className="w-12 h-12 text-slate-700" />
-                              {webcamError ? (
-                                <p className="text-xs text-amber-500 max-w-[280px] leading-relaxed">{webcamError}</p>
-                              ) : (
-                                <p className="text-xs text-slate-500 max-w-[250px] leading-relaxed">Câmera desativada ou indisponível.</p>
-                              )}
-                              <button
-                                type="button"
-                                onClick={startWebcam}
-                                className="px-4 py-2 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-750 text-xs text-white font-bold transition-all mt-1"
-                              >
-                                Ativar Câmera Live
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Capture and Upload Actions */}
-                        <div className="flex flex-col gap-2.5 mb-5 font-sans">
-                          {isWebcamActive && !deliveryPhoto && (
-                            <button
-                              type="button"
-                              onClick={capturePhoto}
-                              className="w-full bg-tech text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_4px_16px_rgba(209,160,84,0.35)] hover:brightness-110 active:scale-95 transition-all text-xs uppercase cursor-pointer"
-                            >
-                              <Camera className="w-4 h-4 text-slate-950" />
-                              Capturar Foto do Pacote
-                            </button>
-                          )}
-
-                          {deliveryPhoto && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDeliveryPhoto(null);
-                                startWebcam();
-                              }}
-                              className="w-full bg-slate-800 hover:bg-slate-750 text-white font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 border border-slate-700 transition-all text-xs uppercase cursor-pointer"
-                            >
-                              <Camera className="w-4 h-4 text-tech" />
-                              Tirar Outra Foto
-                            </button>
-                          )}
-
-                          {/* Hidden input file connector */}
-                          <div className="w-full">
-                            <label className="w-full flex items-center justify-center gap-2 py-3 border border-dashed border-slate-800 rounded-2xl cursor-pointer text-slate-400 hover:text-tech hover:border-tech/40 hover:bg-tech/5 transition-all text-xs font-semibold uppercase">
-                              <span className="truncate">{deliveryPhoto ? "Substituir com arquivo" : "Fazer Upload / Abrir Câmera Padrão"}</span>
-                              <input 
-                                type="file" 
-                                accept="image/*" 
-                                onChange={handleFileUpload} 
-                                className="hidden" 
-                              />
-                            </label>
-                          </div>
-                        </div>
-
-                        {/* Observation / Notes panel */}
-                        <div className="mb-6 flex flex-col gap-2 font-sans">
-                          <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Anotações / Observações</label>
-                          <textarea
-                            value={deliveryNotes}
-                            onChange={(e) => setDeliveryNotes(e.target.value)}
-                            placeholder="ex: Carga entregue nas mãos da recepcionista Maria."
-                            className="w-full h-20 px-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-xs text-white placeholder-slate-600 outline-none focus:border-tech/40 transition-colors resize-none font-sans"
-                          />
-                        </div>
-
-                        {/* Mandatory step disclaimer */}
-                        {!deliveryPhoto && (
-                          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-3 rounded-2xl flex items-center gap-2 mb-5">
-                            <AlertOctagon className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                            <span className="text-[10px] font-semibold leading-relaxed">Etapa Obrigatória: Registre ou envie uma foto para comprovar a conclusão com segurança.</span>
-                          </div>
-                        )}
-
-                        {/* Main Delivery Confirm Actions */}
-                        <div className="flex gap-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              stopWebcam();
-                              setShowDeliveryModal(false);
-                            }}
-                            className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-750 border border-slate-750 text-xs font-black text-white uppercase rounded-2xl transition-all h-12"
-                          >
-                            Cancelar
-                          </button>
-                          
-                          <button
-                            type="button"
-                            disabled={!deliveryPhoto}
-                            onClick={async () => {
-                              if (!deliveryPhoto) return;
-                              try {
-                                // Finalize stop or entire route in IndexedDB with safety photo proof
-                                const latest = await db.routes.toCollection().last();
-                                if (latest?.id) {
-                                  const updatedSequence = [...routeResult.sequence];
-                                  updatedSequence[navIndex] = {
-                                    ...updatedSequence[navIndex],
-                                    status: 'completed',
-                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
-                                    deliveryPhoto: deliveryPhoto
-                                  };
-                                  
-                                  const isLastStop = navIndex === routeResult.sequence.length - 1;
-                                  
-                                  await db.routes.update(latest.id, { 
-                                    status: isLastStop ? 'completed' : 'pending',
-                                    sequence: updatedSequence,
-                                    deliveryPhoto: deliveryPhoto,
-                                    deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
-                                    completedAt: isLastStop ? new Date() : undefined
-                                  });
-                                  
-                                  setRouteResult((prev: any) => ({
-                                    ...prev,
-                                    sequence: updatedSequence
-                                  }));
-                                  
-                                  if (navIndex > 0) {
-                                    await recordToOperationalMemory(navIndex, true, deliveryNotes);
-                                  }
-
-                                  // Close webcam and return or proceed
-                                  stopWebcam();
-                                  setShowDeliveryModal(false);
-
-                                  if (isLastStop) {
-                                    setNavIndex(0);
-                                    setCurrentScreen('dashboard');
-                                  } else {
-                                    setNavIndex(navIndex + 1);
-                                  }
-                                }
-                              } catch (err) {
-                                console.error("Erro salvando foto no Dexie:", err);
-                              }
-                            }}
-                            className="flex-1 py-3.5 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-1 shadow-lg bg-tech text-slate-950 hover:brightness-110 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer h-12"
-                          >
-                            <CheckCircle2 className="w-4 h-4" />
-                            Finalizar
-                          </button>
-                        </div>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                 {/* Active Stop Bottom Sheet following 6-level hierarchy */}
-                 <ActiveStopBottomSheet
-                   stop={routeResult.sequence[navIndex]}
-                   stopIndex={navIndex}
-                   totalStops={routeResult.sequence.length}
-                   remainingTimeMinutes={Math.round((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900) / 60)}
-                   remainingDistanceKm={(routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.distance || 2500) / 1000}
-                   etaString={(() => {
-                     const durationSec = routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900;
-                     const etaDate = new Date();
-                     etaDate.setSeconds(etaDate.getSeconds() + durationSec);
-                     return etaDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                   })()}
-                   onMarkDelivered={() => {
-                     if (navIndex === 0) {
-                       setNavIndex(1);
-                     } else {
-                       setShowDeliveryModal(true);
-                       setDeliveryPhoto(null);
-                       setDeliveryNotes('');
-                       startWebcam();
-                     }
-                   }}
-                   onMarkUndelivered={() => {
-                     setFailureReason('Destinatário Ausente');
-                     setFailureNotes('');
-                     setShowFailureModal(true);
-                   }}
-                   onEditStop={() => {
-                     setShowRouteDetailsModal(true);
-                   }}
-                   onDuplicateStop={() => {
-                     if (routeResult.sequence[navIndex]) {
-                       const dupe = { ...routeResult.sequence[navIndex], id: Date.now() };
-                       const updated = [...routeResult.sequence];
-                       updated.splice(navIndex + 1, 0, dupe);
-                       setRouteResult({ ...routeResult, sequence: updated });
-                     }
-                   }}
-                   onRemoveStop={() => {
-                     if (routeResult.sequence.length > 1) {
-                       const updated = routeResult.sequence.filter((_: any, i: number) => i !== navIndex);
-                       setRouteResult({ ...routeResult, sequence: updated });
-                       if (navIndex >= updated.length) setNavIndex(Math.max(0, updated.length - 1));
-                     }
-                   }}
-                   onAddNotes={(notes) => {
-                     if (routeResult.sequence[navIndex]) {
-                       const updatedSeq = [...routeResult.sequence];
-                       updatedSeq[navIndex] = { ...updatedSeq[navIndex], deliveryNotes: notes };
-                       setRouteResult({ ...routeResult, sequence: updatedSeq });
-                     }
-                   }}
-                   onViewAllStops={() => {
-                     setIsNavDrawerOpen(true);
-                   }}
-                 />
-               </div>
-
-               {/* Mock Exit Button */}
-               <button 
-                 onClick={() => {
-                   setNavIndex(0);
-                   setCurrentScreen('dashboard');
-                 }}
-                 className="absolute top-6 right-6 z-[1002] w-10 h-10 bg-black/20 backdrop-blur-md text-white rounded-full flex items-center justify-center hover:bg-black/40 transition-colors"
-               >
-                 <XCircle className="w-6 h-6" />
-               </button>
-
-               {/* Report Modal */}
-               <AnimatePresence>
-                 {isReporting && (
-                   <motion.div 
-                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                     className="absolute inset-0 z-[2000] glass flex items-center justify-center p-6"
-                   >
-                     <motion.div 
-                       initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-                       className="bg-slate-900 border border-slate-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl"
-                     >
-                       <div className="flex justify-between items-center mb-6">
-                         <h2 className="text-2xl font-bold">Ocorrência</h2>
-                         <button onClick={() => setIsReporting(false)} className="text-slate-500">
-                           <XCircle className="w-6 h-6" />
-                         </button>
-                       </div>
-
-                       <div className="grid grid-cols-3 gap-4 mb-8">
-                         {[
-                           { type: 'Trânsito', icon: <Car className="w-6 h-6" />, color: 'bg-red-500' },
-                           { type: 'Acidente', icon: <AlertTriangle className="w-6 h-6" />, color: 'bg-amber-500' },
-                           { type: 'Polícia', icon: <Shield className="w-6 h-6" />, color: 'bg-blue-500' },
-                           { type: 'Perigo', icon: <AlertOctagon className="w-6 h-6" />, color: 'bg-orange-500' },
-                           { type: 'Buraco', icon: <MapIcon className="w-6 h-6" />, color: 'bg-slate-500' },
-                           { type: 'Bloqueio', icon: <XCircle className="w-6 h-6" />, color: 'bg-red-700' },
-                         ].map(item => (
-                           <button 
-                             key={item.type}
-                             onClick={() => setReportType(item.type)}
-                             className={`flex flex-col items-center gap-2 p-3 rounded-2xl transition-all ${
-                               reportType === item.type ? 'bg-slate-800 scale-105 shadow-xl' : 'hover:bg-slate-800/50'
-                             }`}
-                           >
-                             <div className={`w-14 h-14 rounded-full flex items-center justify-center text-white ${item.color} shadow-lg shadow-${item.color}/20`}>
-                               {item.icon}
-                             </div>
-                             <span className={`text-[10px] font-bold uppercase tracking-wider ${reportType === item.type ? 'text-white' : 'text-slate-400'}`}>
-                               {item.type}
-                             </span>
-                           </button>
-                         ))}
-                       </div>
-
-                       <div className="p-8 border-2 border-dashed border-slate-800 rounded-2xl mb-8 flex flex-col items-center gap-2 text-slate-500 hover:text-tech hover:border-tech/50 cursor-pointer transition-all">
-                         <Camera className="w-8 h-8" />
-                         <span className="text-xs font-bold uppercase tracking-wider">Tirar Foto</span>
-                       </div>
-
-                       <button 
-                        onClick={() => {
-                          // Save occurrence to Dexie
-                          db.occurrences.add({
-                            type: 'other',
-                            lat: routeResult.sequence[navIndex].lat,
-                            lon: routeResult.sequence[navIndex].lon,
-                            description: reportType,
-                            timestamp: new Date(),
-                            synced: false
-                          });
-                          window.dispatchEvent(new CustomEvent('occurrence-reported'));
-                          setIsReporting(false);
-                        }}
-                        className="w-full bg-tech text-slate-950 font-black py-4 rounded-2xl shadow-[0_5px_20px_rgba(209,160,84,0.3)] hover:brightness-110 active:scale-95 transition-all"
-                       >
-                         ENVIAR REPORTE
-                       </button>
-                     </motion.div>
-                   </motion.div>
-                 )}
-               </AnimatePresence>
-
-                {/* Preview Invoice Modal */}
-                {/* Preview Invoice Modal relocated to root level */}
-
-               {/* Failure Registration Modal */}
-               <AnimatePresence>
-                 {showFailureModal && (
-                   <motion.div 
-                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                     className="absolute inset-0 z-[2000] glass flex items-center justify-center p-6"
-                   >
-                     <motion.div 
-                       initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-                       className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[40px] w-full max-w-md shadow-2xl flex flex-col"
-                     >
-                       <div className="flex justify-between items-center mb-5">
-                         <div>
-                           <h2 className="text-xl font-bold text-white uppercase tracking-wider">Registrar Falha</h2>
-                           <p className="text-xs text-slate-400">Selecione o motivo da falha de entrega</p>
-                         </div>
-                         <button onClick={() => setShowFailureModal(false)} className="text-slate-500 hover:text-white transition-colors">
-                           <XCircle className="w-6 h-6" />
-                         </button>
-                       </div>
-
-                       <div className="grid grid-cols-1 gap-2.5 mb-6">
-                         {[
-                           'Destinatário Ausente',
-                           'Estabelecimento Fechado',
-                           'Recusado pelo Recebedor',
-                           'Endereço Não Localizado',
-                           'Problemas Operacionais'
-                         ].map(reason => (
-                           <button 
-                             key={reason}
-                             onClick={() => setFailureReason(reason)}
-                             className={`px-4 py-3 rounded-xl border text-left text-xs font-bold transition-all ${
-                               failureReason === reason 
-                                 ? 'bg-amber-500/10 border-amber-500 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.15)]' 
-                                 : 'border-slate-800 text-slate-400 hover:border-slate-700/80 hover:text-slate-200'
-                             }`}
-                           >
-                             {reason}
-                           </button>
-                         ))}
-                       </div>
-
-                       <div className="mb-6 flex flex-col gap-2">
-                         <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Observações Opcionais</label>
-                         <textarea
-                           value={failureNotes}
-                           onChange={(e) => setFailureNotes(e.target.value)}
-                           placeholder="Descreva detalhes ou observações sobre o problema de entrega..."
-                           className="w-full h-16 px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 outline-none focus:border-amber-550/45 transition-colors resize-none"
-                         />
-                       </div>
-
-                       <div className="flex gap-3 mt-1 font-sans">
-                         <button 
-                           onClick={() => setShowFailureModal(false)}
-                           className="flex-1 py-3 bg-slate-800 hover:bg-slate-750 text-xs font-black text-white hover:text-slate-200 uppercase rounded-xl transition-all"
-                         >
-                           Cancelar
-                         </button>
-                         <button 
-                           onClick={async () => {
-                             const updatedSequence = [...routeResult.sequence];
-                             updatedSequence[navIndex] = {
-                               ...updatedSequence[navIndex],
-                               status: 'failed',
-                               failureReason: failureReason || 'Outro',
-                               deliveryNotes: failureNotes
-                             };
-                             
-                             setRouteResult((prev: any) => ({
-                               ...prev,
-                               sequence: updatedSequence
-                             }));
-
-                             await recordToOperationalMemory(navIndex, false, failureReason || 'Outro');
-
-                             if (navIndex < routeResult.sequence.length - 1) {
-                               setNavIndex(navIndex + 1);
-                             } else {
-                               try {
-                                 const latest = await db.routes.toCollection().last();
-                                 if (latest?.id) {
-                                   await db.routes.update(latest.id, {
-                                     status: 'completed',
-                                     sequence: updatedSequence,
-                                     completedAt: new Date()
-                                   });
-                                 }
-                               } catch (err) {
-                                 console.error("Erro salvando falha final no Dexie:", err);
-                               }
-                               setNavIndex(0);
-                               setCurrentScreen('dashboard');
-                             }
-                             setShowFailureModal(false);
-                           }}
-                           className="flex-1 bg-amber-500 text-slate-950 font-black py-3 rounded-xl hover:brightness-110 active:scale-95 transition-all text-xs uppercase"
-                         >
-                           Registrar Falha
-                         </button>
-                       </div>
-                     </motion.div>
-                   </motion.div>
-                 )}
-               </AnimatePresence>
+                 <MapView mapStyleProp={mapStyle} showTrafficProp={showTraffic} showWeatherProp={showWeather} stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
+              </div>
             </motion.div>
           )}
 
           {currentScreen === 'dashboard' && (
             <motion.div 
-              key="dashboard" 
-              initial={{ opacity: 0, y: 20 }} 
-              animate={{ opacity: 1, y: 0 }} 
-              exit={{ opacity: 0, y: -20 }}
+               key="dashboard" 
+               initial={{ opacity: 0, y: 20 }} 
+               animate={{ opacity: 1, y: 0 }} 
+               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className="h-full w-full"
             >
@@ -3521,961 +2700,198 @@ export default function HarpiaApp() {
               animate={{ opacity: 1, y: 0 }} 
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-16' : 'p-12'}`}
+              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-16' : 'p-6 sm:p-10'}`}
             >
-              <div className="max-w-2xl mx-auto w-full">
-                <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
-                
-                <div className="space-y-8">
-                  {/* 🔮 APRESENTAÇÃO TÉCNICA E TUTORIAL GUIADO */}
-                  <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-tech/35 p-6 sm:p-8 rounded-[32px] shadow-[0_0_30px_rgba(209,160,84,0.1)] relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
-                    
-                    <div className="flex items-start gap-4 mb-5">
-                      <div className="p-3 bg-tech/10 rounded-2xl text-tech shrink-0 mt-1">
-                        <Sparkles className="w-6 h-6 animate-pulse" />
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black tracking-widest text-tech uppercase">Recurso de Apresentação & TCC</span>
-                        <h2 className="text-xl font-bold font-display text-white mt-0.5">Roteiro Demonstrativo e Histórias de Uso</h2>
-                        <p className="text-xs text-slate-400 mt-1">
-                          Apresente o aplicativo HARPIA com total autoridade e clareza.
-                        </p>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-3.5 text-xs text-slate-300 leading-relaxed mb-6">
-                      <p>
-                        Este roteiro de demonstração preenche e executa um fluxo de uso completo e realista com dados de <strong>Manaus-AM</strong>. Ele guiará você por todas as telas do aplicativo, explicando o que cada funcionalidade faz e sugerindo o melhor <em>pitch</em> comercial para investidores ou professores:
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-400 font-sans mt-2">
-                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
-                          <span className="text-tech font-bold">1. Input & IA</span>
-                          <span>Paradas e Prompts Gemini</span>
-                        </div>
-                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
-                          <span className="text-tech font-bold">2. Custos & Clima</span>
-                          <span>Combustíveis e Meteorologia</span>
-                        </div>
-                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
-                          <span className="text-tech font-bold">3. Telemetria GPS</span>
-                          <span>Ocorrências IndexedDB</span>
-                        </div>
-                        <div className="flex items-center gap-2 bg-slate-900/60 p-2 rounded-xl">
-                          <span className="text-tech font-bold">4. Prova de Entrega</span>
-                          <span>Comprovante e Foto Digital</span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <button
-                      onClick={() => {
-                        setShowDemoAssistant(true);
-                        setDemoStep(0);
-                        setDemoMinimized(false);
-                        setCurrentScreen('home'); // Go to home to start the tour from the beginning
-                      }}
-                      className="w-full sm:w-auto bg-tech text-slate-950 font-black text-xs px-6 py-4 rounded-2xl uppercase tracking-wider hover:brightness-110 hover:shadow-[0_0_15px_rgba(209,160,84,0.3)] active:scale-95 transition-all text-center cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                      Iniciar Roteiro & Tutorial Passo a Passo
-                    </button>
-                  </div>
-
-                  <div className="glass p-8 rounded-[32px] border-tech/10">
-                    <h3 className="text-xl font-bold mb-5 flex items-center gap-2 flex-wrap">
-                      <HelpCircle className="w-5 h-5 text-tech shrink-0" />
-                      <span>O que é o HARPIA?</span>
-                    </h3>
-                    <div className="space-y-4 text-xs sm:text-sm text-slate-300 leading-relaxed">
-                      <p>
-                        O <strong>HARPIA</strong> (Hórus Amazônico de Rotas e Planejamento com Inteligência Artificial) é um sistema inteligente de planejamento e otimização de rotas logísticas desenvolvido para simplificar o dia a dia de entregas e transportes. Pensado especialmente para empresas e pequenos empreendimentos, o aplicativo funciona como uma torre de controle digital, ajudando a traçar os caminhos mais eficientes nas cidades, economizando combustível e reduzindo o tempo de viagem com a ajuda de inteligência artificial de última geração.
-                      </p>
-                      <p>
-                        Na prática, você só precisa informar os endereços das suas paradas. O HARPIA cruza essas informações de forma automática com dados de satélite, dados meteorológicos e as preferências selecionadas (como caminhos mais curtos, mais rápidos ou focados em segurança), reorganizando toda a sequência de entregas de maneira ideal. Além disso, o motor de inteligência artificial analisa as particularidades de cada trajeto e gera insights táticos diretos em linguagem simples para que qualquer motorista ou gestor tome as melhores decisões sem precisar de conhecimentos computacionais avançados.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="glass p-8 rounded-[32px]">
-                    <h3 className="text-xl font-bold mb-5 flex items-center flex-wrap">
-                      <span>
-                        Segurança dos Dados
-                        <InfoTooltip text="Informações sobre a persistência dos dados e chaves do sistema." />
-                      </span>
-                    </h3>
-                    <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
-                      Todas as chaves de API fornecidas estão integradas nativamente ao motor tático do HARPIA. 
-                      Os dados de navegação e ocorrências são armazenados localmente e sincronizados de ponta-a-ponta para sua máxima privacidade e resiliência offline.
-                    </p>
-                  </div>
+              <div className="max-w-4xl mx-auto w-full space-y-6">
+                <div className="pb-4 border-b border-slate-800/60">
+                  <h1 className="text-3xl sm:text-4xl font-bold font-display text-white">Configurações do Sistema</h1>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Ajuste perfis de veículos, regras de otimização, restrições e parâmetros de inteligência artificial.
+                  </p>
                 </div>
 
-                {/* Rodapé de Crédito / Projeto Integrador */}
-                <div className="mt-12 pt-6 border-t border-white/5 text-center px-4">
-                  <p className="text-[10px] sm:text-xs text-slate-500 font-semibold uppercase tracking-wider">
-                    © 2026 HARPIA
-                  </p>
-                  <p className="text-[10px] sm:text-[11px] text-slate-400 font-normal leading-relaxed mt-1 max-w-lg mx-auto">
-                    App produzido pela Turma 2025.3.289 de Aprendizagem Profissional de Qualificação em serviços e operações Logísticas
-                  </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Bento Box 1: Vehicle selection */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Truck className="w-4 h-4 shrink-0" />
+                      <span>
+                        Perfil de Transporte
+                        <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade automaticamente." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-2 xs:grid-cols-4 gap-2">
+                      {[
+                        { id: 'moto', icon: Bike, label: 'Moto' },
+                        { id: 'van', icon: Car, label: 'Van' },
+                        { id: 'truck', icon: Truck, label: 'Caminhão' },
+                        { id: 'boat', icon: MapIcon, label: 'Barco' },
+                      ].map((v) => (
+                        <button
+                          key={v.id}
+                          type="button"
+                          onClick={() => setOptions({ ...options, vehicle: v.id as any })}
+                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-2xl border transition-all cursor-pointer ${
+                            options.vehicle === v.id
+                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)] font-bold'
+                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          <v.icon className="w-5 h-5 mb-1.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-tight">{v.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 2: Route optimization priority */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Zap className="w-4 h-4 shrink-0" />
+                      <span>
+                        Prioridade do Algoritmo
+                        <InfoTooltip text="Escolha se deseja focar na velocidade absoluta, menor quilometragem percorrida ou máxima economia de combustível." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'speed', label: 'Mais Rápido' },
+                        { id: 'distance', label: 'Mais Curto' },
+                        { id: 'economy', label: 'Econômico' },
+                      ].map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setOptions({ ...options, priority: p.id as any })}
+                          className={`py-3 px-2 rounded-2xl border text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            options.priority === p.id
+                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
+                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 3: Avoidances */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Layers className="w-4 h-4 shrink-0" />
+                      <span>
+                        Restrições de Vias
+                        <InfoTooltip text="Ative evitar estradas não pavimentadas, áreas com risco de inundação ou subidas íngremes." />
+                      </span>
+                    </h3>
+                    <div className="space-y-2.5">
+                      {[
+                        { key: 'avoidDirt', label: 'Evitar estradas de terra / barro' },
+                        { key: 'avoidFloods', label: 'Evitar áreas suscetíveis a alagamento' },
+                        { key: 'avoidHills', label: 'Evitar relevo muito íngreme' },
+                      ].map((item) => {
+                        const isChecked = !!(options as any)[item.key];
+                        return (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => setOptions({ ...options, [item.key]: !isChecked })}
+                            className={`w-full p-3 rounded-2xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                              isChecked
+                                ? 'bg-tech/10 border-tech/60 text-tech'
+                                : 'bg-slate-950/40 border-slate-850/80 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>{item.label}</span>
+                            <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-colors ${
+                              isChecked ? 'bg-tech text-slate-950 border-tech' : 'border-slate-700 bg-slate-900'
+                            }`}>
+                              {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 4: Routing Engine */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Navigation className="w-4 h-4 shrink-0" />
+                      <span>
+                        Motor de Roteamento
+                        <InfoTooltip text="Selecione qual provedor de mapas/algoritmo será utilizado como base do cálculo." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'google', label: 'Google Maps' },
+                        { id: 'waze', label: 'Waze Traffic' },
+                        { id: 'ors', label: 'OpenRoute' },
+                      ].map((eng) => (
+                        <button
+                          key={eng.id}
+                          type="button"
+                          onClick={() => setOptions({ ...options, engine: eng.id as any })}
+                          className={`py-3 px-2 rounded-2xl border text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            (options.engine || 'google') === eng.id
+                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
+                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          {eng.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 5: AI Custom Prompts */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40 md:col-span-2">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-3 font-display flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 shrink-0" />
+                      <span>
+                        Instruções da Inteligência Artificial
+                        <InfoTooltip text="Adicione orientações especiais em linguagem natural para o modelo Gemini considerar no roteamento." />
+                      </span>
+                    </h3>
+                    <textarea
+                      value={options.customPrompt || ''}
+                      onChange={(e) => setOptions({ ...options, customPrompt: e.target.value })}
+                      placeholder="Ex: Evitar pedágios na BR-101, dar preferência para entregas comerciais pela manhã, priorizar estradas asfaltadas..."
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-tech focus:ring-1 focus:ring-tech h-24 resize-none transition-all"
+                    />
+                  </div>
+
+                  {/* Bento Box 6: Future Routing & Scheduling */}
+                  <div className="glass p-5 xs:p-6 rounded-3xl border border-slate-800/40 md:col-span-2">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Clock className="w-4 h-4 shrink-0" />
+                      <span>
+                        Agendamento Futuro
+                        <InfoTooltip text="Programe a partida para uma data ou horário específicos para simular previsões de trânsito." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input
+                        type="date"
+                        value={options.scheduledDate || ''}
+                        onChange={(e) => setOptions({ ...options, scheduledDate: e.target.value })}
+                        className="bg-slate-950/60 border border-slate-800 rounded-2xl p-3 text-xs text-white focus:outline-none focus:border-tech transition-all cursor-pointer"
+                      />
+                      <input
+                        type="time"
+                        value={options.scheduledTime || ''}
+                        onChange={(e) => setOptions({ ...options, scheduledTime: e.target.value })}
+                        className="bg-slate-950/60 border border-slate-800 rounded-2xl p-3 text-xs text-white focus:outline-none focus:border-tech transition-all cursor-pointer"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
-
-      {/* Universal Preview Invoice Modal (APEX Design & High Accessibility) */}
-      <AnimatePresence>
-        {previewInvoice && (
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-[9990] flex items-center justify-center p-3 sm:p-6"
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 15 }} 
-              animate={{ scale: 1, opacity: 1, y: 0 }} 
-              exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-slate-900 border border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.8)] rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-            >
-              {/* Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/40 gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-tech/10 flex items-center justify-center border border-tech/20 shadow-inner">
-                    <FileText className="w-5 h-5 text-tech" />
-                  </div>
-                  <div>
-                    <h3 className="text-white font-black text-sm uppercase tracking-widest flex items-center gap-2">
-                      Detalhes do Documento Fiscal
-                    </h3>
-                    <p className="text-[10px] text-slate-500 font-mono tracking-wider truncate max-w-xs sm:max-w-md">
-                      {previewInvoice?.chave ? `Chave: ${previewInvoice?.chave?.replace(/(.{4})/g, '$1 ')}` : 'Documento Carregado Localmente'}
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Top Navigation Tabs inside Modal */}
-                {!previewInvoice?.isImage && previewInvoice?.htmlContent && (
-                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-850 self-start sm:self-center shrink-0">
-                    <button
-                      onClick={() => setActiveInvoiceTab('danfe')}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-                        activeInvoiceTab === 'danfe' 
-                          ? 'bg-tech text-slate-950 shadow-md font-black' 
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      DANFE Oficial
-                    </button>
-                    <button
-                      onClick={() => setActiveInvoiceTab('data')}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-                        activeInvoiceTab === 'data' 
-                          ? 'bg-tech text-slate-950 shadow-md font-black' 
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Painel Digital
-                    </button>
-                  </div>
-                )}
-
-                <button 
-                  onClick={() => setPreviewInvoice(null)}
-                  className="absolute sm:relative top-4 right-4 sm:top-auto sm:right-auto w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full transition-colors border border-slate-700/40 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              
-              {/* Main Body */}
-              <div className="flex-1 bg-slate-950/90 overflow-y-auto p-4 sm:p-6 flex flex-col justify-between gap-5 min-h-[55vh]">
-                {previewInvoice?.isImage ? (
-                  <div className="flex-1 max-w-full flex items-center justify-center relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-900 p-4">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img 
-                      src={previewInvoice?.url} 
-                      alt="Visualização do Documento" 
-                      className="max-w-full max-h-[55vh] object-contain rounded-xl shadow-2xl"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    {/* Tab Content: DANFE Clássico */}
-                    {(!previewInvoice?.htmlContent || activeInvoiceTab === 'danfe') ? (
-                      <div className="flex-1 w-full bg-slate-950 border border-slate-900 rounded-2xl overflow-hidden relative shadow-inner">
-                        {previewInvoice?.htmlContent ? (
-                          <iframe 
-                            id="danfe-preview-iframe"
-                            srcDoc={previewInvoice.htmlContent}
-                            className="w-full h-[58vh] bg-white border-0"
-                            title="Visualização da NFe"
-                          />
-                        ) : (
-                          <iframe 
-                            id="danfe-preview-iframe"
-                            src={previewInvoice?.url}
-                            className="w-full h-[58vh] bg-white border-0"
-                            title="Visualização da NFe"
-                          />
-                        )}
-                      </div>
-                    ) : (
-                      /* Tab Content: Painel Digital Premium (APEX design) */
-                      <div className="flex-1 w-full space-y-4 animate-fadeIn text-xs text-slate-200">
-                        {/* Resumo de Valores e Natureza */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Valor Total do Documento</span>
-                            <span className="text-3xl font-black text-tech tracking-tight leading-none mt-2">
-                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(previewInvoice.fullData?.valor || 0)}
-                            </span>
-                          </div>
-                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Peso Bruto Total</span>
-                            <span className="text-2xl font-black text-white tracking-tight mt-2 flex items-baseline gap-1">
-                              {previewInvoice.fullData?.peso || 0} <span className="text-xs text-slate-400 font-medium">kg</span>
-                            </span>
-                          </div>
-                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl flex flex-col justify-between">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Status do Documento</span>
-                            <div className="mt-2 flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                              <span className="text-sm font-black uppercase text-emerald-400 tracking-wider">
-                                {previewInvoice.fullData?.statusNfe || 'Autorizada (SEFAZ)'}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Participantes (Emitente e Destinatário) */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Emitente */}
-                          <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
-                            <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
-                              Emitente / Remetente
-                            </h4>
-                            <div className="space-y-1">
-                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
-                              <p className="text-xs font-black text-white">{previewInvoice.fullData?.emitente?.nome || 'Emitente'}</p>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[9px] uppercase font-bold text-slate-500 block">CNPJ / CPF</span>
-                              <p className="text-xs font-mono text-slate-300">{previewInvoice.fullData?.emitente?.cnpj || 'CNPJ não informado'}</p>
-                            </div>
-                          </div>
-
-                          {/* Destinatário */}
-                          <div className="bg-slate-900/50 border border-slate-900 p-4 rounded-2xl space-y-3">
-                            <h4 className="text-[10px] uppercase font-black text-tech tracking-widest border-b border-slate-800 pb-1.5">
-                              Destinatário / Cliente
-                            </h4>
-                            <div className="space-y-1">
-                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Razão Social</span>
-                              <p className="text-xs font-black text-white">{previewInvoice.fullData?.destinatario?.nome || 'Destinatário'}</p>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[9px] uppercase font-bold text-slate-500 block">Endereço de Entrega</span>
-                              <p className="text-xs text-slate-300 leading-normal">{previewInvoice.fullData?.destinatario?.endereco || 'Endereço não informado'}</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Informações de Carga / Descrição */}
-                        <div className="grid grid-cols-1 gap-4">
-                          <div className="bg-slate-900 border border-slate-850 p-4 rounded-2xl space-y-2">
-                            <h4 className="text-[10px] uppercase font-black text-slate-400 tracking-widest border-b border-slate-800 pb-1.5">
-                              Descrição das Mercadorias
-                            </h4>
-                            <p className="text-xs font-medium text-slate-300 italic bg-slate-950 p-3 rounded-xl border border-slate-900 leading-relaxed">
-                              {previewInvoice.fullData?.descricao || 'Mercadorias Gerais'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Footer Actions Panel */}
-                <div className="border-t border-slate-800/80 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-slate-950/20 p-2 rounded-2xl">
-                  {/* Left Meta Info */}
-                  <div className="text-[10px] text-slate-500 flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-tech/50" />
-                    Visualizador Multiplataforma Harpia v2.5
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
-                    {/* Print Button (only for DANFE HTML view) */}
-                    {!previewInvoice?.isImage && previewInvoice?.htmlContent && activeInvoiceTab === 'danfe' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
-                          if (iframe?.contentWindow) {
-                            iframe.contentWindow.focus();
-                            iframe.contentWindow.print();
-                          }
-                        }}
-                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
-                      >
-                        <Printer className="w-4 h-4" /> Imprimir
-                      </button>
-                    )}
-
-                    {/* XML Download Button */}
-                    {!previewInvoice?.isImage && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          try {
-                            let xmlStr = "";
-                            if (previewInvoice.fullData) {
-                              const d = previewInvoice.fullData;
-                              xmlStr = `<?xml version="1.0" encoding="UTF-8"?>\n<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">\n  <NFe>\n    <infNFe Id="NFe${d.chaveAcesso || '00000000000000000000000000000000000000000000'}" versao="4.00">\n      <ide>\n        <cUF>${(d.chaveAcesso || '00').substring(0, 2)}</cUF>\n        <dhEmi>${d.dataEmissao || ''}</dhEmi>\n      </ide>\n      <emit>\n        <CNPJ>${(d.emitente?.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.emitente?.nome || ''}</xNome>\n      </emit>\n      <dest>\n        <CNPJ>${(d.destinatario?.cnpj || '').replace(/\D/g, '')}</CNPJ>\n        <xNome>${d.destinatario?.nome || ''}</xNome>\n        <enderDest>\n          <xLgr>${(d.destinatario?.endereco || '').split(',')[0]}</xLgr>\n          <xMun>${d.destinatario?.cidade || ''}</xMun>\n          <UF>${d.destinatario?.estado || ''}</UF>\n          <CEP>${(d.destinatario?.cep || '69000-000')}</CEP>\n        </enderDest>\n      </dest>\n      <det nItem="1">\n        <prod>\n          <xProd>${d.descricao || ''}</xProd>\n        </prod>\n      </det>\n      <total>\n        <ICMSTot>\n          <vNF>${d.valor || 0}</vNF>\n        </ICMSTot>\n      </total>\n      <transp>\n        <vol>\n          <pesoB>${d.peso || 0}</pesoB>\n        </vol>\n      </transp>\n    </infNFe>\n  </NFe>\n</nfeProc>`;
-                            } else {
-                              xmlStr = `<?xml version="1.0" encoding="UTF-8"?><nfeProc versao="4.00"><NFe><infNFe Id="NFe${previewInvoice.chave || '0'}" versao="4.00"></infNFe></NFe></nfeProc>`;
-                            }
-                            
-                            const blob = new Blob([xmlStr], { type: 'application/xml' });
-                            const blobUrl = URL.createObjectURL(blob);
-                            const link = document.createElement('a');
-                            link.href = blobUrl;
-                            link.download = `NFe_${previewInvoice.chave || previewInvoice.filename || 'xml'}.xml`;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            URL.revokeObjectURL(blobUrl);
-                          } catch (err) {
-                            console.error("Falha ao baixar XML:", err);
-                          }
-                        }}
-                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border border-slate-750 cursor-pointer"
-                      >
-                        <Code className="w-4 h-4 text-tech/80" /> Baixar XML
-                      </button>
-                    )}
-
-                    {/* PDF/Image Download Button */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!previewInvoice.url) {
-                          if (previewInvoice.htmlContent) {
-                            const iframe = document.getElementById('danfe-preview-iframe') as HTMLIFrameElement;
-                            if (iframe?.contentWindow) {
-                              iframe.contentWindow.focus();
-                              iframe.contentWindow.print();
-                            } else {
-                              const blob = new Blob([previewInvoice.htmlContent], { type: 'text/html' });
-                              const url = URL.createObjectURL(blob);
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.html`;
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                              URL.revokeObjectURL(url);
-                            }
-                          }
-                          return;
-                        }
-                        try {
-                          if (previewInvoice.isImage) {
-                            const link = document.createElement('a');
-                            link.href = previewInvoice.url;
-                            link.download = `${previewInvoice.filename || 'documento'}.png`;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            return;
-                          }
-
-                          const base64Data = previewInvoice.url.includes(',') ? previewInvoice.url.split(',')[1] : previewInvoice.url;
-                          const binaryString = window.atob(base64Data);
-                          const len = binaryString.length;
-                          const bytes = new Uint8Array(len);
-                          for (let i = 0; i < len; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
-                          }
-                          const blob = new Blob([bytes], { type: 'application/pdf' });
-                          const blobUrl = URL.createObjectURL(blob);
-                          const link = document.createElement('a');
-                          link.href = blobUrl;
-                          link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                          URL.revokeObjectURL(blobUrl);
-                        } catch (err) {
-                          console.error("Falha ao decodificar e baixar PDF base64. Tentando download normal:", err);
-                          const link = document.createElement('a');
-                          link.href = previewInvoice.url;
-                          link.download = `DANFE_${previewInvoice.chave || previewInvoice.filename || 'Nota'}.pdf`;
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                        }
-                      }}
-                      className="flex-1 sm:flex-none px-6 py-2.5 bg-tech text-slate-950 hover:brightness-110 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_4px_12px_rgba(0,242,255,0.25)]"
-                    >
-                      <Download className="w-4 h-4 text-slate-950" /> Baixar PDF
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* 🔮 ASSISTENTE INTERATIVO DE TUTORIAL GUIADO DO APP */}
-      {showDemoAssistant && demoMinimized && (
-        <motion.button
-          initial={{ opacity: 0, scale: 0.8, y: 30 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
-          title="Retomar Tutorial"
-        >
-          <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
-          <span className="text-xs tracking-wide text-white/95">Retomar Tutorial ({demoStep}/9)</span>
-          <div className="bg-tech text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-mono">
-            {demoStep}
-          </div>
-        </motion.button>
-      )}
-
-      {showDemoAssistant && !demoMinimized && (
-        <motion.div
-          id="panel-demo-assistant"
-          initial={{ opacity: 0, y: 30, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[85vh] overflow-y-auto custom-scrollbar"
-        >
-          <div className="flex justify-between items-start border-b border-white/10 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-tech animate-bounce shrink-0" />
-              <div>
-                <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Tutorial do Aplicativo</span>
-                <span className="text-xs text-slate-300 font-bold">Guia Interativo de Funcionalidades</span>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setDemoMinimized(true)}
-                className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
-                title="Minimizar (Ocultar para ver a tela)"
-              >
-                <EyeOff className="w-4 h-4 text-slate-350" />
-              </button>
-              <button
-                onClick={() => {
-                  setShowDemoAssistant(false);
-                  setDemoStep(0);
-                }}
-                className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
-                title="Encerrar Tutorial"
-              >
-                <XCircle className="w-4 h-4 text-slate-350" />
-              </button>
-            </div>
-          </div>
-
-          {demoStep === 0 && (
-            <div className="flex flex-col gap-3">
-              <h3 className="text-sm font-black text-white flex items-center gap-1.5">
-                <span>🎓</span> Bem-vindo ao Guia do HARPIA!
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                O <strong>HARPIA</strong> é a sua central de inteligência logística, roteamento autônomo, navegação GPS com voz e monitoramento climático.
-              </p>
-              <div className="bg-slate-900/80 p-3 rounded-2xl border border-tech/20 text-[11px] text-slate-200 space-y-1.5 font-sans">
-                <p className="font-bold text-tech">💡 O que você vai aprender neste tour:</p>
-                <ul className="space-y-1 text-slate-300 list-disc list-inside text-[10.5px]">
-                  <li>Cadastro de rotas & Leitura de Notas Fiscais (NFe/DANFE)</li>
-                  <li>Seleção de veículos, balança de peso & multas ANTT</li>
-                  <li>Monitoramento de clima e nível dos rios (Cheias/Secas)</li>
-                  <li>GPS por voz, desvio silencioso e modo 100% offline</li>
-                  <li>Comprovante digital de entrega (POD) & Dashboard</li>
-                </ul>
-              </div>
-              <button
-                onClick={() => {
-                  setDemoStep(1);
-                  setCurrentScreen('home');
-                }}
-                className="w-full mt-1 bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
-              >
-                Iniciar Passo a Passo →
-              </button>
-            </div>
-          )}
-
-          {demoStep === 1 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 1 de 9</span>
-                <span className="text-tech">Planejamento</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📍</span> 1. Entrada de Endereços & Scanner de NFe/DANFE
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Na aba <strong>Planejamento</strong>, você pode montar suas rotas de 3 formas fáceis:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🔍 Digitação Flexível:</strong> Escreva qualquer endereço com CEP, número ou ponto de referência (ex: <i>&quot;Rua Tefé 1000 Japiim&quot;</i>).</p>
-                <p><strong>📄 Leitor de Nota Fiscal (NFe):</strong> Cole a chave de 44 dígitos ou envie o XML/PDF do DANFE no botão <strong>&quot;Consultar NFe&quot;</strong> para extrair os locais de entrega em 1 clique!</p>
-                <p><strong>⏱️ Janelas de Horário:</strong> Defina horários específicos em que cada cliente atende (ex: <i>&quot;Recebe entre 08:00 e 11:00&quot;</i>).</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(0)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    setAddresses([
-                      'CEASA, Manaus, AM',
-                      'Centro, Manaus, AM',
-                      'Adrianópolis, Manaus, AM',
-                      'Compensa, Manaus, AM',
-                      'BR-319, Manaus, AM'
-                    ]);
-                    setTimeWindows({
-                      1: { start: '08:00', end: '11:00' },
-                      2: { start: '13:00', end: '15:30' }
-                    });
-                    setDemoStep(2);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Carregar Endereços & Avançar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 2 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 2 de 9</span>
-                <span className="text-tech">Especificação da Carga</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🚚</span> 2. Veículos, Balança & Multas Fiscais (ANTT)
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                O HARPIA inclui controle de frota e balança rodoviária integrada:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🚛 Seleção de Frota:</strong> Alterne entre Moto, Van, VUC, Caminhão Baú ou Carreta.</p>
-                <p><strong>⚖️ Balança de Peso por Eixo:</strong> Insira o peso total da carga (ex: 8.500 kg). O sistema valida a distribuição por eixo de acordo com o limite do CONTRAN/ANTT.</p>
-                <p><strong>🚨 Alerta de Excesso de Peso:</strong> Caso o peso ultrapasse o limite legal, o app calcula imediatamente a estimativa da multa em R$ para evitar autuações nas balanças.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(1)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    setOptions(prev => ({ ...prev, vehicle: 'truck' }));
-                    setDemoStep(3);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Definir Caminhão & Avançar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 3 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 3 de 9</span>
-                <span className="text-tech">Inteligência Ambiental</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🌊</span> 3. Clima, Nível dos Rios & Diretivas de IA
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Tecnologia preventiva para intempéries e peculiaridades regionais:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🌧️ Monitoramento Hidrológico:</strong> Cruza dados do INMET e bacias hidrográficas (Cheias/Inundações de Dez a Jun e Estiagem/Seca de Jul a Nov) para evitar atoleiros ou balsas inoperantes.</p>
-                <p><strong>🤖 Instruções Personalizadas de IA:</strong> Digite comandos em linguagem natural, como <i>&quot;Evitar vias alagadas na orla e priorizar entregas comerciais de manhã&quot;</i>.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(2)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    setAiCustomPrompt('Evitar trechos com risco de alagamento próximo a igarapés e orla fluviométrica.');
-                    setOptions(prev => ({ ...prev, priority: 'safety', avoidFloods: true }));
-                    setDemoStep(4);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Aplicar Diretiva & Avançar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 4 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 4 de 9</span>
-                <span className="text-tech">Roteamento Inteligente</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>⚡</span> 4. Otimização de Rota & Multi-Motores
-              </h4>
-              <p className="text-xs text-slate-350 leading-relaxed font-sans">
-                O algoritmo analisa milhares de combinações para encontrar o melhor trajeto:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>🎯 Modos de Prioridade:</strong> Alterne entre <strong>Menor Distância</strong>, <strong>Menor Tempo</strong>, <strong>Equilibrado</strong> ou <strong>Segurança</strong>.</p>
-                <p><strong>🗺️ Provedores de Mapa:</strong> Escolha entre Google Maps, Mapbox, OpenRouteService, OSRM e Photon para garantir máxima precisão.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(3)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={async () => {
-                    await runOptimization([
-                      'CEASA, Manaus, AM',
-                      'Centro, Manaus, AM',
-                      'Adrianópolis, Manaus, AM',
-                      'Compensa, Manaus, AM',
-                      'BR-319, Manaus, AM'
-                    ]);
-                    setDemoStep(5);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  ⚡ Otimizar Rota Agora
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 5 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 5 de 9</span>
-                <span className="text-tech">Análise do Traçado</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📈</span> 5. Diagnóstico de Custos, Combustível & Score
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                A rota otimizada exibe um relatório completo de eficiência:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>⛽ Custo & Combustível:</strong> Exibe a quilometragem total, consumo em litros de Diesel/Gasolina e projeção de custo financeiro.</p>
-                <p><strong>⭐ Score de Segurança (0-100):</strong> Classificação baseada em vias pavimentadas, risco de retenção e atendimento de janelas de horário.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => {
-                    setDemoStep(4);
-                    setCurrentScreen('home');
-                  }}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    setNavIndex(0);
-                    setCurrentScreen('navigation');
-                    setDemoStep(6);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Iniciar GPS de Navegação
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 6 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 6 de 9</span>
-                <span className="text-tech">Modo de Navegação do Motorista</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🧭</span> 6. GPS por Voz, Giroscópio & Mapa Detalhado HD
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Interface de navegação completa para a cabine do veículo:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>📱 Giroscópio & Bússola do Veículo:</strong> O cursor aponta para a direção e o mapa gira dinamicamente conforme os sensores do celular ou veículo do usuário.</p>
-                <p><strong>🛰️ Camadas de Alta Definição (Detalhe HD):</strong> Alternância em 1 clique entre Satélite Híbrido, Ruas & POIs, Relevo Topográfico e Detalhamento Urbano.</p>
-                <p><strong>🔊 Voz & Desvio Silencioso:</strong> Instruções faladas em voz clara com recálculo automático em menos de 2s sem interromper o motorista.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => {
-                    setDemoStep(5);
-                    setCurrentScreen('home');
-                  }}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => setDemoStep(7)}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Avançar para Modo Offline
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 7 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 7 de 9</span>
-                <span className="text-tech">Resiliência de Campo</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📲</span> 7. Operação Offline & Registro de Alertas
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Funcionamento ininterrupto mesmo sem sinal de celular:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>💾 Armazenamento Local (IndexedDB):</strong> Se o celular perder a internet em rodovias, todas as ações são gravadas localmente e sincronizadas quando houver conexão.</p>
-                <p><strong>⚠️ Botão de Ocorrências:</strong> O motorista registra acidentes, vias alagadas ou quedas de barreiras em tempo real.</p>
-              </div>
-              <div className="flex flex-col gap-2 mt-1">
-                <button
-                  onClick={async () => {
-                    try {
-                      await db.occurrences.add({
-                        type: 'flood',
-                        description: 'Alagamento em via de acesso reportado via GPS',
-                        lat: -3.134,
-                        lon: -60.024,
-                        timestamp: new Date(),
-                        synced: false
-                      });
-                      setApiWarning("OCORRÊNCIA REGISTRADA: Alerta salvo localmente no celular!");
-                    } catch(e){}
-                  }}
-                  className="w-full bg-slate-900/80 border border-alert/30 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
-                >
-                  ⚠️ Testar Reporte de Ocorrência (Sinistro)
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setDemoStep(6)}
-                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                  >
-                    Voltar
-                  </button>
-                  <button
-                    onClick={() => {
-                      setNavIndex(4);
-                      setDemoStep(8);
-                    }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                  >
-                    Ir à Prova de Entrega
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 8 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 8 de 9</span>
-                <span className="text-tech">Comprovação Fiscal</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📸</span> 8. Comprovante Digital de Entrega (POD)
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Validação antifraude e auditoria de recebimento da carga:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1.5 font-sans">
-                <p><strong>📷 Foto da Mercadoria:</strong> O motorista captura a foto do canhoto assinado ou da caixa entregue.</p>
-                <p><strong>🔒 GPS & Data Criptografados:</strong> O carimbo com as coordenadas exatas e o horário de entrega é gravado para garantia jurídica contra extravios.</p>
-              </div>
-              <div className="flex flex-col gap-2 mt-1">
-                <button
-                  onClick={() => {
-                    const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
-                    setDeliveryPhoto(boxSvg);
-                    setDeliveryNotes("Mercadoria entregue em perfeito estado sob fiscalização.");
-                    setShowDeliveryModal(true);
-                  }}
-                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
-                >
-                  📷 Abrir Câmera / Comprovante POD
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setDemoStep(7)}
-                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                  >
-                    Voltar
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
-                      try {
-                        const finalAddresses = [
-                          'CEASA, Manaus, AM',
-                          'Centro, Manaus, AM',
-                          'Adrianópolis, Manaus, AM',
-                          'Compensa, Manaus, AM',
-                          'BR-319, Manaus, AM'
-                        ];
-                        await db.routes.add({
-                          date: new Date(),
-                          addresses: finalAddresses,
-                          sequence: finalAddresses.map((a, i) => ({ address: a, index: i })),
-                          score: 95,
-                          status: 'completed',
-                          deliveryPhoto: boxSvg,
-                          deliveryNotes: 'Entrega concluída com comprovante digital seguro.',
-                          completedAt: new Date()
-                        });
-                      } catch (err) {
-                        console.warn(err);
-                      }
-                      stopWebcam();
-                      setShowDeliveryModal(false);
-                      setNavIndex(0);
-                      setCurrentScreen('dashboard');
-                      setDemoStep(9);
-                    }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                  >
-                    Concluir Entrega & Ir às Métricas
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 9 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 9 de 9</span>
-                <span className="text-tech">Gestão Central</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📊</span> 9. Painel Gerencial, Exportação & Agendamento
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Parabéns! Você completou o tour de funcionalidades do HARPIA:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>📊 Métricas & CO2:</strong> Na aba <strong>Métricas</strong>, acompanhe o histórico de entregas, índice de pontualidade e emissão de CO2.</p>
-                <p><strong>📅 Agendamento Futuro:</strong> Na aba Planejamento, programe e salve rotas para datas futuras.</p>
-                <p><strong>🔗 Exportação Completa:</strong> Abra suas rotas no Waze, Google Maps, exporte em GPX/KML ou imprima o manifesto em PDF!</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => {
-                    setShowDemoAssistant(false);
-                    setDemoStep(0);
-                  }}
-                  className="w-full bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-115 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
-                >
-                  🎉 Finalizar Tutorial & Usar o App
-                </button>
-              </div>
-            </div>
-          )}
-        </motion.div>
-      )}
-
-      {/* Quick Start Vehicle Profile Selection Modal */}
-      <AnimatePresence>
-        {showQuickStartModal && (
-          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fadeIn">
-            <QuickStartVehicleProfile
-              currentProfile={vehicleProfile}
-              onSelectProfile={(prof) => {
-                setVehicleProfile(prof);
-                if (prof === 'packages') {
-                  setOptions(prev => ({ ...prev, vehicle: 'van' }));
-                } else if (prof === 'food_delivery') {
-                  setOptions(prev => ({ ...prev, vehicle: 'moto' }));
-                } else if (prof === 'services') {
-                  setOptions(prev => ({ ...prev, vehicle: 'van' }));
-                } else if (prof === 'sales') {
-                  setOptions(prev => ({ ...prev, vehicle: 'car' }));
-                }
-                setShowQuickStartModal(false);
-              }}
-              onClose={() => setShowQuickStartModal(false)}
-            />
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Route Details (Partida, Destino, Pausa) Modal */}
-      <RouteDetailsModal
-        isOpen={showRouteDetailsModal}
-        onClose={() => setShowRouteDetailsModal(false)}
-        startAddress={addresses[0] || ''}
-        onUseCurrentLocation={handleUseCurrentGpsAsOrigin}
-        startTime={routeStartTime}
-        onUpdateStartTime={(t) => setRouteStartTime(t)}
-        endAddress={routeEndAddress}
-        onUpdateEndAddress={(addr) => setRouteEndAddress(addr)}
-        endTime={routeEndTime}
-        onUpdateEndTime={(t) => setRouteEndTime(t)}
-        hasPause={routeHasPause}
-        onTogglePause={(hp) => setRouteHasPause(hp)}
-        pauseDurationMinutes={routePauseMinutes}
-        onUpdatePauseDuration={(m) => setRoutePauseMinutes(m)}
-        onSaveAsDefault={(save) => {
-          if (save) {
-            setApiWarning("Parâmetros de rota (partida, destino e pausas) salvos como padrão de operação.");
-          }
-          setShowRouteDetailsModal(false);
-        }}
-      />
-
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
-        .glass { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
-      `}</style>
     </div>
   );
 }

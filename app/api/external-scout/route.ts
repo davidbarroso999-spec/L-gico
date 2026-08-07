@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     const client = getGeminiClient();
     if (client) {
       const modelSequence = [
-        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
         "gemini-3.1-flash-lite"
       ];
       let success = false;

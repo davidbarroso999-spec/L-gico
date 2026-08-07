@@ -98,8 +98,8 @@ FORMATO DE RESPOSTA (RETORNE EXCLUSIVAMENTE O JSON ABAIXO, SEM MARKDOWN OU COMEN
 `;
 
     const modelSequence = [
-      "gemini-3.5-flash",
-      "gemini-3.1-flash-lite"
+      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash"
     ];
 
     for (const modelName of modelSequence) {

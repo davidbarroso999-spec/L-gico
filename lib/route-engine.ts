@@ -203,6 +203,8 @@ export interface RouteOptions {
   avoidHills: boolean;
   customPrompt?: string;
   engine?: 'google' | 'waze' | 'ors';
+  scheduledDate?: string;
+  scheduledTime?: string;
 }
 
 const WEIGHTS = {
@@ -556,7 +558,18 @@ export async function optimizeRoute(
 
   // 5. HARPIA ORION VRP Pipeline:
   // 5.1 Analysis of address history & structured constraints modeling
-  const historyInsights = await analyzeAddressesHistory(enrichedLocations.map(l => l.address));
+  const [historyInsights, contextAdjustments] = await Promise.all([
+    analyzeAddressesHistory(enrichedLocations.map(l => l.address)),
+    getGeminiContextAdjustments({
+      locations: enrichedLocations,
+      vehicle: options.vehicle,
+      priority: options.priority,
+      customPrompt: options.customPrompt,
+      avoidDirt: options.avoidDirt,
+      avoidFloods: options.avoidFloods,
+      avoidHills: options.avoidHills
+    })
+  ]);
 
   const stopConstraints: StopConstraints[] = enrichedLocations.map((loc, idx) => {
     const originalIdx = parseInt(loc.id, 10);
@@ -564,6 +577,7 @@ export async function optimizeRoute(
     const inv = invoices?.[originalIdx];
     const history = historyInsights[loc.address];
     const stType = stopTypes?.[originalIdx] || 'delivery';
+
     return {
       index: idx,
       address: loc.address,
@@ -585,17 +599,6 @@ export async function optimizeRoute(
     avoidFloods: options.avoidFloods,
     avoidHills: options.avoidHills
   };
-
-  // 5.2 Gemini Context Adjustments Layer (Qualitative context -> Structured JSON matrix modifiers)
-  const contextAdjustments = await getGeminiContextAdjustments({
-    locations: enrichedLocations,
-    vehicle: options.vehicle,
-    priority: options.priority,
-    customPrompt: options.customPrompt,
-    avoidDirt: options.avoidDirt,
-    avoidFloods: options.avoidFloods,
-    avoidHills: options.avoidHills
-  });
 
   // 5.3 Mathematical VRP Solver (Savings + 2-Opt local search with time budget 10s)
   const adjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, vehicleConstraints);
