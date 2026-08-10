@@ -203,8 +203,6 @@ export interface RouteOptions {
   avoidHills: boolean;
   customPrompt?: string;
   engine?: 'google' | 'waze' | 'ors';
-  scheduledDate?: string;
-  scheduledTime?: string;
 }
 
 const WEIGHTS = {

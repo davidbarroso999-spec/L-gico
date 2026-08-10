@@ -22,9 +22,6 @@ interface MapProps {
   isNavigationScreen?: boolean;
   navIndex?: number;
   onRouteRecalculated?: (newResult: any) => void;
-  mapStyleProp?: 'google-streets' | 'google-hybrid' | 'google-terrain' | 'carto-voyager' | 'dark';
-  showTrafficProp?: boolean;
-  showWeatherProp?: boolean;
 }
 
 // Function to calculate exact heading/bearing between two coordinates
@@ -503,7 +500,7 @@ function getCompassCardinal(deg: number) {
   return arr[(val % 16)];
 }
 
-export default function MapView({ stops, geometry, routeSegments = [], alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated, mapStyleProp, showTrafficProp, showWeatherProp }: MapProps) {
+export default function MapView({ stops, geometry, routeSegments = [], alternatives = [], isNavigationScreen = false, navIndex = 0, onRouteRecalculated }: MapProps) {
   const polyline = useMemo(() => {
     return (geometry?.coordinates?.map((c: number[]) => [c[1], c[0]]) || []) as [number, number][];
   }, [geometry]);
@@ -519,19 +516,6 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [gyroActive, setGyroActive] = useState(false);
 
   // 3D Navigation Simulation States
-
-  const [showTrafficLayer, setShowTrafficLayer] = useState(false);
-  const [showWeatherLayer, setShowWeatherLayer] = useState(false);
-
-  useEffect(() => {
-    if (mapStyleProp) queueMicrotask(() => setTileStyle(mapStyleProp));
-  }, [mapStyleProp]);
-  useEffect(() => {
-    if (showTrafficProp !== undefined) queueMicrotask(() => setShowTrafficLayer(showTrafficProp));
-  }, [showTrafficProp]);
-  useEffect(() => {
-    if (showWeatherProp !== undefined) queueMicrotask(() => setShowWeatherLayer(showWeatherProp));
-  }, [showWeatherProp]);
   const [is3DMode, setIs3DMode] = useState(isNavigationScreen ? false : false);
   const [isDriving, setIsDriving] = useState(false);
   const [isAutoFollowing, setIsAutoFollowing] = useState(true);
@@ -746,7 +730,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   }, [carCoords, activeStep, polyline, stopIndices, navIndex]);
 
   // Live traffic and weather layer controls (disabled by default for clean map view)
-
+  const [showTrafficLayer, setShowTrafficLayer] = useState(false);
+  const [showWeatherLayer, setShowWeatherLayer] = useState(false);
 
   // Local Occurrences database state
   const [localOccurrences, setLocalOccurrences] = useState<any[]>([]);
@@ -1883,6 +1868,98 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       {/* PERSISTENT MAP SYSTEM CONTROLS (Compact Floating Dock) */}
       {!isNavigationScreen && (
         <div className="absolute bottom-6 right-4 z-[1001] flex items-center gap-1.5 p-1.5 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 rounded-2xl shadow-2xl">
+          {/* Toggle Live Weather Layer */}
+          <button
+            onClick={() => setShowWeatherLayer(!showWeatherLayer)}
+            className={`p-2 rounded-xl transition-all ${
+              showWeatherLayer 
+                ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+            title="Alternar Clima"
+          >
+            <CloudRain className="w-4 h-4" />
+          </button>
+
+          {/* Toggle Live Traffic Layer */}
+          <button
+            onClick={() => setShowTrafficLayer(!showTrafficLayer)}
+            className={`p-2 rounded-xl transition-all ${
+              showTrafficLayer 
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+            title="Alternar Trânsito"
+          >
+            <Car className="w-4 h-4" />
+          </button>
+
+          <div className="w-px h-4 bg-slate-800/80 my-auto" />
+
+          {/* Camadas do Mapa */}
+          <div className="relative">
+            <button
+              onClick={() => setShowTileMenu(!showTileMenu)}
+              className={`p-2 rounded-xl transition-all ${
+                showTileMenu || tileStyle !== 'dark'
+                  ? 'bg-amber-500 text-slate-950 font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+              title="Estilos de Mapa"
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+
+            {showTileMenu && (
+              <div className="absolute right-0 bottom-12 bg-slate-950/95 border border-slate-800 backdrop-blur-md rounded-2xl p-2.5 shadow-2xl w-52 flex flex-col gap-1.5 z-[10000] text-xs">
+                <div className="text-[9px] font-black uppercase text-tech tracking-wider border-b border-white/10 pb-1 flex justify-between items-center">
+                  <span>Estilo do Mapa</span>
+                  <button onClick={() => setShowTileMenu(false)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <button
+                  onClick={() => { setTileStyle('google-hybrid'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-hybrid' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                  <span className="text-[11px]">Satélite Híbrido</span>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('google-streets'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-streets' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <MapPin className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                  <span className="text-[11px]">Vetor / Ruas</span>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('google-terrain'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'google-terrain' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Sun className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                  <span className="text-[11px]">Topografia</span>
+                </button>
+
+                <button
+                  onClick={() => { setTileStyle('dark'); setShowTileMenu(false); }}
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                    tileStyle === 'dark' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                  <span className="text-[11px]">Modo Escuro</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Giroscópio */}
           <button
             onClick={toggleGyroscope}
