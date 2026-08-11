@@ -601,6 +601,24 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                       </span>
                     </div>
 
+                    {route.totalElapsedMs ? (
+                      <div className="flex items-center gap-2 bg-emerald-950/60 border border-emerald-500/30 rounded-xl px-3 py-1.5 text-xs text-emerald-300 font-mono font-bold">
+                        <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Tempo Total:</span>
+                        <span className="text-white font-black">
+                          {(() => {
+                            const secs = Math.floor(route.totalElapsedMs / 1000);
+                            const h = Math.floor(secs / 3600);
+                            const m = Math.floor((secs % 3600) / 60);
+                            const s = secs % 60;
+                            if (h > 0) return `${h}h ${m}m ${s}s`;
+                            if (m > 0) return `${m}m ${s}s`;
+                            return `${s}s`;
+                          })()}
+                        </span>
+                      </div>
+                    ) : null}
+
                     <h4 className="text-xs sm:text-sm font-bold text-white truncate flex items-center gap-1.5 mt-1" title={lastAddress}>
                       <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
                       {lastAddress}

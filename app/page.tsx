@@ -58,6 +58,7 @@ import {
   Share2,
   Calendar,
   Anchor,
+  Ship,
   Waves,
   Compass,
   Navigation,
@@ -66,8 +67,7 @@ import {
   Store,
   Building2,
   PackageCheck,
-  Flag,
-  Coffee
+  Globe
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import QuickStartVehicleProfile, { VehicleWorkProfile } from '@/components/QuickStartVehicleProfile';
@@ -75,6 +75,8 @@ import RouteDetailsModal from '@/components/RouteDetailsModal';
 import ActiveStopBottomSheet from '@/components/ActiveStopBottomSheet';
 import KpiDashboard from '@/components/Dashboard';
 import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
+import { fetchLiveBulletin } from '@/lib/ai-engine';
+import { checkHybridRoute } from '@/lib/hybrid-route';
 import { db } from '@/lib/db';
 import { seedHistoryIfEmpty } from '@/lib/history-analyzer';
 import { enhancedAutocomplete, preciseGeocode, reverseGeocode, getNearestReferencePoint } from '@/lib/geocode-engine';
@@ -82,7 +84,6 @@ import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 import TruckLoader from '@/components/TruckLoader';
 import { HarpiaTextEffect } from '@/components/ui/text-effect';
-import TutorialSpotlight from '@/components/TutorialSpotlight';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -160,26 +161,7 @@ export default function HarpiaApp() {
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [addresses, setAddresses] = useState<string[]>(['']);
-  const [addressIds, setAddressIds] = useState<string[]>(['id-0']);
-  const addressesRef = React.useRef(addresses);
-  useEffect(() => { addressesRef.current = addresses; }, [addresses]);
-
-  useEffect(() => {
-    if (addressIds.length !== addresses.length) {
-      const timer = setTimeout(() => {
-        setAddressIds(prev => {
-          if (prev.length === addresses.length) return prev;
-          if (prev.length < addresses.length) {
-            const added = Array.from({ length: addresses.length - prev.length }).map(() => `id-${Date.now()}-${Math.random()}`);
-            return [...prev, ...added];
-          }
-          return prev.slice(0, addresses.length);
-        });
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [addresses.length, addressIds.length]);
-
+  const [stopIds, setStopIds] = useState<string[]>(() => [crypto.randomUUID()]);
   const [stopTypes, setStopTypes] = useState<Record<number, 'delivery' | 'pickup'>>({});
   const [isNavDrawerOpen, setIsNavDrawerOpen] = useState(false);
   const [isDrawerMenuOptionsOpen, setIsDrawerMenuOptionsOpen] = useState(true);
@@ -322,7 +304,6 @@ export default function HarpiaApp() {
   const [routeEndAddress, setRouteEndAddress] = useState<string>('');
   const [routeHasPause, setRouteHasPause] = useState<boolean>(false);
   const [routePauseMinutes, setRoutePauseMinutes] = useState<number>(30);
-  const [tutorialPos, setTutorialPos] = useState<'bottom-right' | 'top-right'>('bottom-right');
 
   const loadSavedRoutes = useCallback(async () => {
     try {
@@ -381,6 +362,7 @@ export default function HarpiaApp() {
   const handleLoadSavedRoute = (route: any) => {
     if (route.addresses && route.addresses.length > 0) {
       setAddresses(route.addresses);
+      setStopIds(route.addresses.map(() => crypto.randomUUID()));
       if (route.sequence) {
         const newCoords: Record<string, { lat: number, lon: number }> = {};
         route.sequence.forEach((stop: any) => {
@@ -506,6 +488,126 @@ export default function HarpiaApp() {
   // Delivery proof modal and camera states
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
   const [showFailureModal, setShowFailureModal] = useState(false);
+  const [showHybridModal, setShowHybridModal] = useState(false);
+  const [liveBulletinData, setLiveBulletinData] = useState<any>(null);
+  const [isFetchingBulletin, setIsFetchingBulletin] = useState(false);
+  const [showRerouteAnalysisModal, setShowRerouteAnalysisModal] = useState(false);
+  const [rerouteAnalysisResult, setRerouteAnalysisResult] = useState<any>(null);
+  const [isCheckingReroute, setIsCheckingReroute] = useState(false);
+
+  // Background Polling & Fluvial Bulletin states
+  const [fluvialBulletin, setFluvialBulletin] = useState<any>(null);
+  const [isFetchingFluvialBulletin, setIsFetchingFluvialBulletin] = useState(false);
+  const [activeIncidentToast, setActiveIncidentToast] = useState<any>(null);
+  const [lastBgPollTime, setLastBgPollTime] = useState<string>('');
+
+  // Route Execution Timer & Completion Summary states
+  const [actualRouteStartTime, setActualRouteStartTime] = useState<number | null>(null);
+  const [actualRouteEndTime, setActualRouteEndTime] = useState<number | null>(null);
+  const [totalElapsedMs, setTotalElapsedMs] = useState<number | null>(null);
+  const [showRouteCompletedModal, setShowRouteCompletedModal] = useState<boolean>(false);
+  const [completedSummaryData, setCompletedSummaryData] = useState<any>(null);
+  const [liveElapsedSeconds, setLiveElapsedSeconds] = useState<number>(0);
+
+  const formatSecondsToClock = (secs: number) => {
+    if (!secs || secs < 0) secs = 0;
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) {
+      return `${h}h ${m < 10 ? '0' : ''}${m}m ${s < 10 ? '0' : ''}${s}s`;
+    }
+    if (m > 0) {
+      return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+    }
+    return `${s}s`;
+  };
+
+  // Live Timer Effect for Navigation Screen
+  useEffect(() => {
+    let timer: any;
+    if (currentScreen === 'navigation' && actualRouteStartTime) {
+      setLiveElapsedSeconds(Math.floor((Date.now() - actualRouteStartTime) / 1000));
+      timer = setInterval(() => {
+        setLiveElapsedSeconds(Math.floor((Date.now() - actualRouteStartTime) / 1000));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [currentScreen, actualRouteStartTime]);
+
+  useEffect(() => {
+    if (routeResult?.liveBulletin) {
+      setLiveBulletinData(routeResult.liveBulletin);
+    }
+  }, [routeResult]);
+
+  // Automatic live search check for Fluvial Modal when opened
+  useEffect(() => {
+    if (showHybridModal) {
+      setIsFetchingFluvialBulletin(true);
+      const portLocations = ['Porto de Ceasa, Manaus, AM', 'Porto do Careiro, AM', 'Travessia Fluvial Rio Negro e Solimões'];
+      fetchLiveBulletin(portLocations, 'FLUVIAL_CHECK')
+        .then(res => setFluvialBulletin(res))
+        .catch(err => console.warn('Fluvial bulletin fetch error:', err))
+        .finally(() => setIsFetchingFluvialBulletin(false));
+    }
+  }, [showHybridModal]);
+
+  // Background Incident Polling Service (runs every 45 seconds)
+  useEffect(() => {
+    const pollIntervalMs = 45000;
+    const interval = setInterval(async () => {
+      const validAddresses = routeResult?.sequence?.map((s: any) => s.address) || addresses.filter(a => a.trim().length > 3);
+      if (validAddresses.length < 2) return;
+
+      try {
+        const isFluvial = options.vehicle === 'boat' || options.isHybrid;
+        const taskName = isFluvial ? 'FLUVIAL_CHECK' : 'REROUTE_CHECK';
+        const summary = currentScreen === 'navigation' 
+          ? `Navegação ativa na parada ${navIndex + 1} de ${validAddresses.length}`
+          : 'Planejamento de Rota Ativo';
+
+        const pollResult = await fetchLiveBulletin(validAddresses, taskName, summary);
+        setLastBgPollTime(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+
+        if (pollResult && pollResult.hasIncident) {
+          setActiveIncidentToast(pollResult);
+        }
+      } catch (err) {
+        console.warn('Background incident polling error:', err);
+      }
+    }, pollIntervalMs);
+
+    return () => clearInterval(interval);
+  }, [routeResult, addresses, options.vehicle, options.isHybrid, currentScreen, navIndex]);
+
+  const handleRefreshLiveBulletin = async () => {
+    setIsFetchingBulletin(true);
+    try {
+      const validAddresses = routeResult?.sequence?.map((s: any) => s.address) || addresses.filter(a => a.trim().length > 3);
+      const res = await fetchLiveBulletin(validAddresses.length > 0 ? validAddresses : ['Manaus, AM', 'BR-319']);
+      setLiveBulletinData(res);
+    } catch (e) {
+      console.error("Error refreshing live bulletin:", e);
+    } finally {
+      setIsFetchingBulletin(false);
+    }
+  };
+
+  const handleRequestLiveRerouteCheck = async () => {
+    setIsCheckingReroute(true);
+    try {
+      const validAddresses = routeResult?.sequence?.map((s: any) => s.address) || addresses.filter(a => a.trim().length > 3);
+      const summaryText = `Navegação ativa. Parada atual: ${navIndex + 1} de ${validAddresses.length}. Localização aproximada: ${validAddresses[navIndex] || 'Manaus'}`;
+      const analysis = await fetchLiveBulletin(validAddresses, 'REROUTE_CHECK', summaryText);
+      setRerouteAnalysisResult(analysis);
+      setShowRerouteAnalysisModal(true);
+    } catch (err) {
+      console.error("Reroute check error:", err);
+    } finally {
+      setIsCheckingReroute(false);
+    }
+  };
   const [failureReason, setFailureReason] = useState<string>('');
   const [failureNotes, setFailureNotes] = useState<string>('');
   const [deliveryPhoto, setDeliveryPhoto] = useState<string | null>(null);
@@ -802,42 +904,6 @@ export default function HarpiaApp() {
     }
   }, []);
 
-  // Tutorial Step Auto-Switcher & Scroll Controller
-  useEffect(() => {
-    if (!showDemoAssistant || demoMinimized) return;
-
-    const timer = setTimeout(() => {
-      if (demoStep === 0 || demoStep === 1 || demoStep === 2 || demoStep === 3) {
-        if (currentScreen !== 'home' && currentScreen !== 'loading' && currentScreen !== 'result') {
-          setCurrentScreen('home');
-        }
-      } else if (demoStep === 4) {
-        if (currentScreen !== 'navigation' && currentScreen !== 'result') {
-          if (routeResult && routeResult.sequence && routeResult.sequence.length > 0) {
-            setCurrentScreen('navigation');
-          } else {
-            setCurrentScreen('home');
-          }
-        }
-      } else if (demoStep === 5) {
-        if (currentScreen !== 'dashboard') {
-          if (routeResult) {
-            setCurrentScreen('dashboard');
-          } else {
-            setCurrentScreen('home');
-          }
-        }
-      }
-
-      const el = document.getElementById(`tutorial-target-step-${demoStep}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 150);
-
-    return () => clearTimeout(timer);
-  }, [demoStep, showDemoAssistant, demoMinimized, currentScreen, routeResult]);
-
   useEffect(() => {
     seedHistoryIfEmpty();
     fetch('/api/diagnostic').then(r => r.json()).then(data => {
@@ -895,65 +961,67 @@ export default function HarpiaApp() {
   }, []);
 
   const handleAddStop = useCallback((targetIndex?: number) => {
-    const currentLen = addressesRef.current.length;
-    const insertIdx = targetIndex !== undefined
-      ? targetIndex
-      : (currentLen > 1 ? currentLen - 1 : currentLen);
-
     setAddresses(prev => {
       const next = [...prev];
+      const insertIdx = targetIndex !== undefined
+        ? targetIndex
+        : (next.length > 1 ? next.length - 1 : next.length);
+
       next.splice(insertIdx, 0, '');
+      setStopIds(prevIds => {
+        const nextIds = [...prevIds];
+        nextIds.splice(insertIdx, 0, crypto.randomUUID());
+        return nextIds;
+      });
+
+      // Shift stopTypes right for keys >= insertIdx
+      setStopTypes(prevSt => {
+        const nextSt: Record<number, 'delivery' | 'pickup'> = {};
+        Object.keys(prevSt).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextSt[k] = prevSt[k];
+          } else {
+            nextSt[k + 1] = prevSt[k];
+          }
+        });
+        return nextSt;
+      });
+
+      // Shift invoiceData right for keys >= insertIdx
+      setInvoiceData(prevInv => {
+        const nextInv: Record<number, any> = {};
+        Object.keys(prevInv).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextInv[k] = prevInv[k];
+          } else {
+            nextInv[k + 1] = prevInv[k];
+          }
+        });
+        return nextInv;
+      });
+
+      // Shift timeWindows right for keys >= insertIdx
+      setTimeWindows(prevTw => {
+        const nextTw: Record<number, any> = {};
+        Object.keys(prevTw).forEach(keyStr => {
+          const k = parseInt(keyStr, 10);
+          if (k < insertIdx) {
+            nextTw[k] = prevTw[k];
+          } else {
+            nextTw[k + 1] = prevTw[k];
+          }
+        });
+        return nextTw;
+      });
+
+      setTimeout(() => {
+        inputRefs.current[insertIdx]?.focus({ preventScroll: true });
+      }, 100);
+
       return next;
     });
-
-    setAddressIds(prev => {
-      const next = [...prev];
-      next.splice(insertIdx, 0, `id-${Date.now()}-${Math.random()}`);
-      return next;
-    });
-
-    setStopTypes(prevSt => {
-      const nextSt: Record<number, 'delivery' | 'pickup'> = {};
-      Object.keys(prevSt).forEach(keyStr => {
-        const k = parseInt(keyStr, 10);
-        if (k < insertIdx) {
-          nextSt[k] = prevSt[k];
-        } else {
-          nextSt[k + 1] = prevSt[k];
-        }
-      });
-      return nextSt;
-    });
-
-    setInvoiceData(prevInv => {
-      const nextInv: Record<number, any> = {};
-      Object.keys(prevInv).forEach(keyStr => {
-        const k = parseInt(keyStr, 10);
-        if (k < insertIdx) {
-          nextInv[k] = prevInv[k];
-        } else {
-          nextInv[k + 1] = prevInv[k];
-        }
-      });
-      return nextInv;
-    });
-
-    setTimeWindows(prevTw => {
-      const nextTw: Record<number, any> = {};
-      Object.keys(prevTw).forEach(keyStr => {
-        const k = parseInt(keyStr, 10);
-        if (k < insertIdx) {
-          nextTw[k] = prevTw[k];
-        } else {
-          nextTw[k + 1] = prevTw[k];
-        }
-      });
-      return nextTw;
-    });
-
-    setTimeout(() => {
-      inputRefs.current[insertIdx]?.focus({ preventScroll: true });
-    }, 100);
   }, []);
 
   const addAddress = handleAddStop;
@@ -968,7 +1036,7 @@ export default function HarpiaApp() {
 
   const removeAddress = useCallback((idx: number) => {
     setAddresses(prev => prev.filter((_, i) => i !== idx));
-    setAddressIds(prev => prev.filter((_, i) => i !== idx));
+    setStopIds(prev => prev.filter((_, i) => i !== idx));
 
     // Shift stopTypes keys left
     setStopTypes(prev => {
@@ -1013,28 +1081,13 @@ export default function HarpiaApp() {
     });
   }, []);
 
-  const [hybridPrompt, setHybridPrompt] = useState<{
-    start: string;
-    end: string;
-    startIdx: number;
-    endIdx: number;
-    validAddresses: string[];
-  } | null>(null);
-
-  const isFluvialOnly = (addr: string) => {
-    const kw = ['careiro', 'autazes', 'iranduba', 'manacapuru', 'novo airão', 'novo airao', 'itacoatiara', 'parintins', 'coari', 'tefé', 'tefe', 'cacau pirêra', 'cacau pirera'];
-    const n = addr.toLowerCase();
-    return kw.some(k => n.includes(k));
-  };
-
-  const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent, bypassHybridCheck = false) => {
+  const runOptimization = async (overrideAddresses?: string[] | React.MouseEvent) => {
     // Map timeWindows and invoices correctly to validAddresses indices to prevent offset bugs
     const listToUse = Array.isArray(overrideAddresses) ? overrideAddresses : addresses;
     const validWithWindows: Record<number, { start: string; end: string }> = {};
     const validWithInvoices: Record<number, { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any }> = {};
     const validStopTypes: Record<number, 'pickup' | 'delivery'> = {};
     let validCount = 0;
-
     const validAddresses = listToUse.filter((a, i) => {
       const isValid = a.trim().length > 3;
       if (isValid) {
@@ -1069,39 +1122,13 @@ export default function HarpiaApp() {
 
     if (validAddresses.length < 2) return;
 
-    if (!bypassHybridCheck) {
-      let needsHybrid = false;
-      let hStart = '';
-      let hEnd = '';
-      let hStartIdx = -1;
-      let hEndIdx = -1;
-
-      for (let i = 0; i < validAddresses.length - 1; i++) {
-        const f1 = isFluvialOnly(validAddresses[i]);
-        const f2 = isFluvialOnly(validAddresses[i + 1]);
-        if (f1 !== f2) {
-          needsHybrid = true;
-          hStart = validAddresses[i];
-          hEnd = validAddresses[i + 1];
-          hStartIdx = i;
-          hEndIdx = i + 1;
-          break;
-        }
-      }
-
-      if (needsHybrid) {
-        setHybridPrompt({
-          start: hStart,
-          end: hEnd,
-          startIdx: hStartIdx,
-          endIdx: hEndIdx,
-          validAddresses
-        });
-        return; // Pause execution for user confirmation
-      }
+    // Check for Hybrid route
+    
+    if (checkHybridRoute(validAddresses) && !options.isHybrid) {
+      setShowHybridModal(true);
+      return;
     }
 
-    setCurrentScreen('loading');;
 
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
@@ -1109,10 +1136,16 @@ export default function HarpiaApp() {
       const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
       setRouteResult(result);
       
+      const startTime = Date.now();
+      setActualRouteStartTime(startTime);
+      setActualRouteEndTime(null);
+      setTotalElapsedMs(null);
+
       // Save to IndexedDB (safe catch)
       try {
         await db.routes.add({
           date: new Date(),
+          startedAt: new Date(startTime),
           addresses: validAddresses,
           sequence: result.sequence,
           score: result.score,
@@ -1163,6 +1196,7 @@ export default function HarpiaApp() {
 
             if (data && data.addresses && Array.isArray(data.addresses)) {
               setAddresses(data.addresses);
+              setStopIds(data.addresses.map(() => crypto.randomUUID()));
               if (data.options) {
                 setOptions(prev => ({ ...prev, ...data.options }));
               }
@@ -1301,6 +1335,7 @@ export default function HarpiaApp() {
                     
                     if (idx === 0 && updatedAddresses.length === 1) {
                       updatedAddresses.push('');
+                      setStopIds(prev => [...prev, crypto.randomUUID()]);
                     }
                     
                     setAddresses(updatedAddresses);
@@ -1706,13 +1741,13 @@ export default function HarpiaApp() {
                 {/* Left Section: Itinerary inputs and Main Planning */}
                 <div className="w-full flex flex-col gap-6">
                   {/* Main Planning Card */}
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40" id="tutorial-target-step-0">
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
 
                   {/* Quick Action Control Bar (Adapted from layout screenshots) */}
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-800/60" id="tutorial-target-step-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-800/60">
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
@@ -1782,7 +1817,7 @@ export default function HarpiaApp() {
                     </div>
                   )}
 
-                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap" id="tutorial-target-step-1">
+                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap">
                     <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(209,160,84,0.5)] shrink-0" />
                     <span>
                       Paradas de Entrega
@@ -1795,7 +1830,7 @@ export default function HarpiaApp() {
                     <div className="absolute left-6 top-8 bottom-8 w-0.5 border-l-2 border-dashed border-slate-800 pointer-events-none" />
 
                     {/* Starting Point */}
-                    <div className="relative flex gap-4 items-start">
+                    <div key={stopIds[0]} className="relative flex gap-4 items-start">
                       <div className="w-4 h-4 rounded-full bg-tech text-slate-950 font-black flex items-center justify-center text-[10px] mt-4.5 z-10 shadow-[0_0_15px_rgba(0,242,255,0.4)]">
                         A
                       </div>
@@ -2059,9 +2094,8 @@ export default function HarpiaApp() {
                       <div className="space-y-5 pl-10">
                         {addresses.slice(1, -1).map((addr, idx) => {
                           const realIdx = idx + 1;
-                          const stopKey = addressIds[realIdx] || `fallback-${realIdx}`;
                           return (
-                            <div key={stopKey} className="space-y-2 relative">
+                            <div key={stopIds[realIdx]} className="space-y-2 relative">
                               <div className="absolute -left-10 top-3 w-4 h-4 rounded-full bg-slate-800 text-slate-300 font-bold flex items-center justify-center text-[9px] z-10 border border-slate-750">
                                 {idx + 1}
                               </div>
@@ -2277,7 +2311,7 @@ export default function HarpiaApp() {
                       const lastIdx = addresses.length - 1;
                       const isLastPickup = stopTypes[lastIdx] === 'pickup';
                       return (
-                        <div className="relative flex gap-4 items-start">
+                        <div key={stopIds[lastIdx]} className="relative flex gap-4 items-start">
                           <div className={`w-4 h-4 rounded-full font-black flex items-center justify-center text-[10px] mt-4.5 z-10 ${
                             isLastPickup 
                               ? 'bg-amber-500 text-slate-950 shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
@@ -2499,7 +2533,7 @@ export default function HarpiaApp() {
                     </button>
                     <div>
                       <button 
-                        onClick={() => setAddresses(DEFAULT_ADDRESSES)}
+                        onClick={() => { setAddresses(DEFAULT_ADDRESSES); setStopIds(DEFAULT_ADDRESSES.map(() => crypto.randomUUID())); }}
                         className="w-full py-3 bg-slate-950/30 hover:bg-slate-800/40 border border-slate-800/40 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
                       >
                         Usar Rota de Laboratório Demo (Manaus / AM)
@@ -2592,9 +2626,214 @@ export default function HarpiaApp() {
                 </div>
               </div>
 
+              {/* Right Section: Dynamic Logistics Configuration Bento Box List */}
+              <div className="w-full flex flex-col gap-6">
+                  {/* Bento Box 1: Vehicle selection */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Truck className="w-4 h-4 shrink-0" />
+                      <span>
+                        Perfil de Transporte
+                        <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade de ruas automaticamente." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-2 xs:grid-cols-4 gap-2">
+                      {[
+                        { id: 'moto', icon: Bike, label: 'Moto' },
+                        { id: 'van', icon: Car, label: 'Van' },
+                        { id: 'truck', icon: Truck, label: 'Caminhão' },
+                        { id: 'boat', icon: MapIcon, label: 'Barco' },
+                      ].map((v) => (
+                        <button
+                          key={v.id}
+                          onClick={() => setOptions({ ...options, vehicle: v.id as any })}
+                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-2xl border transition-all cursor-pointer ${
+                            options.vehicle === v.id
+                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
+                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          <v.icon className="w-5 h-5 mb-1.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-tight">{v.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Subpanel de Rota Fluvial & Embarcação quando 'boat' está ativo */}
+                    {options.vehicle === 'boat' && (
+                      <div className="mt-4 pt-4 border-t border-slate-800/60 animate-fadeIn space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                            <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                            Tipo de Embarcação & Calado
+                          </label>
+                          <span className="text-[9px] font-bold text-slate-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded-full">
+                            Matriz Fluvial Amazônica
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { id: 'express_lancha', label: 'Lancha Express', desc: '48 km/h • Calado 0.8m', icon: Zap },
+                            { id: 'voadeira', label: 'Voadeira Apoio', desc: '36 km/h • Calado 0.4m', icon: Navigation },
+                            { id: 'regional_gaiola', label: 'Barco Gaiola', desc: '18 km/h • Calado 2.2m', icon: Compass },
+                            { id: 'balsa_heavy', label: 'Balsa / Carga', desc: '14 km/h • Calado 3.5m', icon: Layers },
+                          ].map(vessel => (
+                            <button
+                              key={vessel.id}
+                              type="button"
+                              onClick={() => setOptions({ ...options, vesselType: vessel.id as any })}
+                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                                (options.vesselType || 'express_lancha') === vessel.id
+                                  ? 'bg-cyan-950/40 border-cyan-500/80 text-white shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-750 hover:text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-cyan-400' : 'text-slate-500' }`} />
+                                <span className="text-[10px] font-black uppercase tracking-tight">{vessel.label}</span>
+                              </div>
+                              <p className="text-[8.5px] text-slate-400 font-mono leading-none">{vessel.desc}</p>
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="p-3 bg-cyan-950/20 border border-cyan-900/40 rounded-2xl text-[10.5px] text-slate-300 space-y-1 font-sans">
+                          <p className="font-bold text-cyan-300 flex items-center gap-1.5 text-[11px]">
+                            <Waves className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                            Diferencial de Hidrovia Ativo:
+                          </p>
+                          <p className="text-slate-400 text-[10px] leading-relaxed">
+                            A rota calcula automaticamente a velocidade da correnteza a favor ou contra o fluxo do rio, profundidade dos canais (talvegue), risco de banzeiro por ventos e cota hidrológica da bacia.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Bento Box 2: Route optimization priority */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
+                      <Zap className="w-4 h-4 shrink-0" />
+                      <span>
+                        Algoritmo de Prioridade
+                        <InfoTooltip text="Escolha entre Tempo e Distância. Roteiros mais rápidos podem usar vias expressas, mas nem sempre são o caminho mais curto." />
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                      {[
+                        { id: 'speed', icon: Zap, label: 'Rápido' },
+                        { id: 'distance', icon: MapIcon, label: 'Curto' },
+                        { id: 'economy', icon: Leaf, label: 'Eco' },
+                        { id: 'safety', icon: Shield, label: 'Seguro' },
+                        { id: 'balanced', icon: BarChart4, label: 'Equil.' },
+                      ].map((p: any) => (
+                        <button
+                          key={p.id}
+                          onClick={() => setOptions({ ...options, priority: p.id })}
+                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                            options.priority === p.id 
+                            ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]' 
+                            : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                          }`}
+                        >
+                          <p.icon className="w-4 h-4 mb-1 shrink-0" />
+                          <span className="text-[9px] font-black uppercase tracking-tight leading-none">{p.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 p-3.5 rounded-xl bg-slate-950/40 border border-slate-900 text-xs text-slate-400 leading-relaxed font-sans">
+                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Evita congestionamentos em avenidas principais e privilegia fluxos ágeis, reduzindo tempo total de trajeto.</p>}
+                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima:</strong> Traçado seco com menor metragem absoluta, secundarizando congestionamento ou semáforos.</p>}
+                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Trajeto plano visando estabilidade, evitando desgaste operacional e acelerações sob declives pesados.</p>}
+                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Prevenção de risco. Desvia de zonas com alertas de acidentes, vias perigosas ou ocorrências climáticas.</p>}
+                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo médio, tipo de carga e integridade operacional.</p>}
+                    </div>
+                  </div>
+
+                  {/* Bento Box 4: AI Custom Prompts */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 text-[#D1A054] animate-pulse shrink-0" />
+                      <span>
+                        Instruções da IA
+                        <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
+                      </span>
+                    </h3>
+                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
+                      Adicione diretrizes customizadas para que o cérebro artificial analise a segurança física da sua equipe e do trajeto.
+                    </p>
+                    <textarea
+                      value={aiCustomPrompt}
+                      onChange={(e) => setAiCustomPrompt(e.target.value)}
+                      placeholder="Ex: 'priorizar vias com boa iluminação pública', 'informar rotas transitáveis por carretas', 'checar incidências climáticas recentes'..."
+                      rows={2}
+                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
+                    />
+                  </div>
+
+                  {/* Bento Box 5: Future Routing & Scheduling */}
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
+                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                      <Calendar className="w-4 h-4 text-tech shrink-0" />
+                      <span>
+                        Agendar Rota para o Futuro
+                        <InfoTooltip text="Programe e salve rotas para dias ou horários futuros no sistema. Você poderá recarregá-las a qualquer momento." />
+                      </span>
+                    </h3>
+                    <p className="text-slate-400 text-xs mb-4 leading-relaxed font-sans">
+                      Preencha os detalhes abaixo para salvar a lista de endereços atual para uso futuro.
+                    </p>
+                    
+                    <div className="space-y-3 font-sans">
+                      <div>
+                        <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Nome da Rota</label>
+                        <input
+                          type="text"
+                          value={scheduledName}
+                          onChange={(e) => setScheduledName(e.target.value)}
+                          placeholder="Ex: Rota Zona Sul - Manhã"
+                          className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Data Agendada</label>
+                          <input
+                            type="date"
+                            value={scheduledDate}
+                            onChange={(e) => setScheduledDate(e.target.value)}
+                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Horário de Saída</label>
+                          <input
+                            type="time"
+                            value={scheduledTime}
+                            onChange={(e) => setScheduledTime(e.target.value)}
+                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                          />
+                        </div>
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={handleSaveFutureRoute}
+                        disabled={addresses.filter(a => a.trim().length > 3).length < 2}
+                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-tech/40 text-tech disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950/20 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Salvar e Agendar Rota
+                      </button>
+                    </div>
+                  </div>
+
+
                   {!hasTwoOrMoreAddresses ? (
                     <button 
-                      id="tutorial-target-step-3"
                       onClick={runOptimization}
                       className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
                     >
@@ -2606,7 +2845,6 @@ export default function HarpiaApp() {
                       {/* Generous bottom spacing so form content doesn't get hidden behind the fixed bar */}
                       <div className="h-32 w-full" />
                       <motion.div
-                        id="tutorial-target-step-3"
                         initial={{ y: 80, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         transition={{ type: 'spring', stiffness: 280, damping: 25 }}
@@ -2632,6 +2870,7 @@ export default function HarpiaApp() {
                       </motion.div>
                     </>
                   )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -2699,7 +2938,11 @@ export default function HarpiaApp() {
                     score={routeResult.score}
                     aiAnalysis={routeResult.aiAnalysis}
                     hybridAnalysis={routeResult.hybridAnalysis}
-                    onNavigate={() => setCurrentScreen('navigation')}
+                    liveBulletin={routeResult.liveBulletin || liveBulletinData}
+                    onNavigate={() => {
+                      setActualRouteStartTime(prev => prev || Date.now());
+                      setCurrentScreen('navigation');
+                    }}
                     isLoading={false}
                     onShowInvoice={handleShowInvoice}
                     isSimulating={isSimulating}
@@ -2725,8 +2968,63 @@ export default function HarpiaApp() {
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               className="h-full flex flex-col relative overflow-hidden"
             >
-              <div className="relative flex-1" id="tutorial-target-step-4">
+              <div className="relative flex-1">
                  <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
+                 
+                 {/* Floating Background Incident Polling Alert Toast */}
+                 <AnimatePresence>
+                   {activeIncidentToast && (
+                     <motion.div
+                       initial={{ opacity: 0, y: -30, scale: 0.95 }}
+                       animate={{ opacity: 1, y: 0, scale: 1 }}
+                       exit={{ opacity: 0, y: -30, scale: 0.95 }}
+                       className="absolute top-16 left-1/2 -translate-x-1/2 z-[4500] max-w-lg w-[92%] bg-slate-950/95 backdrop-blur-xl border-2 border-rose-500/80 rounded-3xl p-4 shadow-[0_10px_40px_rgba(244,63,94,0.35)] text-white"
+                     >
+                       <div className="flex items-start gap-3">
+                         <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400 shrink-0">
+                           <AlertTriangle className="w-5 h-5 animate-bounce" />
+                         </div>
+                         <div className="flex-1 text-xs">
+                           <div className="flex items-center justify-between mb-1">
+                             <span className="text-[10px] uppercase font-black tracking-wider text-rose-400 flex items-center gap-1.5">
+                               <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                               Alerta de Polling em Tempo Real
+                             </span>
+                             {lastBgPollTime && (
+                               <span className="text-[9px] text-slate-400 font-mono">Checado às {lastBgPollTime}</span>
+                             )}
+                           </div>
+                           <p className="text-slate-200 font-medium leading-normal mb-2.5">
+                             {activeIncidentToast.bulletin}
+                           </p>
+                           <div className="flex items-center gap-2">
+                             <button
+                               onClick={() => {
+                                 setActiveIncidentToast(null);
+                                 setOptions(prev => ({
+                                   ...prev,
+                                   avoidFloods: true,
+                                   customPrompt: (prev.customPrompt || '') + ' Aplicar desvio por ocorrência detectada em tempo real.'
+                                 }));
+                                 setTimeout(() => runOptimization(), 100);
+                               }}
+                               className="px-3.5 py-2 bg-tech text-slate-950 rounded-xl font-black text-[11px] uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 shadow-[0_0_15px_rgba(209,160,84,0.4)]"
+                             >
+                               <Zap className="w-3.5 h-3.5" />
+                               <span>Aplicar Desvio Imediato</span>
+                             </button>
+                             <button
+                               onClick={() => setActiveIncidentToast(null)}
+                               className="px-3 py-2 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-xl font-bold text-[10.5px] uppercase transition-colors cursor-pointer"
+                             >
+                               Ignorar
+                             </button>
+                           </div>
+                         </div>
+                       </div>
+                     </motion.div>
+                   )}
+                 </AnimatePresence>
                  
                  {/* Top-Left Retractable Drawer Toggle Button ("Menu Ioiô") */}
                  <button
@@ -2741,6 +3039,40 @@ export default function HarpiaApp() {
                      <ChevronRight className="w-6 h-6 text-tech transition-transform group-hover:translate-x-0.5 animate-pulse" />
                    )}
                  </button>
+
+                 {/* Floating Top-Center Live Route Elapsed Time Clock */}
+                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1500] px-4 py-2 rounded-2xl bg-slate-950/95 backdrop-blur-md border border-tech/40 text-tech shadow-[0_8px_25px_rgba(0,0,0,0.6)] flex items-center gap-2.5 font-mono text-xs font-black">
+                   <Clock className="w-4 h-4 text-tech shrink-0 animate-spin" style={{ animationDuration: '8s' }} />
+                   <span className="text-slate-400 text-[10px] uppercase font-sans font-bold tracking-wider hidden sm:inline">Tempo Decorrido:</span>
+                   <span className="text-white text-sm font-black tracking-tight">{formatSecondsToClock(liveElapsedSeconds)}</span>
+                 </div>
+
+                 {/* Floating Top-Right Grounding Search Bulletin Pill */}
+                 <div className="absolute top-4 right-4 z-[1500] flex items-center gap-2">
+                   <button
+                     type="button"
+                     onClick={() => handleRequestLiveRerouteCheck()}
+                     disabled={isCheckingReroute}
+                     className="px-3.5 py-2.5 rounded-2xl bg-slate-950/90 backdrop-blur-md border border-emerald-500/40 text-emerald-400 hover:text-white hover:bg-emerald-950/80 shadow-[0_8px_25px_rgba(0,0,0,0.6)] flex items-center gap-2 transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer text-xs font-bold font-mono"
+                     title="Solicitar Análise em Tempo Real de Trânsito & Clima com Busca Grounded"
+                   >
+                     <span className="relative flex h-2.5 w-2.5">
+                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                     </span>
+                     {isCheckingReroute ? (
+                       <span className="flex items-center gap-1.5 text-tech animate-pulse">
+                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                         <span>Buscando...</span>
+                       </span>
+                     ) : (
+                       <span className="flex items-center gap-1.5">
+                         <Zap className="w-3.5 h-3.5 text-tech" />
+                         <span>Plantão / Desvio Tático</span>
+                       </span>
+                     )}
+                   </button>
+                 </div>
 
                  {/* Retractable Navigation Drawer */}
                  <AnimatePresence>
@@ -3116,13 +3448,18 @@ export default function HarpiaApp() {
                                   };
                                   
                                   const isLastStop = navIndex === routeResult.sequence.length - 1;
+                                  const endTime = Date.now();
+                                  const startTime = actualRouteStartTime || (latest?.date ? new Date(latest.date).getTime() : endTime - 900000);
+                                  const elapsedMs = Math.max(0, endTime - startTime);
                                   
                                   await db.routes.update(latest.id, { 
                                     status: isLastStop ? 'completed' : 'pending',
                                     sequence: updatedSequence,
                                     deliveryPhoto: deliveryPhoto,
                                     deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
-                                    completedAt: isLastStop ? new Date() : undefined
+                                    startedAt: new Date(startTime),
+                                    completedAt: isLastStop ? new Date(endTime) : undefined,
+                                    totalElapsedMs: isLastStop ? elapsedMs : undefined
                                   });
                                   
                                   setRouteResult((prev: any) => ({
@@ -3139,8 +3476,27 @@ export default function HarpiaApp() {
                                   setShowDeliveryModal(false);
 
                                   if (isLastStop) {
+                                    setActualRouteEndTime(endTime);
+                                    setTotalElapsedMs(elapsedMs);
+
+                                    const completedCount = updatedSequence.filter((s: any) => s.status === 'completed').length;
+                                    const failedCount = updatedSequence.filter((s: any) => s.status === 'failed').length;
+
+                                    setCompletedSummaryData({
+                                      startTimeStr: new Date(startTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                                      endTimeStr: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                                      elapsedMs,
+                                      elapsedFormatted: formatSecondsToClock(Math.floor(elapsedMs / 1000)),
+                                      totalStops: routeResult.sequence.length,
+                                      completedCount,
+                                      failedCount,
+                                      totalDistanceKm: (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4'),
+                                      vehicle: options.vehicle || 'van',
+                                      score: routeResult.score || 95
+                                    });
+
+                                    setShowRouteCompletedModal(true);
                                     setNavIndex(0);
-                                    setCurrentScreen('dashboard');
                                   } else {
                                     setNavIndex(navIndex + 1);
                                   }
@@ -3159,6 +3515,114 @@ export default function HarpiaApp() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+               {/* Modal de Conclusão de Rota com Tempo Total Decorrido */}
+               <AnimatePresence>
+                 {showRouteCompletedModal && (
+                   <motion.div
+                     initial={{ opacity: 0 }}
+                     animate={{ opacity: 1 }}
+                     exit={{ opacity: 0 }}
+                     className="fixed inset-0 z-[6000] bg-slate-950/85 backdrop-blur-xl flex items-center justify-center p-4"
+                     onClick={() => setShowRouteCompletedModal(false)}
+                   >
+                     <motion.div
+                       initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                       animate={{ scale: 1, opacity: 1, y: 0 }}
+                       exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                       transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                       className="bg-slate-950 border-2 border-emerald-500/60 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-[0_0_60px_rgba(16,185,129,0.25)] relative overflow-hidden"
+                       onClick={(e) => e.stopPropagation()}
+                     >
+                       {/* Subtle glowing ambient background effect */}
+                       <div className="absolute -top-24 -right-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+                       <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-tech/10 rounded-full blur-3xl pointer-events-none" />
+
+                       {/* Top Badge */}
+                       <div className="flex items-center justify-center mb-4">
+                         <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-500/50 flex items-center justify-center text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.35)]">
+                           <CheckCircle2 className="w-9 h-9 animate-bounce" />
+                         </div>
+                       </div>
+
+                       <div className="text-center mb-6">
+                         <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] uppercase font-black tracking-widest rounded-full">
+                           Rota Finalizada com Sucesso
+                         </span>
+                         <h3 className="font-display font-black text-2xl sm:text-3xl text-white mt-2">
+                           🎉 Percurso Concluído!
+                         </h3>
+                         <p className="text-xs text-slate-400 mt-1">
+                           Confira o resumo de desempenho e tempo total gasto durante a navegação.
+                         </p>
+                       </div>
+
+                       {/* Big Hero Total Elapsed Time Block */}
+                       <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-emerald-500/40 rounded-2xl p-5 mb-6 text-center relative shadow-inner">
+                         <span className="text-[10px] uppercase font-black tracking-widest text-emerald-400 flex items-center justify-center gap-1.5 mb-1">
+                           <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                           Tempo Total Decorrido de Rota
+                         </span>
+                         <div className="text-3xl sm:text-4xl font-black font-mono text-white tracking-tight my-1 drop-shadow-[0_0_12px_rgba(16,185,129,0.4)]">
+                           {completedSummaryData?.elapsedFormatted || '00m 00s'}
+                         </div>
+                         {completedSummaryData?.startTimeStr && completedSummaryData?.endTimeStr && (
+                           <p className="text-[11px] font-mono text-slate-400 mt-1">
+                             Início: <span className="text-slate-200 font-bold">{completedSummaryData.startTimeStr}</span> • Término: <span className="text-slate-200 font-bold">{completedSummaryData.endTimeStr}</span>
+                           </p>
+                         )}
+                       </div>
+
+                       {/* Operational Key Metrics Grid */}
+                       <div className="grid grid-cols-2 gap-3 mb-6">
+                         <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800 flex flex-col">
+                           <span className="text-[9.5px] uppercase font-bold text-slate-400">Entregas Concluídas</span>
+                           <span className="text-base font-black text-white font-mono mt-0.5">
+                             {completedSummaryData?.completedCount || 0} / {completedSummaryData?.totalStops || 0}
+                           </span>
+                           <span className="text-[9px] text-emerald-400 font-medium mt-0.5">
+                             {completedSummaryData?.totalStops ? Math.round(((completedSummaryData?.completedCount || 0) / completedSummaryData?.totalStops) * 100) : 100}% taxa de entrega
+                           </span>
+                         </div>
+
+                         <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800 flex flex-col">
+                           <span className="text-[9.5px] uppercase font-bold text-slate-400">Distância Total</span>
+                           <span className="text-base font-black text-white font-mono mt-0.5">
+                             {completedSummaryData?.totalDistanceKm || '0'} km
+                           </span>
+                           <span className="text-[9px] text-slate-400 font-medium mt-0.5">
+                             {options.vehicle || 'Veículo Padrão'}
+                           </span>
+                         </div>
+                       </div>
+
+                       {/* Action Buttons */}
+                       <div className="flex flex-col sm:flex-row gap-3">
+                         <button
+                           onClick={() => {
+                             setShowRouteCompletedModal(false);
+                             setCurrentScreen('dashboard');
+                           }}
+                           className="flex-1 py-3.5 px-4 bg-tech text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(209,160,84,0.3)] cursor-pointer flex items-center justify-center gap-2"
+                         >
+                           <LayoutDashboard className="w-4 h-4" />
+                           <span>Ver no Dashboard</span>
+                         </button>
+                         <button
+                           onClick={() => {
+                             setShowRouteCompletedModal(false);
+                             setCurrentScreen('home');
+                           }}
+                           className="py-3.5 px-4 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-bold text-xs uppercase tracking-wider rounded-xl border border-slate-800 transition-all cursor-pointer flex items-center justify-center gap-2"
+                         >
+                           <MapIcon className="w-4 h-4" />
+                           <span>Nova Rota</span>
+                         </button>
+                       </div>
+                     </motion.div>
+                   </motion.div>
+                 )}
+               </AnimatePresence>
 
                  {/* Active Stop Bottom Sheet following 6-level hierarchy */}
                  <ActiveStopBottomSheet
@@ -3385,20 +3849,44 @@ export default function HarpiaApp() {
                              if (navIndex < routeResult.sequence.length - 1) {
                                setNavIndex(navIndex + 1);
                              } else {
+                               const endTime = Date.now();
+                               let startTime = actualRouteStartTime;
                                try {
                                  const latest = await db.routes.toCollection().last();
                                  if (latest?.id) {
+                                   if (!startTime && latest.date) startTime = new Date(latest.date).getTime();
+                                   const elapsedMs = Math.max(0, endTime - (startTime || endTime - 900000));
                                    await db.routes.update(latest.id, {
                                      status: 'completed',
                                      sequence: updatedSequence,
-                                     completedAt: new Date()
+                                     startedAt: new Date(startTime || endTime - 900000),
+                                     completedAt: new Date(endTime),
+                                     totalElapsedMs: elapsedMs
                                    });
+                                   setActualRouteEndTime(endTime);
+                                   setTotalElapsedMs(elapsedMs);
+
+                                   const completedCount = updatedSequence.filter((s: any) => s.status === 'completed').length;
+                                   const failedCount = updatedSequence.filter((s: any) => s.status === 'failed').length;
+
+                                   setCompletedSummaryData({
+                                     startTimeStr: new Date(startTime || endTime - 900000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                                     endTimeStr: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                                     elapsedMs,
+                                     elapsedFormatted: formatSecondsToClock(Math.floor(elapsedMs / 1000)),
+                                     totalStops: routeResult.sequence.length,
+                                     completedCount,
+                                     failedCount,
+                                     totalDistanceKm: (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4'),
+                                     vehicle: options.vehicle || 'van',
+                                     score: routeResult.score || 95
+                                   });
+                                   setShowRouteCompletedModal(true);
                                  }
                                } catch (err) {
                                  console.error("Erro salvando falha final no Dexie:", err);
                                }
                                setNavIndex(0);
-                               setCurrentScreen('dashboard');
                              }
                              setShowFailureModal(false);
                            }}
@@ -3422,7 +3910,6 @@ export default function HarpiaApp() {
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className="h-full w-full"
-              id="tutorial-target-step-5"
             >
               <KpiDashboard activeRoute={routeResult} />
             </motion.div>
@@ -3438,233 +3925,9 @@ export default function HarpiaApp() {
               className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-16' : 'p-12'}`}
             >
               <div className="max-w-2xl mx-auto w-full">
-                <h1 className="text-4xl font-bold font-display mb-8">Preferências da Rota</h1>
+                <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
                 
                 <div className="space-y-8">
-                  {/* Right Section: Dynamic Logistics Configuration / Detalhes da Rota */}
-                  <div className="w-full flex flex-col gap-6">
-                    
-                    {/* Detalhes da Rota Section (Partida, Destino, Pausa, Salvar como padrão) */}
-                    <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40 space-y-6">
-                      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                        <h3 className="text-base font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
-                          <Settings className="w-5 h-5 text-tech" />
-                          <span>Detalhes da Rota</span>
-                        </h3>
-                        <span className="text-[10px] font-mono font-bold text-tech bg-tech/10 border border-tech/30 px-2.5 py-0.5 rounded-full uppercase">
-                          Configuração Ativa
-                        </span>
-                      </div>
-
-                      {/* SECTION 1: PARTIDA */}
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-black uppercase tracking-widest text-slate-400 px-1">
-                          Partida
-                        </span>
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
-                          {/* Row 1: Usar local atual */}
-                          <button
-                            type="button"
-                            onClick={handleUseCurrentGpsAsOrigin}
-                            disabled={isLocatingGps}
-                            className="w-full p-4 flex items-center justify-between hover:bg-slate-850/80 transition-colors cursor-pointer text-left group"
-                          >
-                            <div className="flex items-center gap-3 min-w-0 pr-2">
-                              <div className="p-2.5 rounded-xl bg-tech/10 border border-tech/30 text-tech shrink-0">
-                                <Navigation className={`w-4 h-4 fill-tech/20 ${isLocatingGps ? 'animate-spin' : ''}`} />
-                              </div>
-                              <div className="min-w-0">
-                                <span className="font-bold text-sm text-white block group-hover:text-tech transition-colors">
-                                  Usar local atual
-                                </span>
-                                <span className="text-[11px] text-slate-400 truncate block">
-                                  {addresses[0] || 'Buscando GPS em tempo real...'}
-                                </span>
-                              </div>
-                            </div>
-                            <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
-                          </button>
-
-                          {/* Row 2: Iniciar agora mesmo / Horário programado */}
-                          <div className="w-full p-4 flex items-center justify-between hover:bg-slate-850/80 transition-colors text-left group">
-                            <div className="flex items-center gap-3">
-                              <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400 shrink-0">
-                                <Clock className="w-4 h-4" />
-                              </div>
-                              <div>
-                                <span className="font-bold text-sm text-white block">
-                                  Iniciar agora mesmo
-                                </span>
-                                <span className="text-[11px] text-slate-400 block font-mono">
-                                  Horário programado: {routeStartTime || 'Agora'}
-                                </span>
-                              </div>
-                            </div>
-                            
-                            <input
-                              type="time"
-                              value={routeStartTime}
-                              onChange={(e) => setRouteStartTime(e.target.value)}
-                              className="bg-slate-950 border border-tech/50 text-tech font-mono font-bold text-xs px-2.5 py-1.5 rounded-xl outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all [color-scheme:dark]"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* SECTION 2: DESTINO */}
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-black uppercase tracking-widest text-slate-400 px-1">
-                          Destino
-                        </span>
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
-                          {/* Row 1: Destination Selection */}
-                          <div className="p-4 flex flex-col gap-3">
-                            <div className="flex items-center gap-3">
-                              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 shrink-0">
-                                <Flag className="w-4 h-4" />
-                              </div>
-                              <div>
-                                <span className="font-bold text-sm text-white block">
-                                  Ponto de Destino Final
-                                </span>
-                                <span className="text-[11px] text-slate-400 block">
-                                  {routeEndAddress ? `Retorno: ${routeEndAddress}` : 'Nenhum destino final fixo (encerra na última entrega)'}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => setRouteEndAddress('')}
-                                className={`p-2.5 rounded-xl border text-left text-xs font-bold transition-all cursor-pointer ${
-                                  !routeEndAddress ? 'bg-amber-500/15 border-amber-500 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.15)]' : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                                }`}
-                              >
-                                Nenhum destino (Encerrar na última entrega)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setRouteEndAddress(addresses[0] || 'Ponto de Origem / Depósito')}
-                                className={`p-2.5 rounded-xl border text-left text-xs font-bold transition-all cursor-pointer ${
-                                  routeEndAddress ? 'bg-amber-500/15 border-amber-500 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.15)]' : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                                }`}
-                              >
-                                Retornar ao local de partida (Garagem / Depósito)
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Row 2: Definir horário de término */}
-                          <div className="w-full p-4 flex items-center justify-between hover:bg-slate-850/80 transition-colors text-left group">
-                            <div className="flex items-center gap-3">
-                              <div className="p-2.5 rounded-xl bg-slate-800 text-slate-400 shrink-0">
-                                <Clock className="w-4 h-4" />
-                              </div>
-                              <div>
-                                <span className="font-bold text-sm text-white block">
-                                  Definir horário de término
-                                </span>
-                                <span className="text-[11px] text-slate-400 block font-mono">
-                                  {routeEndTime ? `Término limite: ${routeEndTime}` : 'Sem limite de horário estipulado'}
-                                </span>
-                              </div>
-                            </div>
-
-                            <input
-                              type="time"
-                              value={routeEndTime}
-                              onChange={(e) => setRouteEndTime(e.target.value)}
-                              className="bg-slate-950 border border-slate-750 text-slate-200 font-mono font-bold text-xs px-2.5 py-1.5 rounded-xl outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all [color-scheme:dark]"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* SECTION 3: PAUSA */}
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-black uppercase tracking-widest text-slate-400 px-1">
-                          Pausa
-                        </span>
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl overflow-hidden p-4 flex items-center justify-between flex-wrap gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 shrink-0">
-                              <Coffee className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <span className="font-bold text-sm text-white block">
-                                Adicionar pausa (Almoço / Descanso)
-                              </span>
-                              <span className="text-[11px] text-slate-400 block font-mono">
-                                {routeHasPause ? `Pausa programada: ${routePauseMinutes} min` : 'Nenhuma pausa inserida'}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-3">
-                            {routeHasPause && (
-                              <select
-                                value={routePauseMinutes}
-                                onChange={(e) => setRoutePauseMinutes(Number(e.target.value))}
-                                className="bg-slate-950 border border-emerald-500/50 text-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl outline-none cursor-pointer"
-                              >
-                                <option value={15}>15 min</option>
-                                <option value={30}>30 min</option>
-                                <option value={45}>45 min</option>
-                                <option value={60}>60 min</option>
-                              </select>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => setRouteHasPause(!routeHasPause)}
-                              className={`w-12 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${
-                                routeHasPause ? 'bg-emerald-500' : 'bg-slate-800'
-                              }`}
-                            >
-                              <div
-                                className={`w-5 h-5 rounded-full bg-slate-950 transition-transform shadow-md ${
-                                  routeHasPause ? 'translate-x-6' : 'translate-x-0'
-                                }`}
-                              />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* SECTION 4: SALVAR COMO PADRÃO */}
-                      <div className="pt-4 border-t border-slate-850 flex flex-col sm:flex-row items-center justify-between gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-300 hover:text-white transition-colors">
-                          <input
-                            type="checkbox"
-                            defaultChecked
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setApiWarning("Parâmetros de rota (partida, destino e pausas) salvos como padrão.");
-                              }
-                            }}
-                            className="w-4 h-4 rounded border-slate-800 bg-slate-900 text-tech focus:ring-tech cursor-pointer"
-                          />
-                          <span>Salvar como padrão para próximas rotas</span>
-                        </label>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setApiWarning("Preferências de rota atualizadas com sucesso!");
-                            setCurrentScreen('home');
-                          }}
-                          className="w-full sm:w-auto px-6 py-3 bg-tech text-slate-950 font-black text-xs uppercase tracking-widest rounded-xl hover:brightness-110 active:scale-98 transition-all shadow-[0_0_15px_rgba(0,242,255,0.25)] flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <Check className="w-4 h-4 stroke-[3px]" />
-                          Salvar Preferências
-                        </button>
-                      </div>
-                    </div>
-
-                  </div>
-
-
                   {/* 🔮 TUTORIAL GUIADO DE OPERAÇÃO DO APP */}
                   <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-tech/35 p-6 sm:p-8 rounded-[32px] shadow-[0_0_30px_rgba(209,160,84,0.1)] relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
@@ -3767,77 +4030,6 @@ export default function HarpiaApp() {
           )}
         </AnimatePresence>
       </main>
-
-      {/* HYBRID ROUTING PROMPT MODAL */}
-      {hybridPrompt && (
-        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl relative flex flex-col">
-            <div className="p-6 md:p-8 space-y-6">
-              <div className="w-12 h-12 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/30">
-                <Anchor className="w-6 h-6" />
-              </div>
-              
-              <div>
-                <h3 className="text-xl md:text-2xl font-black text-white font-display leading-tight mb-2">
-                  Transbordo Fluvial Necessário
-                </h3>
-                <p className="text-slate-400 text-sm md:text-base leading-relaxed">
-                  A rota contém trecho ({hybridPrompt.start} → {hybridPrompt.end}) que requer acesso fluvial. Deseja aplicar roteirização híbrida (Terrestre + Fluvial)?
-                </p>
-              </div>
-              
-              <div className="bg-slate-950/50 border border-slate-800 p-4 rounded-2xl space-y-3">
-                <div className="flex gap-3 items-center">
-                  <div className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 flex justify-center items-center font-bold text-[10px]">1</div>
-                  <span className="text-xs text-slate-300">Trecho terrestre até o porto mais próximo.</span>
-                </div>
-                <div className="flex gap-3 items-center">
-                  <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex justify-center items-center font-bold text-[10px]"><Anchor className="w-3 h-3" /></div>
-                  <span className="text-xs text-slate-300">Transbordo e travessia fluvial na bacia.</span>
-                </div>
-                <div className="flex gap-3 items-center">
-                  <div className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 flex justify-center items-center font-bold text-[10px]">3</div>
-                  <span className="text-xs text-slate-300">Navegação ou trecho terrestre final.</span>
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <button 
-                  onClick={() => setHybridPrompt(null)}
-                  className="flex-1 py-4 bg-slate-950 border border-slate-800 hover:bg-slate-800 rounded-2xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  Ignorar
-                </button>
-                <button 
-                  onClick={async () => {
-                    const newAddresses = [...addresses];
-                    
-                    const isStartFluvial = isFluvialOnly(hybridPrompt.start);
-                    
-                    let pEmb = "Porto da Ceasa (Balsas & Terminal), Manaus, AM";
-                    let pDesemb = "Porto do Careiro da Várzea, AM";
-
-                    if (isStartFluvial) {
-                       pEmb = "Porto de Iranduba, AM";
-                       pDesemb = "Porto de São Raimundo, Manaus, AM";
-                    }
-
-                    newAddresses.splice(hybridPrompt.endIdx, 0, pEmb, pDesemb);
-                    
-                    setAddresses(newAddresses);
-                    setHybridPrompt(null);
-                    
-                    setTimeout(() => runOptimization(newAddresses, true), 500);
-                  }}
-                  className="flex-1 py-4 bg-tech text-slate-950 border-none hover:brightness-110 rounded-2xl text-xs font-black uppercase tracking-wider transition-colors shadow-xl cursor-pointer"
-                >
-                  Aplicar Híbrido
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Universal Preview Invoice Modal (APEX Design & High Accessibility) */}
       <AnimatePresence>
@@ -4164,80 +4356,48 @@ export default function HarpiaApp() {
         </motion.button>
       )}
 
-      {/* Interactive Spotlight Highlight Overlay */}
-      <TutorialSpotlight activeStep={demoStep} active={showDemoAssistant && !demoMinimized} />
-
-      {/* Floating Tutorial Minimized Launcher */}
-      {showDemoAssistant && demoMinimized && (
-        <motion.button
-          initial={{ opacity: 0, scale: 0.8, y: 30 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
-          title="Retomar Tutorial"
-        >
-          <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
-          <span className="text-xs tracking-wide text-white/95">Retomar Tutorial ({demoStep}/5)</span>
-          <div className="bg-tech text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-mono">
-            {demoStep}
-          </div>
-        </motion.button>
-      )}
-
-      {/* Compact Interactive Tutorial Assistant Panel */}
       {showDemoAssistant && !demoMinimized && (
         <motion.div
           id="panel-demo-assistant"
           initial={{ opacity: 0, y: 30, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className={`fixed z-[10000] w-[calc(100vw-2rem)] md:w-[350px] bg-slate-950/98 backdrop-blur-xl rounded-2xl md:rounded-3xl border-2 border-tech/40 shadow-[0_20px_60px_rgba(0,242,255,0.25)] p-4 flex flex-col gap-3 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar ${
-            tutorialPos === 'bottom-right'
-              ? 'bottom-4 right-4 md:bottom-6 md:right-6'
-              : 'top-16 right-4 md:top-20 md:right-6'
-          }`}
+          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[85vh] overflow-y-auto custom-scrollbar"
         >
-          {/* Header with Progress Bar & Controls */}
-          <div className="flex flex-col gap-2 border-b border-white/10 pb-2.5">
+          {/* Cabeçalho com Barra de Progresso */}
+          <div className="flex flex-col gap-2.5 border-b border-white/10 pb-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-tech shrink-0 animate-spin" style={{ animationDuration: '6s' }} />
+                <Sparkles className="w-4 h-4 text-tech animate-bounce shrink-0" />
                 <div>
-                  <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Guia HARPIA</span>
+                  <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Guia Interativo HARPIA</span>
                   <span className="text-xs text-slate-200 font-bold">
-                    {demoStep === 0 ? 'Apresentação' : `Passo ${demoStep} de 5`}
+                    {demoStep === 0 ? 'Apresentação do Sistema' : `Passo ${demoStep} de 5`}
                   </span>
                 </div>
               </div>
               
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setTutorialPos(prev => prev === 'bottom-right' ? 'top-right' : 'bottom-right')}
-                  className="text-slate-400 hover:text-tech transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-lg cursor-pointer"
-                  title="Mover Card (Alternar posição Cima/Baixo)"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-slate-350" />
-                </button>
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => setDemoMinimized(true)}
-                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-lg cursor-pointer"
+                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
                   title="Minimizar (Ocultar para ver a tela)"
                 >
-                  <EyeOff className="w-3.5 h-3.5 text-slate-350" />
+                  <EyeOff className="w-4 h-4 text-slate-350" />
                 </button>
                 <button
                   onClick={() => {
                     setShowDemoAssistant(false);
                     setDemoStep(0);
                   }}
-                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-lg cursor-pointer"
+                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
                   title="Encerrar Tutorial"
                 >
-                  <XCircle className="w-3.5 h-3.5 text-slate-350" />
+                  <XCircle className="w-4 h-4 text-slate-350" />
                 </button>
               </div>
             </div>
 
-            {/* Step Progress Bar */}
+            {/* Indicator de passos com pontos e barra */}
             <div className="flex items-center gap-1.5 pt-0.5">
               <div className="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden border border-white/5">
                 <div 
@@ -4252,21 +4412,31 @@ export default function HarpiaApp() {
           </div>
 
           {demoStep === 0 && (
-            <div className="flex flex-col gap-2.5">
-              <h3 className="text-xs font-black text-white flex items-center gap-2">
+            <div className="flex flex-col gap-3">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
                 <span>🚀</span> Bem-vindo ao HARPIA!
               </h3>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                O <strong>HARPIA</strong> otimiza rotas de entregas com IA climática, telemetria e navegação GPS por voz.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                O <strong>HARPIA</strong> é a sua central logística inteligente de planejamento de rotas, telemetria, navegação por voz e monitoramento climático.
               </p>
-              <div className="bg-slate-900/90 p-2.5 rounded-xl border border-tech/20 text-[10.5px] text-slate-200 space-y-1.5 font-sans">
-                <p className="font-bold text-tech text-[10px] uppercase tracking-wider">💡 Roteiro em 5 passos:</p>
-                <div className="space-y-1 text-slate-300 text-[10.5px]">
-                  <p className="flex items-center gap-1.5"><span className="text-tech font-bold">1.</span> Paradas e horários limites</p>
-                  <p className="flex items-center gap-1.5"><span className="text-tech font-bold">2.</span> Perfil da Frota & Veículo</p>
-                  <p className="flex items-center gap-1.5"><span className="text-tech font-bold">3.</span> Algoritmo de Otimização VRP</p>
-                  <p className="flex items-center gap-1.5"><span className="text-tech font-bold">4.</span> Navegação GPS & Ocorrências</p>
-                  <p className="flex items-center gap-1.5"><span className="text-tech font-bold">5.</span> Comprovante Digital (POD) & Painel</p>
+              <div className="bg-slate-900/90 p-3 rounded-2xl border border-tech/20 text-[11px] text-slate-200 space-y-2 font-sans">
+                <p className="font-bold text-tech text-[10.5px] uppercase tracking-wider">💡 O que você vai aprender em 5 passos:</p>
+                <div className="space-y-1.5 text-slate-300 text-[11px]">
+                  <p className="flex items-center gap-1.5">
+                    <span className="text-tech font-bold">1.</span> Inserir paradas e definir horários limite
+                  </p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="text-tech font-bold">2.</span> Configurar veículos e parâmetros de custo/consumo
+                  </p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="text-tech font-bold">3.</span> Otimizar a rota com o motor VRP e IA climática
+                  </p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="text-tech font-bold">4.</span> Navegar com GPS e registrar ocorrências de campo
+                  </p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="text-tech font-bold">5.</span> Capturar comprovante de entrega (POD) e ver relatórios
+                  </p>
                 </div>
               </div>
               <button
@@ -4274,7 +4444,7 @@ export default function HarpiaApp() {
                   setDemoStep(1);
                   setCurrentScreen('home');
                 }}
-                className="w-full mt-0.5 bg-tech text-slate-950 font-black text-xs py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(0,242,255,0.25)] flex items-center justify-center gap-2"
+                className="w-full mt-1 bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)] flex items-center justify-center gap-2"
               >
                 <span>Iniciar Guia Passo a Passo</span>
                 <span>→</span>
@@ -4283,71 +4453,76 @@ export default function HarpiaApp() {
           )}
 
           {demoStep === 1 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 1 de 5</span>
-                <span className="text-tech">Paradas de Entrega</span>
+                <span className="text-tech">Entrada de Paradas</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📍</span> 1. Endereços & Importação
+                <span>📍</span> 1. Adicionar Endereços & Importação
               </h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                Insira locais manualmente ou importe dados das NFe para definir os destinos da rota.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Monte sua lista de entregas rapidamente na aba <strong>Planejamento</strong>:
               </p>
-              <div className="bg-slate-900 border border-white/5 p-2 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>🔍 Digitação Rápida:</strong> Busca inteligente com geocodificação.</p>
-                <p><strong>📄 Importar NFe:</strong> Associe notas fiscais e extraia os locais automaticamente.</p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
+                <p><strong>🔍 Digitação Rápida:</strong> Busque endereços integrados e atribua diretamente as paradas.</p>
+                <p><strong>📄 Leitor NFe Simulado:</strong> Consulte Notas Fiscais para extrair os locais da entrega rapidamente (Ex: digite "Aleixo").</p>
+                <p><strong>⏱️ Janela de Horários:</strong> Defina restrições de recebimento (ex: <i>"Recebe entre 08:00 e 11:00"</i>).</p>
+                <p><strong>🎯 Ordem Livre:</strong> Organize paradas que o motor da IA irá re-sequenciar da melhor forma.</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
                   onClick={() => setDemoStep(0)}
-                  className="px-2.5 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-[11px] rounded-xl hover:text-white"
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                 >
                   Voltar
                 </button>
                 <button
                   onClick={() => {
-                    setAddresses([
+                    const newAddresses = [
                       'CEASA, Manaus, AM',
                       'Centro, Manaus, AM',
                       'Adrianópolis, Manaus, AM',
                       'Compensa, Manaus, AM',
                       'BR-319, Manaus, AM'
-                    ]);
+                    ];
+                    setAddresses(newAddresses);
+                    setStopIds(newAddresses.map(() => crypto.randomUUID()));
                     setTimeWindows({
                       1: { start: '08:00', end: '11:00' },
                       2: { start: '13:00', end: '15:30' }
                     });
                     setDemoStep(2);
                   }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[10.5px] py-2 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                 >
-                  Carregar Exemplo & Avançar →
+                  Carregar Endereços de Exemplo & Avançar →
                 </button>
               </div>
             </div>
           )}
 
           {demoStep === 2 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 2 de 5</span>
-                <span className="text-tech">Veículo & Operação</span>
+                <span className="text-tech">Veículo & Restrições</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🚚</span> 2. Perfil de Transporte
+                <span>🚚</span> 2. Frota, Carga & Balança de Peso
               </h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                Ajuste os parâmetros de transporte para adequar a rota à sua operação.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Ajuste as configurações do seu transporte e requisitos dos clientes:
               </p>
-              <div className="bg-slate-900 border border-white/5 p-2 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>🚛 Modalidades:</strong> Escolha entre Van, Moto, Caminhão ou Barco.</p>
-                <p><strong>⚖️ Restrições:</strong> Pré-ajustes automáticos de capacidade e tempo.</p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
+                <p><strong>🚛 Perfil da Frota:</strong> Indique seu tipo de operação (Entregas Fracionadas, Delivery Rápido, Serviços Técnicos, etc).</p>
+                <p><strong>⚙️ Configuração Automática:</strong> O sistema pré-ajusta os pesos do VRP de acordo com a operação escolhida.</p>
+                <p><strong>🎯 Modos de Prioridade:</strong> Você pode forçar manualmente uma rota voltada para Menor Tempo, Menor Distância, Equilíbrio ou Segurança Máxima.</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
                   onClick={() => setDemoStep(1)}
-                  className="px-2.5 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-[11px] rounded-xl hover:text-white"
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                 >
                   Voltar
                 </button>
@@ -4356,7 +4531,7 @@ export default function HarpiaApp() {
                     setOptions(prev => ({ ...prev, vehicle: 'truck', priority: 'safety' }));
                     setDemoStep(3);
                   }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[10.5px] py-2 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                 >
                   Ajustar Frota & Avançar →
                 </button>
@@ -4365,25 +4540,27 @@ export default function HarpiaApp() {
           )}
 
           {demoStep === 3 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 3 de 5</span>
                 <span className="text-tech">Motor de Otimização</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🧮</span> 3. Otimização Inteligente
+                <span>🧮</span> 3. Otimização VRP & IA Climática
               </h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                O motor VRP re-sequencia as paradas minimizando tempo e distância.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                O motor matemático de roteamento encontra a sequência ideal:
               </p>
-              <div className="bg-slate-900 border border-white/5 p-2 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>⚡ Algoritmo VRP:</strong> Menor custo e emissão de carbono.</p>
-                <p><strong>🌧️ Prevenção IA:</strong> Evita áreas de alagamento em tempo real.</p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
+                <p><strong>⚡ Solver Matemático (VRP):</strong> Utiliza matriz de distância e tempo para calcular a sequência exata de menor custo e emissão.</p>
+                <p><strong>🌧️ Inteligência Hidrológica:</strong> Monitora previsão meteorológica (INMET) e bacias fluviais para evitar alagamentos e atoleiros.</p>
+                <p><strong>🤖 Diretivas Táticas de IA:</strong> Envie instruções em linguagem simples, como <i>&quot;Priorizar entregas comerciais de manhã e evitar a orla&quot;</i>.</p>
+                <p><strong>💬 Rota Explicada:</strong> A IA gera um resumo explicativo justificando o porquê daquela sequência de paradas.</p>
               </div>
               <div className="flex gap-2 mt-1">
                 <button
                   onClick={() => setDemoStep(2)}
-                  className="px-2.5 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-[11px] rounded-xl hover:text-white"
+                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                 >
                   Voltar
                 </button>
@@ -4399,31 +4576,33 @@ export default function HarpiaApp() {
                     ]);
                     setDemoStep(4);
                   }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[10.5px] py-2 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans flex items-center justify-center gap-1"
+                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans flex items-center justify-center gap-1.5"
                 >
-                  <span>⚡ Executar Otimização</span>
+                  <span>⚡ Executar Otimização da Rota</span>
                 </button>
               </div>
             </div>
           )}
 
           {demoStep === 4 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 4 de 5</span>
                 <span className="text-tech">Navegação & Campo</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🧭</span> 4. GPS & Telemetria
+                <span>🧭</span> 4. GPS por Voz & Operação Offline
               </h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                Modo de navegação para a cabine com orientação por voz e mapa HD.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Interface de navegação para a cabine do motorista:
               </p>
-              <div className="bg-slate-900 border border-white/5 p-2 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>🔊 Voz Curva-a-Curva:</strong> Instruções faladas e recálculo.</p>
-                <p><strong>📲 Modo Offline:</strong> Salva progresso no dispositivo sem sinal.</p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
+                <p><strong>🔊 GPS por Voz:</strong> Instruções faladas curva a curva com recálculo automático em caso de desvios.</p>
+                <p><strong>🗺️ Camadas de Mapa HD:</strong> Alterne entre Satélite HD, Ruas e Relevo Topográfico.</p>
+                <p><strong>📲 Funciona 100% Offline:</strong> Se perder o sinal nas rodovias, o app salva tudo localmente no dispositivo (IndexedDB) e sincroniza depois.</p>
+                <p><strong>⚠️ Reporte de Ocorrências:</strong> Registre alagamentos, acidentes ou bloqueios de pista em tempo real.</p>
               </div>
-              <div className="flex flex-col gap-1.5 mt-1">
+              <div className="flex flex-col gap-2 mt-1">
                 <button
                   onClick={async () => {
                     try {
@@ -4438,14 +4617,14 @@ export default function HarpiaApp() {
                       setApiWarning("OCORRÊNCIA REGISTRADA: Alerta salvo localmente no celular!");
                     } catch(e){}
                   }}
-                  className="w-full bg-slate-900/80 border border-amber-500/30 text-amber-400 hover:bg-slate-900 font-extrabold text-[9.5px] py-1.5 rounded-lg text-center cursor-pointer transition-colors"
+                  className="w-full bg-slate-900/80 border border-alert/30 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
                 >
-                  ⚠️ Testar Reporte de Ocorrência
+                  ⚠️ Testar Reporte de Ocorrência (Sinistro)
                 </button>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setDemoStep(3)}
-                    className="px-2.5 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-[11px] rounded-xl hover:text-white"
+                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                   >
                     Voltar
                   </button>
@@ -4455,7 +4634,7 @@ export default function HarpiaApp() {
                       setCurrentScreen('navigation');
                       setDemoStep(5);
                     }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[10.5px] py-2 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
+                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
                   >
                     Iniciar GPS de Navegação →
                   </button>
@@ -4465,22 +4644,23 @@ export default function HarpiaApp() {
           )}
 
           {demoStep === 5 && (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center text-[9px] text-slate-400 uppercase font-extrabold font-mono">
+            <div className="flex flex-col gap-2.5">
+              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
                 <span>Passo 5 de 5</span>
-                <span className="text-tech">Comprovação POD</span>
+                <span className="text-tech">Comprovação & Gestão</span>
               </div>
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📸</span> 5. Comprovante (POD) & Métricas
+                <span>📸</span> 5. Comprovante Digital (POD) & Painel
               </h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                Finalize entregas com registro fotográfico com carimbo de GPS.
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Conclusão de entregas e monitoramento gerencial:
               </p>
-              <div className="bg-slate-900 border border-white/5 p-2 rounded-xl text-[10px] text-slate-300 space-y-1 font-sans">
-                <p><strong>📸 Prova de Entrega:</strong> Foto com coordenadas e timestamp.</p>
-                <p><strong>📊 Relatórios:</strong> Acompanhe pontualidade e consumo no painel.</p>
+              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
+                <p><strong>📸 Comprovante Digital (POD):</strong> Capture foto do recebimento com carimbo de segurança (GPS, data e hora) gravado para auditoria.</p>
+                <p><strong>📊 Painel de Histórico:</strong> Acesse todas as rotas concluídas na aba Métricas para avaliar pontualidade.</p>
+                <p><strong>💰 Telemetria Logística:</strong> Visualize o gasto total estimado de combustível e tempo das operações diárias.</p>
               </div>
-              <div className="flex flex-col gap-1.5 mt-1">
+              <div className="flex flex-col gap-2 mt-1">
                 <button
                   onClick={() => {
                     const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
@@ -4488,14 +4668,14 @@ export default function HarpiaApp() {
                     setDeliveryNotes("Mercadoria entregue em perfeito estado sob fiscalização.");
                     setShowDeliveryModal(true);
                   }}
-                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[9.5px] py-1.5 rounded-lg text-center cursor-pointer transition-colors"
+                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
                 >
-                  📷 Testar Comprovante POD
+                  📷 Abrir Câmera / Comprovante POD de Teste
                 </button>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setDemoStep(4)}
-                    className="px-2.5 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-[11px] rounded-xl hover:text-white"
+                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
                   >
                     Voltar
                   </button>
@@ -4530,9 +4710,9 @@ export default function HarpiaApp() {
                       setShowDemoAssistant(false);
                       setDemoStep(0);
                     }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[10.5px] py-2 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(0,242,255,0.25)]"
+                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
                   >
-                    🎉 Finalizar Guia
+                    🎉 Finalizar Guia & Usar o App
                   </button>
                 </div>
               </div>
@@ -4540,6 +4720,228 @@ export default function HarpiaApp() {
           )}
         </motion.div>
       )}
+
+      
+      <AnimatePresence>
+        {showHybridModal && (
+          <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fadeIn">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative overflow-hidden text-white"
+            >
+              <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
+              <div className="flex flex-col items-center text-center gap-3">
+                <div className="w-14 h-14 rounded-2xl bg-tech/10 border border-tech/30 flex items-center justify-center text-tech mb-1 shadow-[0_0_20px_rgba(209,160,84,0.3)]">
+                  <Ship className="w-7 h-7" />
+                </div>
+                <h2 className="text-xl font-bold font-display text-white">Rota Multimodal Detectada</h2>
+                <p className="text-xs text-slate-300">
+                  Esta rota integra trecho terrestre até o porto, travessia fluvial por embarcação e trecho terrestre final.
+                </p>
+
+                {/* Etapas */}
+                <div className="w-full bg-slate-950/60 rounded-2xl p-3.5 text-left space-y-2.5 border border-slate-800 text-xs">
+                  <div className="flex items-center gap-3">
+                    <Truck className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span className="text-slate-300"><strong>Etapa 1:</strong> Terrestre (Origem → Porto de Embarque)</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Ship className="w-4 h-4 text-tech shrink-0 animate-pulse" />
+                    <span className="text-slate-300"><strong>Etapa 2:</strong> Fluvial (Porto → Porto via Lancha/Balsa)</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Truck className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span className="text-slate-300"><strong>Etapa 3:</strong> Terrestre (Porto → Destino Final)</span>
+                  </div>
+                </div>
+
+                {/* Plantão Fluvial em Tempo Real com Busca Grounded */}
+                <div className="w-full bg-slate-950/80 border border-emerald-500/30 rounded-2xl p-3.5 text-left text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      Plantão Fluvial & Portos
+                    </span>
+                    <span className="text-[9px] text-emerald-400 font-mono font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">Google Search</span>
+                  </div>
+
+                  {isFetchingFluvialBulletin ? (
+                    <div className="py-3 flex items-center gap-2 text-slate-400 text-xs font-mono">
+                      <RefreshCw className="w-3.5 h-3.5 text-tech animate-spin" />
+                      <span>Consultando condições dos rios, balsas e atracadouros...</span>
+                    </div>
+                  ) : fluvialBulletin ? (
+                    <div className="space-y-2">
+                      <p className="text-slate-200 text-[11px] leading-relaxed font-medium">
+                        {fluvialBulletin.bulletin}
+                      </p>
+                      {fluvialBulletin.groundingSources && fluvialBulletin.groundingSources.length > 0 && (
+                        <div className="pt-1.5 border-t border-slate-800/80 flex flex-wrap gap-1.5 items-center">
+                          <span className="text-[9px] text-slate-400 uppercase font-bold">Fontes da Busca:</span>
+                          {fluvialBulletin.groundingSources.map((src: any, idx: number) => (
+                            <a
+                              key={idx}
+                              href={src.uri}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[9.5px] text-tech underline hover:text-white transition-colors truncate max-w-[140px] inline-block"
+                              title={src.title}
+                            >
+                              {src.title || `Notícia ${idx + 1}`}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-[11px]">Condições fluviais monitoradas. Portos e atracadouros operacionais.</p>
+                  )}
+                </div>
+
+                <div className="flex gap-3 w-full mt-2">
+                  <button
+                    onClick={() => setShowHybridModal(false)}
+                    className="py-3 px-4 bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-slate-700 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowHybridModal(false);
+                      setOptions(prev => ({ 
+                        ...prev, 
+                        isHybrid: true,
+                        avoidFloods: fluvialBulletin?.hasIncident ? true : prev.avoidFloods 
+                      }));
+                      setTimeout(() => runOptimization(), 100);
+                    }}
+                    className="flex-1 py-3 bg-tech text-slate-950 rounded-xl text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(209,160,84,0.4)] hover:brightness-110 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Ship className="w-4 h-4" />
+                    <span>{fluvialBulletin?.hasIncident ? 'Gerar Rota Fluvial com Desvio' : 'Gerar Rota Híbrida'}</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showRerouteAnalysisModal && (
+          <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fadeIn">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative overflow-hidden text-white"
+            >
+              <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-3xl rounded-full pointer-events-none" />
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                    <Zap className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold font-display text-white">Análise do Plantão & Desvio Tático</h2>
+                    <p className="text-[10px] text-emerald-400 font-mono font-bold uppercase tracking-wider">Busca em Tempo Real · Google Grounding</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowRerouteAnalysisModal(false)}
+                  className="w-8 h-8 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white hover:border-slate-700 transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {isCheckingReroute ? (
+                <div className="py-8 flex flex-col items-center justify-center text-center gap-3">
+                  <RefreshCw className="w-8 h-8 text-tech animate-spin" />
+                  <p className="text-xs font-bold text-slate-300">Consultando motores de busca em tempo real sobre ocorrências e interdições na rota...</p>
+                  <span className="text-[10px] text-slate-500 font-mono">Pesquisando alertas de trânsito, acidentes e clima...</span>
+                </div>
+              ) : rerouteAnalysisResult ? (
+                <div className="space-y-4">
+                  {rerouteAnalysisResult.hasIncident ? (
+                    <div className="p-3.5 bg-rose-950/60 border border-rose-500/40 rounded-2xl flex items-start gap-3 text-rose-200 text-xs">
+                      <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 animate-bounce" />
+                      <div>
+                        <strong className="text-rose-300 uppercase font-black tracking-wider block mb-0.5">Alerta de Ocorrência Detectado!</strong>
+                        <span>Foram reportados problemas recentes (alagamento/acidente/interdição) no trecho. Recomenda-se aplicar o desvio tático do VRP.</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 bg-emerald-950/50 border border-emerald-500/30 rounded-2xl flex items-start gap-3 text-emerald-200 text-xs">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="text-emerald-300 uppercase font-black tracking-wider block mb-0.5">Trecho Fluído sem Bloqueios Graves</strong>
+                        <span>O monitoramento em tempo real não indicou paralisações críticas na via neste instante.</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 text-xs text-slate-200 leading-relaxed max-h-48 overflow-y-auto custom-scrollbar">
+                    <p className="font-medium">{rerouteAnalysisResult.bulletin}</p>
+                  </div>
+
+                  {rerouteAnalysisResult.groundingSources && rerouteAnalysisResult.groundingSources.length > 0 && (
+                    <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/80">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block mb-1.5">Fontes de Notícias / Trânsito Grounded:</span>
+                      <div className="flex flex-col gap-1 max-h-24 overflow-y-auto custom-scrollbar">
+                        {rerouteAnalysisResult.groundingSources.map((src: any, idx: number) => (
+                          <a
+                            key={idx}
+                            href={src.uri}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-tech underline hover:text-white transition-colors truncate flex items-center gap-1.5"
+                          >
+                            <Globe className="w-3 h-3 text-tech shrink-0" />
+                            <span className="truncate">{src.title || src.uri}</span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+                    <button
+                      onClick={() => {
+                        setShowRerouteAnalysisModal(false);
+                        setOptions(prev => ({
+                          ...prev,
+                          avoidFloods: true,
+                          customPrompt: (prev.customPrompt || '') + ' Evitar trecho com acidentes e alagamentos reportados no plantão recente.'
+                        }));
+                        setTimeout(() => runOptimization(), 100);
+                      }}
+                      className="flex-1 py-3 bg-tech text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-[0_0_20px_rgba(209,160,84,0.4)] hover:brightness-110 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Zap className="w-4 h-4" />
+                      <span>Aplicar Desvio Tático</span>
+                    </button>
+                    <button
+                      onClick={() => handleRequestLiveRerouteCheck()}
+                      className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      title="Atualizar busca agora"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-tech" />
+                      <span>Re-checar</span>
+                    </button>
+                    <button
+                      onClick={() => setShowRerouteAnalysisModal(false)}
+                      className="py-3 px-4 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-400 hover:text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                    >
+                      Manter
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Quick Start Vehicle Profile Selection Modal */}
       <AnimatePresence>

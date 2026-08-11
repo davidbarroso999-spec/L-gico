@@ -10,6 +10,8 @@ export interface Route {
   deliveryPhoto?: string;
   deliveryNotes?: string;
   completedAt?: Date;
+  startedAt?: Date;
+  totalElapsedMs?: number;
   name?: string;
   scheduledDate?: string;
   scheduledTime?: string;

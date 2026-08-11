@@ -143,3 +143,26 @@ export async function getGeminiAnalysis(input: any) {
     return "Rota otimizada pelo solver matemático VRP com base nos dados reais de trânsito e restrições.";
   }
 }
+
+export async function fetchLiveBulletin(locations: string[], task?: string, currentRouteSummary?: string) {
+  try {
+    const res = await fetch('/api/ai/live-bulletin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locations, task, currentRouteSummary })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn("Error fetching live bulletin:", err);
+  }
+  return {
+    success: false,
+    bulletin: "Plantão do Trânsito HARPIA: Monitoramento ativo das vias em tempo real.",
+    hasIncident: false,
+    groundingSources: [],
+    timestamp: new Date().toISOString()
+  };
+}
+

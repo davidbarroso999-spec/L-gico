@@ -14,6 +14,7 @@ interface SidebarProps {
   score: number;
   aiAnalysis?: string;
   hybridAnalysis?: any;
+  liveBulletin?: any;
   onNavigate: () => void;
   isLoading: boolean;
   onShowInvoice?: (idx: number) => void;
@@ -35,6 +36,7 @@ export default function Sidebar({
   score, 
   aiAnalysis, 
   hybridAnalysis,
+  liveBulletin,
   onNavigate, 
   isLoading,
   onShowInvoice,
@@ -847,6 +849,39 @@ export default function Sidebar({
                           <p className="text-[10px] text-slate-300 leading-relaxed line-clamp-2">
                             {hybridAnalysis.description}
                           </p>
+                        </div>
+                      )}
+
+                      {/* Plantão do Trânsito, Clima e Ocorrências com Busca ao Vivo */}
+                      {liveBulletin && liveBulletin.bulletin && (
+                        <div className="p-3 bg-slate-900/90 border border-emerald-500/30 rounded-2xl relative overflow-hidden">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[9px] uppercase tracking-wider font-extrabold text-emerald-400 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                              Plantão em Tempo Real
+                            </span>
+                            <span className="text-[8.5px] text-emerald-400/80 font-mono font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/20">Google Grounding</span>
+                          </div>
+                          <p className="text-[10px] text-slate-200 leading-normal">
+                            {liveBulletin.bulletin}
+                          </p>
+                          {liveBulletin.groundingSources && liveBulletin.groundingSources.length > 0 && (
+                            <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex flex-wrap gap-1.5 items-center">
+                              <span className="text-[8px] text-slate-400 uppercase font-bold">Fontes da Busca:</span>
+                              {liveBulletin.groundingSources.map((src: any, idx: number) => (
+                                <a
+                                  key={idx}
+                                  href={src.uri}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[8.5px] text-tech underline hover:text-white transition-colors truncate max-w-[130px] inline-block"
+                                  title={src.title}
+                                >
+                                  {src.title || `Notícia ${idx + 1}`}
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
