@@ -52,7 +52,7 @@ Informa explicitamente se há algum obstáculo real ou risco que justifica desvi
 Forneça um boletim objetivo de 2 a 3 frases em Português do Brasil com o estado atual das vias, alerta meteorológico/hidrológico recente e recomendações operacionais para motoristas e navegadores.`;
     }
 
-    const modelSequence = ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-1.5-flash"];
+    const modelSequence = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
     let responseText = "";
     let groundingSources: { title: string; uri: string }[] = [];
     let success = false;
