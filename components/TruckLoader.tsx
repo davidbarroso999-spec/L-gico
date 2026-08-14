@@ -48,7 +48,6 @@ export default function TruckLoader() {
           right: -50%;
           border-radius: 3px;
           animation: roadAnimation 1s linear infinite;
-          box-shadow: 0 0 10px rgba(209,160,84,0.5);
         }
         .road::after {
           content: "";
@@ -66,7 +65,7 @@ export default function TruckLoader() {
           bottom: 0;
           right: -90%;
           height: 80px;
-          width: 5px;
+          width: 4px;
           background: #334155; /* slate-700 */
           border-radius: 2px;
           animation: roadAnimation 1.5s linear infinite;
@@ -74,21 +73,21 @@ export default function TruckLoader() {
         .lampLight {
           position: absolute;
           top: 0;
-          right: -15px;
-          width: 25px;
-          height: 5px;
+          right: -12px;
+          width: 20px;
+          height: 4px;
           background: #334155;
           border-radius: 2px;
         }
         .lampGlow {
           position: absolute;
-          top: 5px;
-          right: -12px;
-          width: 15px;
-          height: 15px;
+          top: 4px;
+          right: -10px;
+          width: 8px;
+          height: 8px;
           background: #D1A054;
           border-radius: 50%;
-          box-shadow: 0 0 20px 8px rgba(209, 160, 84, 0.4);
+          opacity: 0.8;
         }
         @keyframes roadAnimation {
           0% { transform: translateX(0px); }
@@ -101,15 +100,15 @@ export default function TruckLoader() {
           <div className="lampGlow"></div>
         </div>
         <div className="truckBody text-tech">
-          <Truck className="w-24 h-24 fill-slate-900 stroke-tech drop-shadow-[0_0_15px_rgba(209, 160, 84,0.3)]" strokeWidth={1.5} />
+          <Truck className="w-20 h-20 fill-slate-900 stroke-tech" strokeWidth={1.5} />
         </div>
-        <div className="road shadow-[0_0_15px_rgba(209, 160, 84,0.2)]"></div>
+        <div className="road"></div>
       </div>
-      <p className="text-tech text-sm tracking-widest uppercase font-black animate-pulse shadow-tech/50 drop-shadow-md">
+      <p className="text-tech text-sm tracking-wider uppercase font-bold">
         Calculando a Rota Mais Eficiente
       </p>
-      <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest mt-2 animate-pulse delay-75">
-        Otimizando a frota...
+      <p className="text-slate-400 text-xs mt-1.5 font-medium">
+        Processando matriz de distâncias e otimizando paradas...
       </p>
     </div>
   );

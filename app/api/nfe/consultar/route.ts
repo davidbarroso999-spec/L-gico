@@ -40,7 +40,7 @@ ATENÇÃO EXTREMA:
 5. Extraia um resumo curto dos principais itens em uma frase (Ex: "Monitores Gamer, Teclados e fones de ouvido").`;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-1.5-flash',
           contents: [
             {
               inlineData: {
@@ -156,7 +156,7 @@ ${textDescription}
 """`;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-1.5-flash',
           contents: prompt,
           config: {
             responseMimeType: 'application/json',

@@ -16,7 +16,7 @@ export async function POST(req: Request) {
       // High-fidelity fallback simulated bulletin if API key is not present
       return NextResponse.json({
         success: true,
-        bulletin: "Plantão do Trânsito & Clima (Modo Seguro): Vias principais com fluxo constante. Chuvas isoladas previstas para a região metropolitana.",
+        bulletin: "Monitoramento do Trânsito & Clima (Modo Seguro): Vias principais com fluxo constante. Chuvas isoladas previstas para a região metropolitana.",
         hasIncident: false,
         incidentType: 'nenhum',
         groundingSources: [
@@ -39,26 +39,27 @@ export async function POST(req: Request) {
     let prompt = "";
     if (task === 'FLUVIAL_CHECK') {
       prompt = `Pesquise notícias em tempo real, boletins da Marinha/Capitania dos Portos, estado de funcionamento de balsas/lanchas, cota dos rios e tempestades nos portos e travessias fluviais entre: ${locationList}.
-Forneça um boletim objetivo de Plantão Fluvial HARPIA (2 a 3 frases) em Português do Brasil indicando se a navegabilidade está normal, se há ventos fortes/banzeiro ou atrasos nos atracadouros.`;
+Forneça um boletim objetivo de Status Fluvial HARPIA (2 a 3 frases) em Português do Brasil indicando se a navegabilidade está normal, se há ventos fortes/banzeiro ou atrasos nos atracadouros.`;
     } else if (task === 'REROUTE_CHECK') {
       prompt = `Pesquise notícias em tempo real e ocorrências recentes (hoje) sobre o trânsito, acidentes, protestos, interdições ou alagamentos no trecho entre e perto de: ${locationList}.
 Contexto atual da rota: ${currentRouteSummary || 'Navegação ativa'}.
 
-Responda em tom de Plantão do Trânsito e Logística HARPIA (máximo 2 a 3 frases em Português do Brasil).
+Responda em tom de Monitoramento do Trânsito e Logística HARPIA (máximo 2 a 3 frases em Português do Brasil).
 Informa explicitamente se há algum obstáculo real ou risco que justifica desvio de rota imediato.`;
     } else {
-      prompt = `Atue como um boletim de plantão tático logístico e pesquise informações atualizadas em tempo real sobre trânsito, acidentes, obras, alagamentos, previsão do tempo e cota de rios no Amazonas para as seguintes localidades: ${locationList}.
+      prompt = `Atue como um boletim de monitoramento logístico e pesquise informações atualizadas em tempo real sobre trânsito, acidentes, obras, alagamentos, previsão do tempo e cota de rios no Amazonas para as seguintes localidades: ${locationList}.
 
 Forneça um boletim objetivo de 2 a 3 frases em Português do Brasil com o estado atual das vias, alerta meteorológico/hidrológico recente e recomendações operacionais para motoristas e navegadores.`;
     }
 
-    const modelSequence = ["gemini-3.5-flash", "gemini-3.6-flash"];
+    const modelSequence = ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-1.5-flash"];
     let responseText = "";
     let groundingSources: { title: string; uri: string }[] = [];
     let success = false;
 
     for (const modelName of modelSequence) {
       try {
+        // First try with Google Search grounding
         const response = await ai.models.generateContent({
           model: modelName,
           contents: prompt,
@@ -87,12 +88,31 @@ Forneça um boletim objetivo de 2 a 3 frases em Português do Brasil com o estad
           break;
         }
       } catch (err: any) {
-        console.warn(`[Live Bulletin Grounding] Model ${modelName} error:`, err?.message || err);
+        const isQuota = err?.message?.includes("429") || err?.message?.includes("RESOURCE_EXHAUSTED") || err?.status === 429;
+        if (!isQuota) {
+          console.warn(`[Live Bulletin Grounding] Model ${modelName} warning:`, err?.message || err);
+        }
+        
+        // Try fallback without search tool for this model if search failed
+        try {
+          const fallbackResp = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: { temperature: 0.4 }
+          });
+          if (fallbackResp && fallbackResp.text) {
+            responseText = fallbackResp.text;
+            success = true;
+            break;
+          }
+        } catch {
+          // Continue to next model in sequence
+        }
       }
     }
 
     if (!success || !responseText) {
-      responseText = "Plantão do Trânsito HARPIA: Monitoramento contínuo das vias em Manaus e trechos fluviais. Sem bloqueios críticos registrados nos motores de busca neste instante.";
+      responseText = "Boletim de Trânsito HARPIA: Monitoramento contínuo das vias em Manaus e trechos fluviais. Sem bloqueios críticos registrados nos motores de busca neste instante.";
       groundingSources = [
         { title: "Monitoramento em Tempo Real HARPIA", uri: "https://immu.manaus.am.gov.br" }
       ];
@@ -127,7 +147,7 @@ Forneça um boletim objetivo de 2 a 3 frases em Português do Brasil com o estad
     console.error("Error in live-bulletin route:", error);
     return NextResponse.json({
       success: false,
-      bulletin: "Plantão do Trânsito HARPIA: Monitoramento ativo das vias. Tráfego sem relatos de anomalias graves.",
+      bulletin: "Boletim de Trânsito HARPIA: Monitoramento ativo das vias. Tráfego sem relatos de anomalias graves.",
       hasIncident: false,
       incidentType: 'nenhum',
       groundingSources: [],

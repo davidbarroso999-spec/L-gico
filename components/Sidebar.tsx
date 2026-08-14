@@ -15,6 +15,9 @@ interface SidebarProps {
   aiAnalysis?: string;
   hybridAnalysis?: any;
   liveBulletin?: any;
+  priorityExplanation?: string;
+  sameAsOtherPriorities?: boolean;
+  priority?: string;
   onNavigate: () => void;
   isLoading: boolean;
   onShowInvoice?: (idx: number) => void;
@@ -37,6 +40,9 @@ export default function Sidebar({
   aiAnalysis, 
   hybridAnalysis,
   liveBulletin,
+  priorityExplanation,
+  sameAsOtherPriorities,
+  priority,
   onNavigate, 
   isLoading,
   onShowInvoice,
@@ -805,7 +811,7 @@ export default function Sidebar({
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 15 }}
                     transition={{ duration: 0.2 }}
-                    className="px-6 py-4 flex flex-col gap-4 h-full select-none justify-between"
+                    className="px-6 py-4 pb-20 flex flex-col gap-4 h-full select-none justify-between"
                   >
                     <div className="flex flex-col gap-3">
                       {/* Quick details */}
@@ -835,6 +841,19 @@ export default function Sidebar({
                           </span>
                           <p className="text-[10px] text-slate-300 leading-normal italic line-clamp-2">
                             &quot;{aiAnalysis}&quot;
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Priority Impact / Explanation */}
+                      {priorityExplanation && (
+                        <div className={`p-3 rounded-2xl border relative overflow-hidden ${sameAsOtherPriorities ? 'bg-slate-900/60 border-slate-800 text-slate-300' : 'bg-tech/10 border-tech/30 text-amber-200'}`}>
+                          <span className="text-[9px] uppercase tracking-wider font-extrabold text-tech flex items-center gap-1.5 mb-1">
+                            <Zap className="w-3 h-3 text-tech" />
+                            {sameAsOtherPriorities ? 'Traçado Ideal Absoluto' : 'Impacto da Prioridade Selecionada'}
+                          </span>
+                          <p className="text-[10px] leading-relaxed">
+                            {priorityExplanation}
                           </p>
                         </div>
                       )}
@@ -1139,7 +1158,7 @@ export default function Sidebar({
                     </div>
 
                     {/* Sticky primary action docked bottom trigger */}
-                    <div className="px-6 py-4 border-t border-slate-900 bg-slate-950 shrink-0 absolute bottom-0 left-0 right-0 z-10 flex flex-col gap-2">
+                    <div className="px-6 py-4 pb-20 border-t border-slate-900 bg-slate-950 shrink-0 absolute bottom-0 left-0 right-0 z-10 flex flex-col gap-2">
                       <button 
                         onClick={onNavigate}
                         className="w-full bg-tech hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_5px_15px_rgba(209,160,84,0.3)] cursor-pointer text-xs uppercase tracking-wider font-sans font-extrabold"
@@ -1228,14 +1247,29 @@ export default function Sidebar({
           </div>
         )}
 
+        {/* Priority Impact & Note */}
+        {priorityExplanation && (
+          <div className={`p-3 rounded-2xl border space-y-1 ${sameAsOtherPriorities ? 'bg-slate-900/60 border-slate-800 text-slate-300' : 'bg-tech/10 border-tech/30 text-amber-200'}`}>
+            <div className="flex items-center justify-between text-[9px] uppercase tracking-widest font-black text-tech">
+              <span className="flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-tech" />
+                {sameAsOtherPriorities ? 'Traçado Ideal Absoluto' : 'Impacto de Prioridade'}
+              </span>
+            </div>
+            <p className="text-[10.5px] leading-relaxed">
+              {priorityExplanation}
+            </p>
+          </div>
+        )}
+
         {/* Action CTAs */}
         <div className="space-y-2">
           <button 
             onClick={onNavigate}
-            className="w-full bg-gradient-to-r from-amber-500 to-amber-400 hover:brightness-110 active:scale-[0.98] transition-all text-slate-950 font-black py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-[0_4px_20px_rgba(245,158,11,0.25)] text-xs uppercase tracking-wider cursor-pointer"
+            className="w-full bg-tech hover:brightness-105 active:scale-[0.99] transition-all text-slate-950 font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 text-xs uppercase tracking-wider cursor-pointer shadow-sm"
             disabled={stops.length === 0}
           >
-            <Navigation className="w-4 h-4 fill-current animate-pulse" />
+            <Navigation className="w-4 h-4 fill-current" />
             Iniciar Navegação ({stops.length} Paradas)
             <ChevronRight className="w-4 h-4" />
           </button>
@@ -1244,7 +1278,7 @@ export default function Sidebar({
             {onStartSimulation && (
               <button
                 onClick={onStartSimulation}
-                className="bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850 py-2.5 rounded-xl flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-wider font-extrabold transition-all cursor-pointer"
+                className="bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 py-2.5 rounded-xl flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold transition-all cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-tech" />
                 Simular
@@ -1254,7 +1288,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={handleExportPDF}
-              className="bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850 py-2.5 rounded-xl flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-wider font-extrabold transition-all cursor-pointer"
+              className="bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 py-2.5 rounded-xl flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold transition-all cursor-pointer"
               disabled={stops.length === 0}
             >
               <FileText className="w-3.5 h-3.5 text-slate-400" />

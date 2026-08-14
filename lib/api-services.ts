@@ -197,6 +197,33 @@ export async function getTrafficIncidents(points: [number, number][]) {
   }
 }
 
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function generateFallbackMatrix(locations: [number, number][]) {
+  const size = locations.length;
+  const distances = Array(size).fill(0).map(() => Array(size).fill(0));
+  const durations = Array(size).fill(0).map(() => Array(size).fill(0));
+  
+  for (let i = 0; i < size; i++) {
+    for (let j = 0; j < size; j++) {
+      if (i === j) continue;
+      const dKm = calculateDistance(locations[i][0], locations[i][1], locations[j][0], locations[j][1]);
+      distances[i][j] = Math.round(dKm * 1000); // meters
+      durations[i][j] = Math.round(dKm * 120); // seconds (~30 km/h with routing coefficient)
+    }
+  }
+  return { distances, durations, isFallback: true };
+}
+
 export async function getMatrix(locations: [number, number][], profile: string = 'driving-car', preference: string = 'fastest', engine?: string) {
   // AI-Powered Hybrid Matrix Consolidation
   // Fetch from Google Maps and OpenRouteService in parallel, then merge the matrix by extracting the most efficient values
@@ -213,7 +240,12 @@ export async function getMatrix(locations: [number, number][], profile: string =
               payload: { locations, preference }
             })
           });
-          if (res.ok) return await res.json();
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.distances && data.durations) {
+              return data;
+            }
+          }
         } catch (err) {
           console.warn('Google Maps Matrix failed in hybrid consolidation:', err);
         }
@@ -236,10 +268,12 @@ export async function getMatrix(locations: [number, number][], profile: string =
           });
           if (res.ok) {
             const data = await res.json();
-            return {
-              distances: data.distances,
-              durations: data.durations
-            };
+            if (data && data.distances && data.durations) {
+              return {
+                distances: data.distances,
+                durations: data.durations
+              };
+            }
           }
         } catch (err) {
           console.warn('OpenRouteService Matrix failed in hybrid consolidation:', err);
@@ -275,9 +309,9 @@ export async function getMatrix(locations: [number, number][], profile: string =
       return { distances, durations, hybridConsolidated: true };
     }
 
-    if (gmapsResult) return gmapsResult;
-    if (orsResult) return orsResult;
-    throw new Error('All primary matrix providers returned null');
+    if (gmapsResult && gmapsResult.distances && gmapsResult.durations) return gmapsResult;
+    if (orsResult && orsResult.distances && orsResult.durations) return orsResult;
+    throw new Error('All primary matrix providers returned null or invalid data');
 
   } catch (error) {
     console.warn('Hybrid Matrix Consolidation failed, trying ORS fallback...', error);
@@ -294,11 +328,18 @@ export async function getMatrix(locations: [number, number][], profile: string =
           }
         })
       });
-      return await res.json();
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.distances && data.durations) {
+          return data;
+        }
+      }
     } catch (orsError) {
       console.error('All matrix providers failed (including ORS):', orsError);
     }
-    return null;
+    
+    console.warn('Generating straight-line coordinate fallback matrix for resilience...');
+    return generateFallbackMatrix(locations);
   }
 }
 

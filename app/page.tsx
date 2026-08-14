@@ -67,9 +67,11 @@ import {
   Store,
   Building2,
   PackageCheck,
-  Globe
+  Globe,
+  Sliders,
+  List,
+  ArrowLeft
 } from 'lucide-react';
-import Sidebar from '@/components/Sidebar';
 import QuickStartVehicleProfile, { VehicleWorkProfile } from '@/components/QuickStartVehicleProfile';
 import RouteDetailsModal from '@/components/RouteDetailsModal';
 import ActiveStopBottomSheet from '@/components/ActiveStopBottomSheet';
@@ -155,8 +157,8 @@ import { useIsMobile } from '@/hooks/use-mobile';
 
 export default function HarpiaApp() {
   const isMobile = useIsMobile();
-  const [isMenuBallOpen, setIsMenuBallOpen] = useState(false);
-  const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'result' | 'navigation' | 'dashboard' | 'settings'>('home');
+  const [isBottomMenuExpanded, setIsBottomMenuExpanded] = useState(false);
+  const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'navigation' | 'dashboard' | 'settings'>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -249,8 +251,13 @@ export default function HarpiaApp() {
   const [showSlogan, setShowSlogan] = useState(false);
   const [showPlanet, setShowPlanet] = useState(false);
   const [showAppContent, setShowAppContent] = useState(false);
+  const [skipAnimation, setSkipAnimation] = useState(false);
   const [demoStep, setDemoStep] = useState(0);
   const [demoMinimized, setDemoMinimized] = useState(false);
+
+  useEffect(() => {
+    // Animation will play on every load for presentation purposes
+  }, []);
 
   const triggerImmediateReveal = () => {
     setShowSlogan(true);
@@ -527,29 +534,37 @@ export default function HarpiaApp() {
   useEffect(() => {
     let timer: any;
     if (currentScreen === 'navigation' && actualRouteStartTime) {
-      setLiveElapsedSeconds(Math.floor((Date.now() - actualRouteStartTime) / 1000));
-      timer = setInterval(() => {
+      const updateClock = () => {
         setLiveElapsedSeconds(Math.floor((Date.now() - actualRouteStartTime) / 1000));
-      }, 1000);
+      };
+      updateClock();
+      timer = setInterval(updateClock, 1000);
     }
     return () => clearInterval(timer);
   }, [currentScreen, actualRouteStartTime]);
 
   useEffect(() => {
     if (routeResult?.liveBulletin) {
-      setLiveBulletinData(routeResult.liveBulletin);
+      const bulletin = routeResult.liveBulletin;
+      const timeout = setTimeout(() => {
+        setLiveBulletinData(bulletin);
+      }, 0);
+      return () => clearTimeout(timeout);
     }
   }, [routeResult]);
 
   // Automatic live search check for Fluvial Modal when opened
   useEffect(() => {
     if (showHybridModal) {
-      setIsFetchingFluvialBulletin(true);
-      const portLocations = ['Porto de Ceasa, Manaus, AM', 'Porto do Careiro, AM', 'Travessia Fluvial Rio Negro e Solimões'];
-      fetchLiveBulletin(portLocations, 'FLUVIAL_CHECK')
-        .then(res => setFluvialBulletin(res))
-        .catch(err => console.warn('Fluvial bulletin fetch error:', err))
-        .finally(() => setIsFetchingFluvialBulletin(false));
+      const timer = setTimeout(() => {
+        setIsFetchingFluvialBulletin(true);
+        const portLocations = ['Porto de Ceasa, Manaus, AM', 'Porto do Careiro, AM', 'Travessia Fluvial Rio Negro e Solimões'];
+        fetchLiveBulletin(portLocations, 'FLUVIAL_CHECK')
+          .then(res => setFluvialBulletin(res))
+          .catch(err => console.warn('Fluvial bulletin fetch error:', err))
+          .finally(() => setIsFetchingFluvialBulletin(false));
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [showHybridModal]);
 
@@ -1136,7 +1151,7 @@ export default function HarpiaApp() {
       const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
       setRouteResult(result);
       
-      const startTime = Date.now();
+      const startTime = new Date().getTime();
       setActualRouteStartTime(startTime);
       setActualRouteEndTime(null);
       setTotalElapsedMs(null);
@@ -1465,7 +1480,7 @@ export default function HarpiaApp() {
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            className="fixed top-6 left-1/2 -translate-x-1/2 z-[9000] w-[92%] max-w-lg bg-slate-950/95 backdrop-blur-2xl border-2 border-amber-500/70 text-white rounded-2xl p-4 shadow-[0_15px_50px_rgba(245,158,11,0.4)] flex flex-col gap-3"
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[9000] w-[92%] max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl bg-slate-950/95 backdrop-blur-2xl border-2 border-amber-500/70 text-white rounded-2xl p-4 shadow-[0_15px_50px_rgba(245,158,11,0.4)] flex flex-col gap-3"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">
@@ -1513,107 +1528,368 @@ export default function HarpiaApp() {
         )}
       </AnimatePresence>
 
-      {/* Dynamic Floating Menu Ball Navigation System - Unified for Desktop & Mobile */}
+      {/* Retractable Bottom Navigation Bar System - Unified for Desktop & Mobile & Navigation Mode */}
       <AnimatePresence>
-        {showAppContent && (currentScreen as string) !== 'navigation' && (
+        {showAppContent && (
           <motion.div 
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className={`fixed top-6 ${(currentScreen as string) === 'navigation' ? 'left-24 z-[1300]' : 'left-6 z-[5000]'} flex flex-col items-start transition-all duration-300`}
+            initial={{ y: 80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 80, opacity: 0 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            className={`fixed bottom-0 left-0 right-0 ${currentScreen === 'navigation' ? 'z-[1300]' : 'z-[4000]'} flex flex-col items-center pointer-events-none select-none px-3 sm:px-6`}
           >
-            {/* The Menu Ball itself */}
-            <motion.button
-              onClick={() => setIsMenuBallOpen(!isMenuBallOpen)}
-              className="w-16 h-16 rounded-full bg-slate-900/95 border-2 border-tech/80 text-[#D1A054] hover:text-white shadow-[0_0_25px_rgba(209,160,84,0.3)] hover:shadow-[0_0_35px_rgba(209,160,84,0.5)] flex flex-col items-center justify-center cursor-pointer select-none transition-all duration-300 hover:scale-105 active:scale-95 group relative overflow-hidden"
-              whileTap={{ scale: 0.92 }}
+            {/* Background backdrop blur sheet that expands vertically */}
+            <motion.div
+              layout
+              animate={{ 
+                height: isBottomMenuExpanded ? 'auto' : 56,
+              }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="w-full max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl pointer-events-auto bg-slate-950/95 backdrop-blur-2xl shadow-[0_-12px_45px_rgba(0,0,0,0.9)] flex flex-col overflow-hidden max-h-[85vh] relative rounded-t-2xl border-x border-b border-slate-850/80"
+              style={{
+                clipPath: isBottomMenuExpanded 
+                  ? 'polygon(0% 0px, 50% 12px, 100% 0px, 100% 100%, 0% 100%)' 
+                  : 'polygon(0% 12px, 50% 0px, 100% 12px, 100% 100%, 0% 100%)',
+                transition: 'clip-path 0.3s ease'
+              }}
             >
-              {/* Animated Background ripple effect */}
-              <div className="absolute inset-0 bg-tech/5 group-hover:bg-tech/10 transition-colors" />
-              <motion.div 
-                className="font-mono text-[9px] font-black tracking-widest leading-none z-10 flex flex-col items-center justify-center gap-1"
-                animate={{ rotate: isMenuBallOpen ? 180 : 0 }}
-                transition={{ type: "spring", stiffness: 200, damping: 15 }}
-              >
-                {isMenuBallOpen ? (
-                  <X className="w-5 h-5 text-tech" />
-                ) : (
-                  <>
-                    <Menu className="w-4 h-4 text-tech group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] tracking-widest text-[#D1A054]">MENU</span>
-                  </>
-                )}
-              </motion.div>
-            </motion.button>
-
-            {/* Expanded Rectangular Tabs container */}
-            <AnimatePresence>
-              {isMenuBallOpen && (
-                <motion.div
-                  initial="collapsed"
-                  animate="expanded"
-                  exit="collapsed"
-                  variants={{
-                    expanded: { transition: { staggerChildren: 0.08 } },
-                    collapsed: { transition: { staggerChildren: 0.04, staggerDirection: -1 } }
-                  }}
-                  className="flex flex-col gap-3 mt-4 w-56 p-1.5 bg-slate-950/80 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] z-[2005]"
+              {/* Luminous Chevron Accent Line (160° obtuse angle dynamic arrow contour) */}
+              <div className="absolute top-0 left-0 right-0 h-4 pointer-events-none z-20">
+                <svg 
+                  viewBox="0 0 100 12" 
+                  preserveAspectRatio="none" 
+                  className="w-full h-full overflow-visible drop-shadow-[0_0_8px_rgba(245,204,132,0.85)] drop-shadow-[0_0_16px_rgba(209,160,84,0.45)]"
                 >
-                  {[
-                    { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
-                    ...(routeResult ? [
-                      { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
-                    ] : []),
-                    { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
-                    { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
-                    { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
-                  ].map((tab) => {
-                    const isActive = tab.id === 'tutorial' ? showDemoAssistant && !demoMinimized : currentScreen === tab.id;
-                    const Icon = tab.icon;
+                  <path 
+                    d={isBottomMenuExpanded ? "M 0 0 L 50 12 L 100 0" : "M 0 12 L 50 0 L 100 12"} 
+                    fill="none" 
+                    stroke="#f5cc84" 
+                    strokeWidth="2.2" 
+                    vectorEffect="non-scaling-stroke"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="transition-all duration-300"
+                  />
+                </svg>
+              </div>
 
-                    return (
-                      <motion.button
-                        key={tab.id}
-                        onClick={() => {
-                          if (tab.id === 'tutorial') {
-                            setShowDemoAssistant(true);
-                            setDemoStep(0);
-                            setDemoMinimized(false);
-                            setIsMenuBallOpen(false);
-                            setCurrentScreen('home');
-                          } else {
-                            setCurrentScreen(tab.id as any);
-                            setIsMenuBallOpen(false);
-                          }
-                        }}
-                        variants={{
-                          collapsed: { x: -30, opacity: 0, scale: 0.95 },
-                          expanded: { x: 0, opacity: 1, scale: 1 }
-                        }}
-                        transition={{ type: "spring", stiffness: 350, damping: 25 }}
-                        className={`w-full p-3 border text-left flex items-center gap-3 transition-all cursor-pointer relative group ${
-                          isActive 
-                            ? 'bg-tech text-slate-950 border-tech shadow-[0_0_20px_rgba(209,160,84,0.25)] font-black' 
-                            : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-300 hover:text-white hover:border-tech/40'
-                        }`}
+              {/* Header / Trigger Strip - Centered 'MENU' Only */}
+              <div 
+                className="w-full h-14 pt-2.5 px-6 flex items-center justify-center cursor-pointer shrink-0 select-none hover:bg-slate-900/40 transition-colors group relative"
+                onClick={() => setIsBottomMenuExpanded(!isBottomMenuExpanded)}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <span className="text-sm sm:text-base font-black tracking-[0.3em] text-slate-100 uppercase transition-colors group-hover:text-tech">
+                    Menu
+                  </span>
+                </div>
+              </div>
+
+              {/* Expanded Menu Content Area */}
+              <AnimatePresence>
+                {isBottomMenuExpanded && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="w-full overflow-y-auto custom-scrollbar p-3 sm:p-4.5 space-y-3.5 max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl mx-auto border-t border-slate-850/60"
+                  >
+                    {/* Context 1: When in Active Navigation Screen - Direct Telemetry & Full Stops List */}
+                    {currentScreen === 'navigation' && routeResult?.sequence ? (
+                      <div className="space-y-4">
+                        {/* Top Live Telemetry Bar with Back Button */}
+                        <div className="p-4 bg-gradient-to-r from-slate-900/95 via-slate-900/85 to-slate-950 border border-tech/30 rounded-2xl shadow-inner">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsBottomMenuExpanded(false);
+                                  setCurrentScreen('home');
+                                }}
+                                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-700 hover:border-tech/40 text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0 shadow-sm"
+                                title="Voltar ao Planejamento"
+                              >
+                                <ArrowLeft className="w-4 h-4 text-tech" />
+                                <span className="hidden sm:inline">Voltar</span>
+                              </button>
+
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[9px] font-mono font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                                    GPS Ativo
+                                  </span>
+                                  <span className="text-xs font-bold text-white">
+                                    Parada {navIndex + 1} de {routeResult.sequence.length}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-slate-100 font-bold truncate max-w-xl">
+                                  {routeResult.sequence[navIndex]?.name || routeResult.sequence[navIndex]?.address?.split(',')[0] || 'Parada sem nome'}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Telemetry Stats Pills */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="bg-slate-950/90 px-3 py-1.5 rounded-xl border border-slate-800 text-center min-w-[70px]">
+                                <span className="text-[8px] uppercase font-mono text-slate-400 block">Tempo Est.</span>
+                                <span className="text-xs font-mono font-black text-emerald-400">
+                                  {Math.round((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.duration || 900) / 60)} min
+                                </span>
+                              </div>
+                              <div className="bg-slate-950/90 px-3 py-1.5 rounded-xl border border-slate-800 text-center min-w-[70px]">
+                                <span className="text-[8px] uppercase font-mono text-slate-400 block">Distância</span>
+                                <span className="text-xs font-mono font-black text-white">
+                                  {((routeResult?.segments?.[Math.max(navIndex - 1, 0)]?.distance || 2500) / 1000).toFixed(1)} km
+                                </span>
+                              </div>
+                              <div className="bg-slate-950/90 px-3 py-1.5 rounded-xl border border-slate-800 text-center min-w-[70px]">
+                                <span className="text-[8px] uppercase font-mono text-slate-400 block">Decorrido</span>
+                                <span className="text-xs font-mono font-black text-tech">
+                                  {formatSecondsToClock(liveElapsedSeconds)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Quick Action Buttons */}
+                          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsBottomMenuExpanded(false);
+                                  setIsReporting(true);
+                                }}
+                                className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>Reportar Ocorrência</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsBottomMenuExpanded(false);
+                                  setFailureReason('Destinatário Ausente');
+                                  setFailureNotes('');
+                                  setShowFailureModal(true);
+                                }}
+                                className="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>Insucesso</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsBottomMenuExpanded(false);
+                                  if (navIndex === 0) {
+                                    setNavIndex(1);
+                                  } else {
+                                    setShowDeliveryModal(true);
+                                    setDeliveryPhoto(null);
+                                    setDeliveryNotes('');
+                                    startWebcam();
+                                  }
+                                }}
+                                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
+                                <span>Registrar Entrega</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Full Width Stops List */}
+                        <div className="w-full bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 flex flex-col">
+                          <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+                            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                              <List className="w-3.5 h-3.5 text-tech" />
+                              Todas as Paradas ({routeResult.sequence.length})
+                            </span>
+                            <span className="text-[9.5px] font-mono text-tech">
+                              {navIndex} concluídas • {routeResult.sequence.length - navIndex} pendentes
+                            </span>
+                          </div>
+
+                          <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                            {routeResult.sequence.map((stop: any, idx: number) => {
+                              const isCurrent = idx === navIndex;
+                              const isDone = idx < navIndex;
+                              return (
+                                <div
+                                  key={idx}
+                                  onClick={() => setNavIndex(idx)}
+                                  className={`p-3 rounded-xl border flex items-center justify-between text-xs transition-all cursor-pointer ${
+                                    isCurrent
+                                      ? 'bg-tech/15 border-tech text-white font-bold shadow-sm'
+                                      : isDone
+                                      ? 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:bg-slate-900/40'
+                                      : 'bg-slate-950/70 border-slate-800/80 text-slate-300 hover:bg-slate-900 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <span
+                                      className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 ${
+                                        isCurrent
+                                          ? 'bg-tech text-slate-950'
+                                          : isDone
+                                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                          : 'bg-slate-800 text-slate-400'
+                                      }`}
+                                    >
+                                      {idx + 1}
+                                    </span>
+                                    <div className="flex flex-col min-w-0">
+                                      <span className={`truncate text-xs ${isDone ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+                                        {stop.name || stop.address?.split(',')[0]}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 truncate font-mono">
+                                        {stop.address}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {isDone && <Check className="w-4 h-4 text-emerald-400" />}
+                                    {isCurrent && (
+                                      <span className="px-2 py-0.5 rounded bg-tech/20 text-tech text-[8px] uppercase font-mono font-bold">
+                                        Em Foco
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    ) : routeResult ? (
+                      /* Context 2: When outside Navigation but a Route is Calculated/Active */
+                      <div className="p-4 bg-slate-900/80 border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsBottomMenuExpanded(false);
+                              setCurrentScreen('home');
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-700 hover:border-tech/40 text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <ArrowLeft className="w-3.5 h-3.5 text-tech" />
+                            <span>Voltar ao Planejamento</span>
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsBottomMenuExpanded(false);
+                              setActualRouteStartTime(prev => prev || Date.now());
+                              setCurrentScreen('navigation');
+                            }}
+                            className="px-4 py-2.5 rounded-xl bg-tech text-slate-950 font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-sm hover:brightness-105 active:scale-95 transition-all cursor-pointer"
+                          >
+                            <Navigation className="w-3.5 h-3.5 fill-current" />
+                            <span>Iniciar / Retomar GPS</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Navigation Modules Grid (Horizontal / Multi-column layout) */}
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block mb-2 px-1">
+                        Módulos do Sistema
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                        {[
+                          { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
+                          { id: 'route_details', label: 'Detalhes da Rota', icon: Sliders, desc: 'Custos, Horários e Veículo' },
+                          ...(routeResult ? [
+                            { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
+                          ] : []),
+                          { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
+                          { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
+                          { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
+                        ].map((tab) => {
+                          const isActive = tab.id === 'tutorial' 
+                            ? (showDemoAssistant && !demoMinimized) 
+                            : tab.id === 'route_details'
+                            ? showRouteDetailsModal
+                            : currentScreen === tab.id;
+                          const Icon = tab.icon;
+
+                          return (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => {
+                                setIsBottomMenuExpanded(false);
+                                if (tab.id === 'tutorial') {
+                                  setShowDemoAssistant(true);
+                                  setDemoStep(0);
+                                  setDemoMinimized(false);
+                                  setCurrentScreen('home');
+                                } else if (tab.id === 'route_details') {
+                                  setShowRouteDetailsModal(true);
+                                } else {
+                                  setCurrentScreen(tab.id as any);
+                                }
+                              }}
+                              className={`p-3.5 rounded-2xl border text-left flex flex-col justify-between gap-2.5 transition-all cursor-pointer group min-h-[90px] ${
+                                isActive 
+                                  ? 'bg-tech text-slate-950 border-tech font-bold shadow-sm' 
+                                  : 'bg-slate-900/60 hover:bg-slate-900/90 border-slate-800 text-slate-300 hover:text-white'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between w-full">
+                                <div className={`p-2 rounded-xl ${isActive ? 'bg-slate-950/15 text-slate-950' : 'bg-slate-950/50 text-tech group-hover:bg-tech/10 transition-colors'}`}>
+                                  <Icon className="w-5 h-5 shrink-0" />
+                                </div>
+                                {isActive && (
+                                  <span className="w-2 h-2 rounded-full bg-slate-950" />
+                                )}
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <span className={`text-xs uppercase tracking-wider font-extrabold leading-tight ${isActive ? 'text-slate-950' : 'text-slate-100'}`}>
+                                  {tab.label}
+                                </span>
+                                <span className={`text-[9px] truncate mt-0.5 font-medium ${isActive ? 'text-slate-900/80' : 'text-slate-400 group-hover:text-slate-300'}`}>
+                                  {tab.desc}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Quick System Shortcuts and Controls */}
+                    <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-850/80 text-xs text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9.5px] uppercase font-mono text-slate-400">HARPIA Logística</span>
+                        <span className="text-slate-700">•</span>
+                        <span className="text-[9.5px] text-slate-400">Tempo Real Ativo</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsBottomMenuExpanded(false)}
+                        className="text-[10px] uppercase font-bold text-tech hover:underline cursor-pointer flex items-center gap-1"
                       >
-                        <div className={`p-2 rounded-lg ${isActive ? 'bg-slate-950/10' : 'bg-slate-950/50 group-hover:bg-tech/10 group-hover:text-tech transition-colors'}`}>
-                          <Icon className="w-5 h-5 shrink-0" />
-                        </div>
-                        <div className="flex flex-col min-w-0">
-                          <span className={`text-[11px] uppercase tracking-wider font-extrabold leading-none ${isActive ? 'text-slate-950' : 'text-slate-200'}`}>
-                            {tab.label}
-                          </span>
-                          <span className={`text-[8.5px] truncate mt-0.5 font-medium ${isActive ? 'text-slate-900/70' : 'text-slate-500 group-hover:text-slate-400'}`}>
-                            {tab.desc}
-                          </span>
-                        </div>
-                      </motion.button>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                        Recolher Barra
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1628,7 +1904,7 @@ export default function HarpiaApp() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -20, scale: 0.98 }}
               transition={{ duration: 0.6, type: 'spring', stiffness: 100, damping: 20 }}
-              className={`h-full w-full flex flex-col items-center max-w-6xl mx-auto px-4 sm:px-6 overflow-y-auto overflow-x-hidden custom-scrollbar ${!showAppContent ? 'justify-center py-0' : (isMobile ? 'pt-20 pb-16' : 'py-12')}`}
+              className={`h-full w-full flex flex-col max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-12 xl:px-24 overflow-y-auto overflow-x-hidden custom-scrollbar ${!showAppContent ? 'items-center justify-center py-0' : (isMobile ? 'items-stretch pt-16 pb-28' : 'items-stretch py-8 pb-28')}`}
             >
               {/* Hero Logo Animation Section */}
               <motion.div 
@@ -1657,8 +1933,10 @@ export default function HarpiaApp() {
                     <div className="relative w-[90vw] max-w-[400px] sm:max-w-[500px] md:max-w-[650px] lg:max-w-[800px] xl:max-w-[950px] mx-auto aspect-square @container">
                       <HarpiaTextEffect 
                         speed={1.4} 
-                        className="w-full h-auto text-white drop-shadow-[0_0_15px_rgba(209,160,84,0.4)] z-10" 
+                        skipAnimation={skipAnimation}
+                        className="w-full h-auto text-white z-10" 
                         onAnimationComplete={() => {
+                          if (skipAnimation) return;
                           // Step 1: Reveal Slogan & Globe while centered
                           setShowSlogan(true);
                           setShowPlanet(true);
@@ -1683,7 +1961,7 @@ export default function HarpiaApp() {
                             transition={{ duration: 0.6, ease: "easeOut" }}
                           >
                             <p 
-                              className="font-medium text-[#D1A054] uppercase text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] leading-none whitespace-nowrap" 
+                              className="font-medium text-[#D1A054] uppercase text-center leading-none whitespace-nowrap" 
                               style={{ 
                                 fontSize: '1.7cqw', 
                                 letterSpacing: '0.08em',
@@ -1721,7 +1999,7 @@ export default function HarpiaApp() {
                         <span className="text-[9px] font-bold uppercase tracking-[0.2em] opacity-80 group-hover:opacity-100 transition-opacity">
                           Explorar Rotas
                         </span>
-                        <ChevronDown className="w-4 h-4 animate-bounce opacity-60 group-hover:opacity-100 transition-opacity" />
+                        <ChevronDown className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
                       </button>
                     </motion.div>
                   )}
@@ -1736,41 +2014,32 @@ export default function HarpiaApp() {
                     initial={{ opacity: 0, y: 40 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="w-full max-w-4xl mx-auto flex flex-col gap-6 md:gap-8 mb-12"
+                    className="w-full max-w-7xl xl:max-w-[1400px] mx-auto flex flex-col gap-6 md:gap-10 mb-12"
                   >
                 {/* Left Section: Itinerary inputs and Main Planning */}
                 <div className="w-full flex flex-col gap-6">
                   {/* Main Planning Card */}
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[40px] shadow-2xl relative h-fit flex flex-col border border-slate-800/40">
+                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[32px] relative h-fit flex flex-col border border-slate-800">
                   <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                     <MapIcon className="w-32 h-32" />
                   </div>
 
-                  {/* Quick Action Control Bar (Adapted from layout screenshots) */}
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-800/60">
+                  {/* Quick Action Control Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-850">
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => setShowQuickStartModal(true)}
-                        className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-amber-500/20 to-teal-500/20 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-white text-xs font-black transition-all flex items-center gap-2 cursor-pointer shadow-md hover:scale-[1.02] active:scale-95"
+                        className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-200 hover:text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                       >
-                        <Sparkles className="w-4 h-4 text-amber-400 animate-pulse shrink-0" />
+                        <Sparkles className="w-3.5 h-3.5 text-tech shrink-0" />
                         <span>Início Rápido</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setShowRouteDetailsModal(true)}
-                        className="px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-95"
-                      >
-                        <Settings className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                        <span>Detalhes da Rota</span>
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
-                      <Truck className="w-3.5 h-3.5 text-amber-400" />
-                      <span className="text-[11px] font-black uppercase text-slate-300 tracking-wider">
+                    <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-850 text-slate-300">
+                      <Truck className="w-3.5 h-3.5 text-tech" />
+                      <span className="text-[11px] font-semibold text-slate-300">
                         {vehicleProfile === 'packages' && 'Pacotes / Encomendas'}
                         {vehicleProfile === 'food_delivery' && 'Pedidos de Comida'}
                         {vehicleProfile === 'services' && 'Prestação de Serviços'}
@@ -1780,45 +2049,8 @@ export default function HarpiaApp() {
                     </div>
                   </div>
 
-                  {/* Value Proposition Delivery Banner (Adapted from layout screenshot) */}
-                  {showDeliveryBanner && (
-                    <div className="relative mb-6 p-4 md:p-5 rounded-2xl bg-slate-950/90 border border-slate-800/80 overflow-hidden shadow-xl flex items-center justify-between gap-4">
-                      {/* Abstract Vector Map Nodes Background */}
-                      <div className="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]" />
-
-                      <div className="relative z-10 flex items-start gap-3.5">
-                        <div className="p-3 rounded-2xl bg-gradient-to-br from-teal-500/20 to-amber-500/20 border border-teal-500/30 text-teal-300 shrink-0 shadow-lg">
-                          <PackageCheck className="w-6 h-6 text-teal-300 animate-bounce" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-950/60 border border-amber-900/40 px-2 py-0.5 rounded">
-                              Otimização Avançada
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-mono">Harpia Logix</span>
-                          </div>
-                          <h4 className="text-sm md:text-base font-black text-white mt-1 font-display">
-                            Criado especialmente para entregas
-                          </h4>
-                          <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">
-                            Economize até 30% de combustível e tempo organizando paradas por CEP, janela de atendimento e geolocalização exata.
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setShowDeliveryBanner(false)}
-                        className="text-slate-500 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-850 cursor-pointer shrink-0 z-10"
-                        title="Fechar aviso"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-
-                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2.5 font-display border-b border-slate-850 pb-4 flex-wrap">
-                    <div className="w-2.5 h-2.5 rounded-full bg-tech shadow-[0_0_10px_rgba(209,160,84,0.5)] shrink-0" />
+                  <h3 className="text-lg font-bold mb-5 flex items-center gap-2 font-display border-b border-slate-850 pb-3 flex-wrap">
+                    <div className="w-2 h-2 rounded-full bg-tech shrink-0" />
                     <span>
                       Paradas de Entrega
                       <InfoTooltip text="Adicione o local de partida e as paradas desejadas. A plataforma traçará no mapa o melhor trajeto conectando esses pontos." />
@@ -2629,9 +2861,9 @@ export default function HarpiaApp() {
               {/* Right Section: Dynamic Logistics Configuration Bento Box List */}
               <div className="w-full flex flex-col gap-6">
                   {/* Bento Box 1: Vehicle selection */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
-                      <Truck className="w-4 h-4 shrink-0" />
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3.5 flex items-center gap-2 flex-wrap">
+                      <Truck className="w-4 h-4 text-tech shrink-0" />
                       <span>
                         Perfil de Transporte
                         <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade de ruas automaticamente." />
@@ -2647,14 +2879,14 @@ export default function HarpiaApp() {
                         <button
                           key={v.id}
                           onClick={() => setOptions({ ...options, vehicle: v.id as any })}
-                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-2xl border transition-all cursor-pointer ${
+                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-xl border transition-all cursor-pointer ${
                             options.vehicle === v.id
-                              ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]'
-                              : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                              ? 'bg-tech/15 border-tech text-tech font-bold'
+                              : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-800'
                           }`}
                         >
-                          <v.icon className="w-5 h-5 mb-1.5" />
-                          <span className="text-[10px] font-bold uppercase tracking-tight">{v.label}</span>
+                          <v.icon className="w-4 h-4 mb-1" />
+                          <span className="text-[10px] font-semibold uppercase">{v.label}</span>
                         </button>
                       ))}
                     </div>
@@ -2663,12 +2895,12 @@ export default function HarpiaApp() {
                     {options.vehicle === 'boat' && (
                       <div className="mt-4 pt-4 border-t border-slate-800/60 animate-fadeIn space-y-3">
                         <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-black uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                            <Anchor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                            <Anchor className="w-3.5 h-3.5 text-tech shrink-0" />
                             Tipo de Embarcação & Calado
                           </label>
-                          <span className="text-[9px] font-bold text-slate-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded-full">
-                            Matriz Fluvial Amazônica
+                          <span className="text-[9px] font-medium text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-full">
+                            Matriz Fluvial
                           </span>
                         </div>
 
@@ -2685,26 +2917,26 @@ export default function HarpiaApp() {
                               onClick={() => setOptions({ ...options, vesselType: vessel.id as any })}
                               className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                                 (options.vesselType || 'express_lancha') === vessel.id
-                                  ? 'bg-cyan-950/40 border-cyan-500/80 text-white shadow-[0_0_12px_rgba(6,182,212,0.15)]'
-                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-750 hover:text-slate-200'
+                                  ? 'bg-slate-900 border-tech text-white font-medium'
+                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200'
                               }`}
                             >
                               <div className="flex items-center gap-1.5 mb-1">
-                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-cyan-400' : 'text-slate-500' }`} />
-                                <span className="text-[10px] font-black uppercase tracking-tight">{vessel.label}</span>
+                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-tech' : 'text-slate-500' }`} />
+                                <span className="text-[10px] font-bold uppercase">{vessel.label}</span>
                               </div>
                               <p className="text-[8.5px] text-slate-400 font-mono leading-none">{vessel.desc}</p>
                             </button>
                           ))}
                         </div>
 
-                        <div className="p-3 bg-cyan-950/20 border border-cyan-900/40 rounded-2xl text-[10.5px] text-slate-300 space-y-1 font-sans">
-                          <p className="font-bold text-cyan-300 flex items-center gap-1.5 text-[11px]">
-                            <Waves className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-                            Diferencial de Hidrovia Ativo:
+                        <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-[10.5px] text-slate-300 space-y-1 font-sans">
+                          <p className="font-semibold text-tech flex items-center gap-1.5 text-[11px]">
+                            <Waves className="w-3.5 h-3.5 text-tech" />
+                            Diferencial Hidrovia Ativo
                           </p>
                           <p className="text-slate-400 text-[10px] leading-relaxed">
-                            A rota calcula automaticamente a velocidade da correnteza a favor ou contra o fluxo do rio, profundidade dos canais (talvegue), risco de banzeiro por ventos e cota hidrológica da bacia.
+                            Cálculo automático de velocidade da correnteza a favor ou contra o fluxo do rio e canais de navegação.
                           </p>
                         </div>
                       </div>
@@ -2712,11 +2944,11 @@ export default function HarpiaApp() {
                   </div>
 
                   {/* Bento Box 2: Route optimization priority */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-4 font-display flex items-center gap-2 flex-wrap">
-                      <Zap className="w-4 h-4 shrink-0" />
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3.5 flex items-center gap-2 flex-wrap">
+                      <Zap className="w-4 h-4 text-tech shrink-0" />
                       <span>
-                        Algoritmo de Prioridade
+                        Prioridade de Rota
                         <InfoTooltip text="Escolha entre Tempo e Distância. Roteiros mais rápidos podem usar vias expressas, mas nem sempre são o caminho mais curto." />
                       </span>
                     </h3>
@@ -2731,90 +2963,90 @@ export default function HarpiaApp() {
                         <button
                           key={p.id}
                           onClick={() => setOptions({ ...options, priority: p.id })}
-                          className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all cursor-pointer ${
+                          className={`flex flex-col items-center justify-center p-2.5 rounded-xl border transition-all cursor-pointer ${
                             options.priority === p.id 
-                            ? 'bg-tech/10 border-tech text-tech shadow-[0_0_15px_rgba(0,242,255,0.06)]' 
-                            : 'bg-slate-950/40 border-slate-850/80 text-slate-500 hover:text-slate-300 hover:border-slate-800'
+                            ? 'bg-tech/15 border-tech text-tech font-bold' 
+                            : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-800'
                           }`}
                         >
                           <p.icon className="w-4 h-4 mb-1 shrink-0" />
-                          <span className="text-[9px] font-black uppercase tracking-tight leading-none">{p.label}</span>
+                          <span className="text-[9px] font-bold uppercase leading-none">{p.label}</span>
                         </button>
                       ))}
                     </div>
 
-                    <div className="mt-4 p-3.5 rounded-xl bg-slate-950/40 border border-slate-900 text-xs text-slate-400 leading-relaxed font-sans">
-                      {options.priority === 'speed' && <p><strong className="text-white">Velocidade (Rápido):</strong> Evita congestionamentos em avenidas principais e privilegia fluxos ágeis, reduzindo tempo total de trajeto.</p>}
-                      {options.priority === 'distance' && <p><strong className="text-white">Distância Mínima:</strong> Traçado seco com menor metragem absoluta, secundarizando congestionamento ou semáforos.</p>}
-                      {options.priority === 'economy' && <p><strong className="text-white">Economia (Eco):</strong> Trajeto plano visando estabilidade, evitando desgaste operacional e acelerações sob declives pesados.</p>}
-                      {options.priority === 'safety' && <p><strong className="text-white">Segurança (Seguro):</strong> Prevenção de risco. Desvia de zonas com alertas de acidentes, vias perigosas ou ocorrências climáticas.</p>}
-                      {options.priority === 'balanced' && <p><strong className="text-white">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo médio, tipo de carga e integridade operacional.</p>}
+                    <div className="mt-3.5 p-3 rounded-xl bg-slate-950/60 border border-slate-850 text-xs text-slate-400 leading-relaxed font-sans">
+                      {options.priority === 'speed' && <p><strong className="text-slate-200">Velocidade (Rápido):</strong> Privilegia vias com tráfego ágil, reduzindo o tempo total do percurso.</p>}
+                      {options.priority === 'distance' && <p><strong className="text-slate-200">Distância Mínima:</strong> Traçado com a menor quilometragem total entre as paradas.</p>}
+                      {options.priority === 'economy' && <p><strong className="text-slate-200">Economia (Eco):</strong> Trajeto plano visando menor consumo de combustível e estabilidade.</p>}
+                      {options.priority === 'safety' && <p><strong className="text-slate-200">Segurança (Seguro):</strong> Evita áreas de alto risco, ocorrências climáticas e vias impróprias.</p>}
+                      {options.priority === 'balanced' && <p><strong className="text-slate-200">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo e segurança operacional.</p>}
                     </div>
                   </div>
 
                   {/* Bento Box 4: AI Custom Prompts */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                      <Sparkles className="w-4 h-4 text-[#D1A054] animate-pulse shrink-0" />
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-2.5 flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 text-tech shrink-0" />
                       <span>
-                        Instruções da IA
+                        Instruções Adicionais
                         <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
                       </span>
                     </h3>
-                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
-                      Adicione diretrizes customizadas para que o cérebro artificial analise a segurança física da sua equipe e do trajeto.
+                    <p className="text-slate-400 text-xs mb-3 leading-relaxed font-sans">
+                      Diretrizes opcionais para o cálculo inteligente do percurso.
                     </p>
                     <textarea
                       value={aiCustomPrompt}
                       onChange={(e) => setAiCustomPrompt(e.target.value)}
-                      placeholder="Ex: 'priorizar vias com boa iluminação pública', 'informar rotas transitáveis por carretas', 'checar incidências climáticas recentes'..."
+                      placeholder="Ex: 'priorizar vias principais', 'evitar travessias lentas'..."
                       rows={2}
-                      className="w-full bg-slate-950/60 border border-slate-850 rounded-2xl px-4 py-3 text-xs md:text-sm focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all resize-none text-slate-100 placeholder-slate-650 font-sans"
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs md:text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all resize-none text-slate-100 placeholder-slate-600 font-sans"
                     />
                   </div>
 
                   {/* Bento Box 5: Future Routing & Scheduling */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                    <h3 className="text-sm font-black uppercase tracking-widest text-tech mb-2.5 font-display flex items-center gap-2 flex-wrap">
+                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-2.5 flex items-center gap-2 flex-wrap">
                       <Calendar className="w-4 h-4 text-tech shrink-0" />
                       <span>
-                        Agendar Rota para o Futuro
+                        Agendar Rota
                         <InfoTooltip text="Programe e salve rotas para dias ou horários futuros no sistema. Você poderá recarregá-las a qualquer momento." />
                       </span>
                     </h3>
-                    <p className="text-slate-400 text-xs mb-4 leading-relaxed font-sans">
-                      Preencha os detalhes abaixo para salvar a lista de endereços atual para uso futuro.
+                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
+                      Salve o itinerário atual para executar em data futura.
                     </p>
                     
                     <div className="space-y-3 font-sans">
                       <div>
-                        <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Nome da Rota</label>
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Nome da Rota</label>
                         <input
                           type="text"
                           value={scheduledName}
                           onChange={(e) => setScheduledName(e.target.value)}
-                          placeholder="Ex: Rota Zona Sul - Manhã"
-                          className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700"
+                          placeholder="Ex: Rota Centro / Manhã"
+                          className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600"
                         />
                       </div>
                       
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Data Agendada</label>
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Data Agendada</label>
                           <input
                             type="date"
                             value={scheduledDate}
                             onChange={(e) => setScheduledDate(e.target.value)}
-                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                            className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600 [color-scheme:dark]"
                           />
                         </div>
                         <div>
-                          <label className="text-[9px] text-slate-500 font-extrabold uppercase tracking-wider block mb-1">Horário de Saída</label>
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Horário de Saída</label>
                           <input
                             type="time"
                             value={scheduledTime}
                             onChange={(e) => setScheduledTime(e.target.value)}
-                            className="w-full bg-slate-950/60 border border-slate-850 rounded-xl px-3 py-2 text-xs focus:border-[#D1A054] focus:ring-1 focus:ring-[#D1A054]/30 outline-none transition-all text-slate-100 placeholder-slate-700 [color-scheme:dark]"
+                            className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600 [color-scheme:dark]"
                           />
                         </div>
                       </div>
@@ -2823,53 +3055,29 @@ export default function HarpiaApp() {
                         type="button"
                         onClick={handleSaveFutureRoute}
                         disabled={addresses.filter(a => a.trim().length > 3).length < 2}
-                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-tech/40 text-tech disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950/20 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-200 disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950 text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        Salvar e Agendar Rota
+                        <Plus className="w-3.5 h-3.5 text-tech" />
+                        Salvar e Agendar
                       </button>
                     </div>
                   </div>
 
 
-                  {!hasTwoOrMoreAddresses ? (
+                  <div className="pt-2">
                     <button 
                       onClick={runOptimization}
-                      className="w-full bg-tech text-slate-950 font-black py-4.5 rounded-2xl text-lg md:text-xl shadow-[0_15px_30px_rgba(209,160,84,0.25)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider"
+                      disabled={!hasTwoOrMoreAddresses}
+                      className={`w-full font-bold py-4 rounded-xl text-sm sm:text-base shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider ${
+                        hasTwoOrMoreAddresses 
+                          ? 'bg-tech text-slate-950 hover:brightness-105 active:scale-[0.99]' 
+                          : 'bg-slate-900 border border-slate-800 text-slate-500 cursor-not-allowed'
+                      }`}
                     >
-                      <Sparkles className="w-5 h-5" />
-                      CALCULAR MELHOR ROTA
+                      <Sparkles className="w-4 h-4" />
+                      <span>{hasTwoOrMoreAddresses ? `Calcular Melhor Rota (${enteredAddresses.length} Paradas)` : 'Adicione pelo menos 2 endereços'}</span>
                     </button>
-                  ) : (
-                    <>
-                      {/* Generous bottom spacing so form content doesn't get hidden behind the fixed bar */}
-                      <div className="h-32 w-full" />
-                      <motion.div
-                        initial={{ y: 80, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ type: 'spring', stiffness: 280, damping: 25 }}
-                        className="fixed bottom-0 left-0 right-0 z-[1200] bg-slate-950/95 border-t border-tech/30 p-4 md:p-6 shadow-[0_-10px_35px_rgba(209,160,84,0.15)] flex items-center justify-center backdrop-blur-xl"
-                      >
-                        <div className="w-full max-w-2xl flex items-center justify-between gap-4">
-                          <div className="hidden sm:flex flex-col text-left">
-                            <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-widest leading-none">Roteamento Ativo</span>
-                            <span className="text-sm font-black text-white mt-1.5 flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-tech animate-pulse" />
-                              {enteredAddresses.length} endereços inseridos
-                            </span>
-                          </div>
-                          
-                          <button 
-                            onClick={runOptimization}
-                            className="w-full sm:w-auto px-8 py-3.5 bg-tech text-slate-950 font-black rounded-xl text-sm md:text-base shadow-[0_4px_20px_rgba(209,160,84,0.3)] hover:shadow-[0_4px_25px_rgba(209,160,84,0.45)] hover:bg-tech/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shrink-0"
-                          >
-                            <Sparkles className="w-4 h-4" />
-                            CALCULAR MELHOR ROTA
-                          </button>
-                        </div>
-                      </motion.div>
-                    </>
-                  )}
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -2890,74 +3098,7 @@ export default function HarpiaApp() {
             </motion.div>
           )}
 
-          {currentScreen === 'result' && routeResult && (
-            <motion.div
-              key="result"
-              initial={{ opacity: 0, y: 40, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -20, scale: 0.98 }}
-              transition={{ duration: 0.7, type: 'spring', stiffness: 90, damping: 20 }}
-              className={`h-full flex ${isMobile ? 'relative w-full h-full overflow-hidden' : ''}`}
-            >
-              <div className={`${isMobile ? 'absolute inset-0 z-0' : 'flex-1 relative'}`}>
-                <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} onRouteRecalculated={setRouteResult} />
-              </div>
-              <div 
-                className={`${
-                  isMobile 
-                    ? 'z-50' 
-                    : 'relative h-full z-10 shadow-2xl shrink-0 transition-all duration-300 ease-in-out'
-                }`}
-                style={isMobile ? undefined : { width: isSidebarOpen ? '400px' : '0px' }}
-              >
-                {!isMobile && (
-                  <button
-                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                    style={{ left: '-32px' }}
-                    className="absolute top-1/2 -translate-y-1/2 w-8 h-12 bg-slate-950 border border-slate-800 border-r-0 rounded-l-xl z-20 flex items-center justify-center text-tech hover:text-white transition-colors shadow-lg cursor-pointer"
-                    title={isSidebarOpen ? "Recolher Painel" : "Expandir Painel"}
-                  >
-                    <ChevronRight 
-                      className={`w-5 h-5 transition-transform duration-300 ${
-                        isSidebarOpen ? 'rotate-0' : 'rotate-180'
-                      }`} 
-                    />
-                  </button>
-                )}
-                <div 
-                  className={`h-full ${isMobile ? '' : 'overflow-hidden transition-all duration-300'}`} 
-                  style={isMobile ? undefined : { 
-                    width: '400px', 
-                    visibility: isSidebarOpen ? 'visible' : 'hidden', 
-                    opacity: isSidebarOpen ? 1 : 0 
-                  }}
-                >
-                  <Sidebar 
-                    stops={routeResult.sequence} 
-                    summary={routeResult.summary}
-                    score={routeResult.score}
-                    aiAnalysis={routeResult.aiAnalysis}
-                    hybridAnalysis={routeResult.hybridAnalysis}
-                    liveBulletin={routeResult.liveBulletin || liveBulletinData}
-                    onNavigate={() => {
-                      setActualRouteStartTime(prev => prev || Date.now());
-                      setCurrentScreen('navigation');
-                    }}
-                    isLoading={false}
-                    onShowInvoice={handleShowInvoice}
-                    isSimulating={isSimulating}
-                    onStartSimulation={handleStartSimulation}
-                    onStopSimulation={handleStopSimulation}
-                    simulatedResults={simulatedResults}
-                    isCalculatingSim={isCalculatingSim}
-                    activeSimProfile={activeSimProfile}
-                    onSimulateProfile={handleSimulateProfile}
-                    onApplyRoute={handleApplySimulatedRoute}
-                  />
-                </div>
-              </div>
-            </motion.div>
-          )}
+
 
           {currentScreen === 'navigation' && routeResult && (
             <motion.div
@@ -2978,7 +3119,7 @@ export default function HarpiaApp() {
                        initial={{ opacity: 0, y: -30, scale: 0.95 }}
                        animate={{ opacity: 1, y: 0, scale: 1 }}
                        exit={{ opacity: 0, y: -30, scale: 0.95 }}
-                       className="absolute top-16 left-1/2 -translate-x-1/2 z-[4500] max-w-lg w-[92%] bg-slate-950/95 backdrop-blur-xl border-2 border-rose-500/80 rounded-3xl p-4 shadow-[0_10px_40px_rgba(244,63,94,0.35)] text-white"
+                       className="absolute top-16 left-1/2 -translate-x-1/2 z-[4500] max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl w-[92%] bg-slate-950/95 backdrop-blur-xl border-2 border-rose-500/80 rounded-3xl p-4 shadow-[0_10px_40px_rgba(244,63,94,0.35)] text-white"
                      >
                        <div className="flex items-start gap-3">
                          <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400 shrink-0">
@@ -3011,7 +3152,7 @@ export default function HarpiaApp() {
                                className="px-3.5 py-2 bg-tech text-slate-950 rounded-xl font-black text-[11px] uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 shadow-[0_0_15px_rgba(209,160,84,0.4)]"
                              >
                                <Zap className="w-3.5 h-3.5" />
-                               <span>Aplicar Desvio Imediato</span>
+                               <span>Recalcular Rota</span>
                              </button>
                              <button
                                onClick={() => setActiveIncidentToast(null)}
@@ -3047,32 +3188,6 @@ export default function HarpiaApp() {
                    <span className="text-white text-sm font-black tracking-tight">{formatSecondsToClock(liveElapsedSeconds)}</span>
                  </div>
 
-                 {/* Floating Top-Right Grounding Search Bulletin Pill */}
-                 <div className="absolute top-4 right-4 z-[1500] flex items-center gap-2">
-                   <button
-                     type="button"
-                     onClick={() => handleRequestLiveRerouteCheck()}
-                     disabled={isCheckingReroute}
-                     className="px-3.5 py-2.5 rounded-2xl bg-slate-950/90 backdrop-blur-md border border-emerald-500/40 text-emerald-400 hover:text-white hover:bg-emerald-950/80 shadow-[0_8px_25px_rgba(0,0,0,0.6)] flex items-center gap-2 transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer text-xs font-bold font-mono"
-                     title="Solicitar Análise em Tempo Real de Trânsito & Clima com Busca Grounded"
-                   >
-                     <span className="relative flex h-2.5 w-2.5">
-                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                     </span>
-                     {isCheckingReroute ? (
-                       <span className="flex items-center gap-1.5 text-tech animate-pulse">
-                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                         <span>Buscando...</span>
-                       </span>
-                     ) : (
-                       <span className="flex items-center gap-1.5">
-                         <Zap className="w-3.5 h-3.5 text-tech" />
-                         <span>Plantão / Desvio Tático</span>
-                       </span>
-                     )}
-                   </button>
-                 </div>
 
                  {/* Retractable Navigation Drawer */}
                  <AnimatePresence>
@@ -3082,7 +3197,7 @@ export default function HarpiaApp() {
                        animate={{ x: 0, opacity: 1 }}
                        exit={{ x: '-100%', opacity: 0 }}
                        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-                       className="absolute top-0 left-0 bottom-0 z-[1400] w-80 md:w-96 bg-slate-950/95 backdrop-blur-2xl border-r border-tech/30 p-6 flex flex-col shadow-[10px_0_40px_rgba(0,0,0,0.8)] text-white"
+                       className="absolute top-0 left-0 bottom-0 z-[1400] w-72 md:w-80 bg-slate-950/95 backdrop-blur-2xl border-r border-tech/30 p-4 md:p-5 flex flex-col shadow-[10px_0_40px_rgba(0,0,0,0.85)] text-white"
                      >
                        <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5">
                          <div className="flex items-center gap-2.5">
@@ -3210,12 +3325,12 @@ export default function HarpiaApp() {
                          <button
                            onClick={() => {
                              setIsNavDrawerOpen(false);
-                             setCurrentScreen('result');
+                             setCurrentScreen('home');
                            }}
                            className="w-full py-3 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
                          >
                            <ChevronLeft className="w-4 h-4 text-tech" />
-                           <span>Ver Plano de Rota</span>
+                           <span>Voltar ao Planejamento</span>
                          </button>
                        </div>
                      </motion.div>
@@ -3227,7 +3342,7 @@ export default function HarpiaApp() {
                    {routeResult.sequence[navIndex]?.amazonasHydrology && (
                      <motion.div 
                        initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
-                       className="absolute top-20 right-4 z-[1000] bg-slate-950/90 backdrop-blur-md p-3.5 rounded-2xl border border-cyan-500/40 shadow-[0_10px_30px_rgba(6,182,212,0.2)] max-w-[280px] font-sans text-white space-y-2"
+                       className="absolute top-24 sm:top-28 right-4 sm:right-6 z-[1000] bg-slate-950/90 backdrop-blur-xl p-3.5 rounded-2xl border border-cyan-500/50 shadow-[0_10px_30px_rgba(6,182,212,0.3)] max-w-[280px] font-sans text-white space-y-2"
                      >
                        <div className="flex items-center justify-between border-b border-cyan-900/40 pb-1.5">
                          <div className="flex items-center gap-1.5 text-cyan-400 font-extrabold text-[10px] uppercase tracking-wider">
@@ -3278,13 +3393,13 @@ export default function HarpiaApp() {
                       initial={{ opacity: 0 }} 
                       animate={{ opacity: 1 }} 
                       exit={{ opacity: 0 }}
-                      className="absolute inset-0 z-[2000] glass flex items-center justify-center p-4 md:p-6"
+                      className="fixed inset-0 z-[6000] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 md:p-6"
                     >
                       <motion.div 
                         initial={{ scale: 0.95, y: 15 }} 
                         animate={{ scale: 1, y: 0 }}
                         exit={{ scale: 0.95, y: 15 }}
-                        className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar"
+                        className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[32px] w-full max-w-md md:max-w-lg lg:max-w-xl shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar"
                       >
                         <div className="flex justify-between items-center mb-4">
                           <div>
@@ -3487,10 +3602,13 @@ export default function HarpiaApp() {
                                       endTimeStr: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
                                       elapsedMs,
                                       elapsedFormatted: formatSecondsToClock(Math.floor(elapsedMs / 1000)),
+                                      estimatedDurationFormatted: formatSecondsToClock(Math.round(routeResult.summary?.duration || 0)),
+                                      estimatedMinutes: Math.round((routeResult.summary?.duration || 0) / 60),
+                                      actualMinutes: Math.round(elapsedMs / 60000),
                                       totalStops: routeResult.sequence.length,
                                       completedCount,
                                       failedCount,
-                                      totalDistanceKm: (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4'),
+                                      totalDistanceKm: (routeResult.summary?.distance ? (routeResult.summary.distance / 1000).toFixed(1) : (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4')),
                                       vehicle: options.vehicle || 'van',
                                       score: routeResult.score || 95
                                     });
@@ -3531,7 +3649,7 @@ export default function HarpiaApp() {
                        animate={{ scale: 1, opacity: 1, y: 0 }}
                        exit={{ scale: 0.9, opacity: 0, y: 20 }}
                        transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                       className="bg-slate-950 border-2 border-emerald-500/60 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-[0_0_60px_rgba(16,185,129,0.25)] relative overflow-hidden"
+                       className="bg-slate-950 border-2 border-emerald-500/60 rounded-3xl p-6 sm:p-8 max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl w-full text-white shadow-[0_0_60px_rgba(16,185,129,0.25)] relative overflow-hidden"
                        onClick={(e) => e.stopPropagation()}
                      >
                        {/* Subtle glowing ambient background effect */}
@@ -3566,11 +3684,18 @@ export default function HarpiaApp() {
                          <div className="text-3xl sm:text-4xl font-black font-mono text-white tracking-tight my-1 drop-shadow-[0_0_12px_rgba(16,185,129,0.4)]">
                            {completedSummaryData?.elapsedFormatted || '00m 00s'}
                          </div>
-                         {completedSummaryData?.startTimeStr && completedSummaryData?.endTimeStr && (
-                           <p className="text-[11px] font-mono text-slate-400 mt-1">
-                             Início: <span className="text-slate-200 font-bold">{completedSummaryData.startTimeStr}</span> • Término: <span className="text-slate-200 font-bold">{completedSummaryData.endTimeStr}</span>
-                           </p>
-                         )}
+                         <div className="flex flex-wrap items-center justify-center gap-2 mt-2 pt-2 border-t border-slate-800 text-[11px] font-mono text-slate-300">
+                           {completedSummaryData?.startTimeStr && completedSummaryData?.endTimeStr && (
+                             <span>
+                               Início: <strong className="text-white">{completedSummaryData.startTimeStr}</strong> • Fim: <strong className="text-white">{completedSummaryData.endTimeStr}</strong>
+                             </span>
+                           )}
+                           {completedSummaryData?.estimatedDurationFormatted && (
+                             <span className="bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-tech text-[10px]">
+                               Estimado Inicial: {completedSummaryData.estimatedDurationFormatted}
+                             </span>
+                           )}
+                         </div>
                        </div>
 
                        {/* Operational Key Metrics Grid */}
@@ -3699,11 +3824,11 @@ export default function HarpiaApp() {
                  {isReporting && (
                    <motion.div 
                      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                     className="absolute inset-0 z-[2000] glass flex items-center justify-center p-6"
+                     className="fixed inset-0 z-[6000] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6"
                    >
                      <motion.div 
                        initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-                       className="bg-slate-900 border border-slate-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl"
+                       className="bg-slate-900 border border-slate-800 p-8 rounded-[40px] w-full max-w-md md:max-w-lg lg:max-w-xl shadow-2xl"
                      >
                        <div className="flex justify-between items-center mb-6">
                          <h2 className="text-2xl font-bold">Ocorrência</h2>
@@ -3774,11 +3899,11 @@ export default function HarpiaApp() {
                  {showFailureModal && (
                    <motion.div 
                      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                     className="absolute inset-0 z-[2000] glass flex items-center justify-center p-6"
+                     className="fixed inset-0 z-[6000] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6"
                    >
                      <motion.div 
                        initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-                       className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[40px] w-full max-w-md shadow-2xl flex flex-col"
+                       className="bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-[40px] w-full max-w-md md:max-w-lg lg:max-w-xl shadow-2xl flex flex-col"
                      >
                        <div className="flex justify-between items-center mb-5">
                          <div>
@@ -3874,10 +3999,13 @@ export default function HarpiaApp() {
                                      endTimeStr: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
                                      elapsedMs,
                                      elapsedFormatted: formatSecondsToClock(Math.floor(elapsedMs / 1000)),
+                                     estimatedDurationFormatted: formatSecondsToClock(Math.round(routeResult.summary?.duration || 0)),
+                                     estimatedMinutes: Math.round((routeResult.summary?.duration || 0) / 60),
+                                     actualMinutes: Math.round(elapsedMs / 60000),
                                      totalStops: routeResult.sequence.length,
                                      completedCount,
                                      failedCount,
-                                     totalDistanceKm: (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4'),
+                                     totalDistanceKm: (routeResult.summary?.distance ? (routeResult.summary.distance / 1000).toFixed(1) : (routeResult.distance ? (routeResult.distance / 1000).toFixed(1) : '18.4')),
                                      vehicle: options.vehicle || 'van',
                                      score: routeResult.score || 95
                                    });
@@ -3922,9 +4050,9 @@ export default function HarpiaApp() {
               animate={{ opacity: 1, y: 0 }} 
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-16' : 'p-12'}`}
+              className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-28' : 'p-12 pb-28'}`}
             >
-              <div className="max-w-2xl mx-auto w-full">
+              <div className="max-w-2xl md:max-w-3xl lg:max-w-4xl xl:max-w-5xl mx-auto w-full">
                 <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
                 
                 <div className="space-y-8">
@@ -4045,7 +4173,7 @@ export default function HarpiaApp() {
               animate={{ scale: 1, opacity: 1, y: 0 }} 
               exit={{ scale: 0.95, opacity: 0, y: 15 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-slate-900 border border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.8)] rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+              className="bg-slate-900 border border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.8)] rounded-3xl w-full max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl max-h-[92vh] overflow-hidden flex flex-col"
             >
               {/* Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/40 gap-3">
@@ -4345,7 +4473,7 @@ export default function HarpiaApp() {
           initial={{ opacity: 0, scale: 0.8, y: 30 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
+          className="fixed bottom-20 right-4 md:bottom-20 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
           title="Retomar Tutorial"
         >
           <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
@@ -4361,7 +4489,7 @@ export default function HarpiaApp() {
           id="panel-demo-assistant"
           initial={{ opacity: 0, y: 30, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-8 md:bottom-8 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[85vh] overflow-y-auto custom-scrollbar"
+          className="fixed bottom-20 left-4 right-4 md:left-auto md:right-8 md:bottom-20 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
         >
           {/* Cabeçalho com Barra de Progresso */}
           <div className="flex flex-col gap-2.5 border-b border-white/10 pb-3">
@@ -4466,8 +4594,8 @@ export default function HarpiaApp() {
               </p>
               <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
                 <p><strong>🔍 Digitação Rápida:</strong> Busque endereços integrados e atribua diretamente as paradas.</p>
-                <p><strong>📄 Leitor NFe Simulado:</strong> Consulte Notas Fiscais para extrair os locais da entrega rapidamente (Ex: digite "Aleixo").</p>
-                <p><strong>⏱️ Janela de Horários:</strong> Defina restrições de recebimento (ex: <i>"Recebe entre 08:00 e 11:00"</i>).</p>
+                <p><strong>📄 Leitor NFe Simulado:</strong> Consulte Notas Fiscais para extrair os locais da entrega rapidamente (Ex: digite &quot;Aleixo&quot;).</p>
+                <p><strong>⏱️ Janela de Horários:</strong> Defina restrições de recebimento (ex: <i>&quot;Recebe entre 08:00 e 11:00&quot;</i>).</p>
                 <p><strong>🎯 Ordem Livre:</strong> Organize paradas que o motor da IA irá re-sequenciar da melhor forma.</p>
               </div>
               <div className="flex gap-2 mt-1">
@@ -4729,7 +4857,7 @@ export default function HarpiaApp() {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative overflow-hidden text-white"
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl w-full shadow-2xl relative overflow-hidden text-white"
             >
               <div className="absolute top-0 right-0 w-32 h-32 bg-tech/10 blur-3xl rounded-full pointer-events-none" />
               <div className="flex flex-col items-center text-center gap-3">
@@ -4762,7 +4890,7 @@ export default function HarpiaApp() {
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      Plantão Fluvial & Portos
+                      Status Fluvial & Portos
                     </span>
                     <span className="text-[9px] text-emerald-400 font-mono font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">Google Search</span>
                   </div>
@@ -4820,7 +4948,7 @@ export default function HarpiaApp() {
                     className="flex-1 py-3 bg-tech text-slate-950 rounded-xl text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(209,160,84,0.4)] hover:brightness-110 transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     <Ship className="w-4 h-4" />
-                    <span>{fluvialBulletin?.hasIncident ? 'Gerar Rota Fluvial com Desvio' : 'Gerar Rota Híbrida'}</span>
+                    <span>{fluvialBulletin?.hasIncident ? 'Gerar Rota Fluvial Alternativa' : 'Gerar Rota Híbrida'}</span>
                   </button>
                 </div>
               </div>
@@ -4834,7 +4962,7 @@ export default function HarpiaApp() {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative overflow-hidden text-white"
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl w-full shadow-2xl relative overflow-hidden text-white"
             >
               <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-3xl rounded-full pointer-events-none" />
               <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
@@ -4843,7 +4971,7 @@ export default function HarpiaApp() {
                     <Zap className="w-5 h-5 animate-pulse" />
                   </div>
                   <div>
-                    <h2 className="text-base font-bold font-display text-white">Análise do Plantão & Desvio Tático</h2>
+                    <h2 className="text-base font-bold font-display text-white">Análise de Trânsito & Alertas</h2>
                     <p className="text-[10px] text-emerald-400 font-mono font-bold uppercase tracking-wider">Busca em Tempo Real · Google Grounding</p>
                   </div>
                 </div>
@@ -4868,7 +4996,7 @@ export default function HarpiaApp() {
                       <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 animate-bounce" />
                       <div>
                         <strong className="text-rose-300 uppercase font-black tracking-wider block mb-0.5">Alerta de Ocorrência Detectado!</strong>
-                        <span>Foram reportados problemas recentes (alagamento/acidente/interdição) no trecho. Recomenda-se aplicar o desvio tático do VRP.</span>
+                        <span>Foram reportados problemas recentes (alagamento/acidente/interdição) no trecho. Recomenda-se recalcular a rota para segurança.</span>
                       </div>
                     </div>
                   ) : (
@@ -4912,14 +5040,14 @@ export default function HarpiaApp() {
                         setOptions(prev => ({
                           ...prev,
                           avoidFloods: true,
-                          customPrompt: (prev.customPrompt || '') + ' Evitar trecho com acidentes e alagamentos reportados no plantão recente.'
+                          customPrompt: (prev.customPrompt || '') + ' Evitar trecho com acidentes e alagamentos reportados recentemente.'
                         }));
                         setTimeout(() => runOptimization(), 100);
                       }}
                       className="flex-1 py-3 bg-tech text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-[0_0_20px_rgba(209,160,84,0.4)] hover:brightness-110 transition-all cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Zap className="w-4 h-4" />
-                      <span>Aplicar Desvio Tático</span>
+                      <span>Recalcular Rota</span>
                     </button>
                     <button
                       onClick={() => handleRequestLiveRerouteCheck()}

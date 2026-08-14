@@ -1330,8 +1330,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       )}
 
       {/* CLIMA REAL-TIME HUD OVERLAY (Max 1 panel over map) */}
-      {showWeatherLayer && !isNavigationScreen && stops.length > 0 && (
-        <div className="absolute top-16 left-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-teal-500/30 p-3.5 rounded-2xl w-56 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-left-4 duration-200 select-none">
+      {showWeatherLayer && stops.length > 0 && (
+        <div className="absolute top-24 sm:top-28 left-4 sm:left-6 z-[995] bg-slate-950/90 backdrop-blur-xl border border-teal-500/40 p-3.5 rounded-2xl w-56 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-left-4 duration-200 select-none">
           <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
             <div className="flex items-center gap-1.5">
               <CloudRain className="w-3.5 h-3.5 text-teal-400" />
@@ -1361,7 +1361,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       )}
 
       {/* TRÂNSITO REAL-TIME HUD OVERLAY (Max 1 panel over map) */}
-      {showTrafficLayer && !isNavigationScreen && stops.length > 0 && (
+      {showTrafficLayer && stops.length > 0 && (
         <div className="absolute top-16 right-4 z-[995] bg-slate-950/90 backdrop-blur-md border border-amber-500/30 p-3.5 rounded-2xl w-60 shadow-2xl text-white font-sans animate-in fade-in slide-in-from-right-4 duration-200 select-none">
           <div className="flex items-center gap-2 mb-2 border-b border-white/10 pb-1.5 justify-between">
             <div className="flex items-center gap-1.5">
@@ -1413,7 +1413,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 : tileStyle === 'carto-voyager'
                 ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
                 : tileStyle === 'dark'
-                ? "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png"
+                ? "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2" // Using Google Maps with CSS filters for high-contrast B&W
                 : "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
             }
             maxNativeZoom={22}
@@ -1695,44 +1695,43 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       {isNavigationScreen && (
         <>
           {/* HIGHLY ACCESSIBLE, PREMIUM GPS NAVIGATION TOP HUD */}
-          <div className="absolute top-4 left-18 md:left-20 right-4 z-[1001] bg-slate-950/98 backdrop-blur-xl border border-tech/40 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.8)] p-4 max-w-2xl mx-auto flex items-center gap-4 transition-all duration-300 md:p-5">
+          <div className="absolute top-4 left-18 md:left-20 right-4 z-[1001] bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-xl p-3.5 max-w-2xl mx-auto flex items-center gap-3.5 transition-all duration-300 md:p-4">
             {/* Action Arrow Icon based on next step direction */}
-            <div className="flex flex-col items-center justify-center bg-emerald-600/90 border border-emerald-400/30 w-14 h-14 rounded-2xl shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
-              {stepDirection === 'left' && <ArrowLeft className="w-8 h-8 text-white stroke-[3.5px] animate-pulse" />}
-              {stepDirection === 'slight-left' && <ArrowUpLeft className="w-8 h-8 text-white stroke-[3.5px]" />}
-              {stepDirection === 'right' && <ArrowRight className="w-8 h-8 text-white stroke-[3.5px] animate-pulse" />}
-              {stepDirection === 'slight-right' && <ArrowUpRight className="w-8 h-8 text-white stroke-[3.5px]" />}
-              {stepDirection === 'u-turn' && <RotateCcw className="w-8 h-8 text-white stroke-[3.5px]" />}
-              {stepDirection === 'roundabout' && <RefreshCw className="w-8 h-8 text-white stroke-[3.5px] animate-spin-slow" />}
-              {stepDirection === 'straight' && <ArrowUp className="w-8 h-8 text-white stroke-[3.5px]" />}
+            <div className="flex flex-col items-center justify-center bg-emerald-600 border border-emerald-500/30 w-12 h-12 rounded-xl shrink-0">
+              {stepDirection === 'left' && <ArrowLeft className="w-7 h-7 text-white stroke-[3px]" />}
+              {stepDirection === 'slight-left' && <ArrowUpLeft className="w-7 h-7 text-white stroke-[3px]" />}
+              {stepDirection === 'right' && <ArrowRight className="w-7 h-7 text-white stroke-[3px]" />}
+              {stepDirection === 'slight-right' && <ArrowUpRight className="w-7 h-7 text-white stroke-[3px]" />}
+              {stepDirection === 'u-turn' && <RotateCcw className="w-7 h-7 text-white stroke-[3px]" />}
+              {stepDirection === 'roundabout' && <RefreshCw className="w-7 h-7 text-white stroke-[3px] animate-spin-slow" />}
+              {stepDirection === 'straight' && <ArrowUp className="w-7 h-7 text-white stroke-[3px]" />}
             </div>
             
             {/* Turn-by-Turn Info Section (Optimized for visibility from distance & real-time meters precision) */}
             <div className="flex-1 min-w-0">
               {activeStep ? (
                 <>
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-[11px] uppercase tracking-widest text-emerald-400 font-black flex items-center gap-1">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="text-[11px] uppercase tracking-wider text-emerald-400 font-bold flex items-center gap-1">
                       {realTimeTurnDistanceMeters !== null ? (
                         realTimeTurnDistanceMeters <= 25 ? (
-                          <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded font-black animate-bounce text-[10px]">VIRAR AGORA</span>
+                          <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded font-black text-[10px]">VIRAR AGORA</span>
                         ) : (
-                          <span>{stepDirection === 'right' ? 'Vire à direita' : stepDirection === 'left' ? 'Vire à esquerda' : 'Siga em frente'} em {realTimeTurnDistanceMeters >= 1000 ? `${(realTimeTurnDistanceMeters/1000).toFixed(1)} km` : `${realTimeTurnDistanceMeters} metros`}</span>
+                          <span>{stepDirection === 'right' ? 'Vire à direita' : stepDirection === 'left' ? 'Vire à esquerda' : 'Siga em frente'} em {realTimeTurnDistanceMeters >= 1000 ? `${(realTimeTurnDistanceMeters/1000).toFixed(1)} km` : `${realTimeTurnDistanceMeters}m`}</span>
                         )
                       ) : (
                         <span>{activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}</span>
                       )}
                     </span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                   </div>
-                  <h2 className="text-sm md:text-base lg:text-lg font-black text-white leading-snug tracking-tight truncate">
+                  <h2 className="text-sm md:text-base font-bold text-white leading-tight tracking-tight truncate">
                     {activeStep.instruction || "Prossiga na via indicada"}
                   </h2>
                 </>
               ) : (
                 <>
-                  <span className="text-[9px] uppercase tracking-wider text-slate-500 font-extrabold block mb-0.5">Navegação Ativa</span>
-                  <h2 className="text-sm md:text-base font-black text-white leading-tight">
+                  <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block mb-0.5">Navegação Ativa</span>
+                  <h2 className="text-sm md:text-base font-bold text-white leading-tight">
                     {currentLegStatus}
                   </h2>
                 </>
@@ -1750,23 +1749,23 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 });
               }}
               disabled={isRerouting}
-              className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 active:scale-95 transition-all text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shrink-0 ml-1 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 active:scale-95 transition-all text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shrink-0 cursor-pointer"
               title="Solicitar recomendação de desvio de rota"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Solicitar Desvio</span>
+              <span className="hidden sm:inline">Desvio</span>
             </button>
 
             {/* Simulated progress percentage */}
-            <div className="flex flex-col items-end shrink-0 pl-2 border-l border-white/10">
-              <span className="text-lg font-black font-mono text-tech leading-none">{simProgress}%</span>
-              <span className="text-[8px] text-slate-500 font-extrabold uppercase tracking-widest mt-1">concluído</span>
+            <div className="flex flex-col items-end shrink-0 pl-2.5 border-l border-slate-800">
+              <span className="text-base font-bold font-mono text-tech leading-none">{simProgress}%</span>
+              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">concluído</span>
             </div>
 
-            {/* Real-time highly prominent progress strip */}
+            {/* Real-time progress strip */}
             <div className="absolute bottom-0 left-4 right-4 h-1 bg-slate-900 overflow-hidden rounded-full">
               <div 
-                className="h-full bg-gradient-to-r from-tech to-amber-400 transition-all duration-300 ease-out shadow-[0_0_12px_rgba(209,160,84,1)]" 
+                className="h-full bg-tech transition-all duration-300 ease-out" 
                 style={{ width: `${simProgress}%` }}
               ></div>
             </div>
@@ -1774,28 +1773,28 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
           {/* Speed Limit & Current Speed Bubble (Bottom Left HUD) */}
           <div className="absolute bottom-28 md:bottom-24 left-4 z-[1001] flex flex-col items-center gap-2 select-none">
-            {/* Speed Limit Sign (Standard Brazilian R-19 traffic sign: White circle, thick red ring, dark bold number) */}
-            <div className="w-13 h-13 bg-white rounded-full border-[5px] border-red-600 shadow-2xl flex flex-col items-center justify-center text-slate-950 border-solid ring-2 ring-black/40" title="Limite de Velocidade Máxima Permitida na Via (60 km/h)">
-              <span className="text-[6.5px] font-black uppercase text-red-600 tracking-tighter -mb-1">MÁX</span>
-              <span className="font-extrabold text-lg tracking-tighter leading-none text-black">60</span>
+            {/* Speed Limit Sign */}
+            <div className="w-12 h-12 bg-white rounded-full border-[4px] border-red-600 shadow-md flex flex-col items-center justify-center text-slate-950 border-solid" title="Limite de Velocidade Permitida (60 km/h)">
+              <span className="text-[6px] font-black uppercase text-red-600 tracking-tight -mb-0.5">MÁX</span>
+              <span className="font-extrabold text-base tracking-tight leading-none text-black">60</span>
             </div>
             {/* Real-time Current Speed Meter Bubble */}
-            <div className={`w-14 h-14 rounded-full border-[3px] flex flex-col items-center justify-center shadow-2xl transition-all duration-200 ${speedHUD > 60 ? 'bg-red-600 text-white border-white shadow-[0_0_25px_rgba(239,68,68,0.8)] animate-bounce' : 'bg-slate-950/90 border-tech text-tech shadow-[0_0_20px_rgba(209,160,84,0.35)]'}`} title="Sua Velocidade Atual em Tempo Real">
-              <span className="font-mono text-xl font-black leading-none tracking-tighter -mb-0.5">{speedHUD}</span>
-              <span className="text-[7.5px] uppercase font-black tracking-widest opacity-90">km/h</span>
+            <div className={`w-13 h-13 rounded-full border-2 flex flex-col items-center justify-center shadow-lg transition-all duration-200 ${speedHUD > 60 ? 'bg-red-600 text-white border-white' : 'bg-slate-950/95 border-tech/80 text-tech'}`} title="Sua Velocidade Atual">
+              <span className="font-mono text-lg font-bold leading-none tracking-tight -mb-0.5">{speedHUD}</span>
+              <span className="text-[7px] uppercase font-bold tracking-wider opacity-80">km/h</span>
             </div>
           </div>
 
           {/* CINEMATIC REROUTING LOADING OVERLAY */}
           {isRerouting && (
             <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md z-[2500] flex flex-col items-center justify-center text-center p-6 transition-all duration-300">
-              <div className="relative mb-6">
-                <div className="w-24 h-24 rounded-full border-[5px] border-tech/25 border-t-tech animate-spin shadow-[0_0_30px_rgba(209,160,84,0.4)]" />
-                <Compass className="w-11 h-11 text-tech animate-pulse absolute top-6 left-6" />
+              <div className="relative mb-4">
+                <div className="w-16 h-16 rounded-full border-4 border-slate-800 border-t-tech animate-spin" />
+                <Compass className="w-8 h-8 text-tech absolute top-4 left-4" />
               </div>
-              <h3 className="text-xl font-black text-white tracking-tight">Sincronizando com Servidores de Rota</h3>
-              <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">
-                Escaneando mapa de trânsito em tempo real de Manaus. Buscando rotas alternativas inteligentes para desviar da lentidão...
+              <h3 className="text-lg font-bold text-white tracking-tight">Recalculando Rota</h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-sm leading-relaxed">
+                Analisando trânsito em tempo real e buscando alternativa para as paradas restantes...
               </p>
             </div>
           )}
@@ -1865,53 +1864,53 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         </>
       )}
 
-      {/* PERSISTENT MAP SYSTEM CONTROLS (Compact Floating Dock) */}
-      {!isNavigationScreen && (
-        <div className="absolute bottom-6 right-4 z-[1001] flex items-center gap-1.5 p-1.5 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 rounded-2xl shadow-2xl">
+      {/* PERSISTENT MAP SYSTEM CONTROLS (Compact Floating Dock - Stacked Vertically - Thumb-Reach Zone) */}
+      {true && (
+        <div className="absolute bottom-[220px] md:bottom-[240px] right-3 sm:right-4 z-[1001] flex flex-col items-center gap-2.5 p-2.5 bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.85)] border-tech/20 animate-in fade-in slide-in-from-right-4 duration-300">
           {/* Toggle Live Weather Layer */}
           <button
             onClick={() => setShowWeatherLayer(!showWeatherLayer)}
-            className={`p-2 rounded-xl transition-all ${
+            className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               showWeatherLayer 
-                ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                ? 'bg-teal-500/25 text-teal-300 border border-teal-500/50 shadow-[0_0_12px_rgba(20,184,166,0.3)]' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
             title="Alternar Clima"
           >
-            <CloudRain className="w-4 h-4" />
+            <CloudRain className="w-5 h-5" />
           </button>
 
           {/* Toggle Live Traffic Layer */}
           <button
             onClick={() => setShowTrafficLayer(!showTrafficLayer)}
-            className={`p-2 rounded-xl transition-all ${
+            className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               showTrafficLayer 
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
             title="Alternar Trânsito"
           >
-            <Car className="w-4 h-4" />
+            <Car className="w-5 h-5" />
           </button>
 
-          <div className="w-px h-4 bg-slate-800/80 my-auto" />
+          <div className="h-px w-5 bg-slate-800/80 mx-auto" />
 
           {/* Camadas do Mapa */}
           <div className="relative">
             <button
               onClick={() => setShowTileMenu(!showTileMenu)}
-              className={`p-2 rounded-xl transition-all ${
+              className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
                 showTileMenu || tileStyle !== 'dark'
-                  ? 'bg-amber-500 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-[0_0_15px_rgba(209,160,84,0.4)]'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
               }`}
               title="Estilos de Mapa"
             >
-              <Layers className="w-4 h-4" />
+              <Layers className="w-5 h-5" />
             </button>
 
             {showTileMenu && (
-              <div className="absolute right-0 bottom-12 bg-slate-950/95 border border-slate-800 backdrop-blur-md rounded-2xl p-2.5 shadow-2xl w-52 flex flex-col gap-1.5 z-[10000] text-xs">
+              <div className="absolute right-14 bottom-0 bg-slate-950/95 border border-slate-800 backdrop-blur-xl rounded-2xl p-2.5 shadow-2xl w-52 flex flex-col gap-1.5 z-[10000] text-xs animate-in fade-in slide-in-from-bottom-2 duration-200">
                 <div className="text-[9px] font-black uppercase text-tech tracking-wider border-b border-white/10 pb-1 flex justify-between items-center">
                   <span>Estilo do Mapa</span>
                   <button onClick={() => setShowTileMenu(false)} className="text-slate-400 hover:text-white">✕</button>
@@ -1919,7 +1918,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
                 <button
                   onClick={() => { setTileStyle('google-hybrid'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all cursor-pointer ${
                     tileStyle === 'google-hybrid' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
@@ -1929,7 +1928,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
                 <button
                   onClick={() => { setTileStyle('google-streets'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all cursor-pointer ${
                     tileStyle === 'google-streets' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
@@ -1939,7 +1938,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
                 <button
                   onClick={() => { setTileStyle('google-terrain'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all cursor-pointer ${
                     tileStyle === 'google-terrain' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
@@ -1949,7 +1948,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
                 <button
                   onClick={() => { setTileStyle('dark'); setShowTileMenu(false); }}
-                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all ${
+                  className={`flex items-center gap-2 p-1.5 rounded-lg text-left transition-all cursor-pointer ${
                     tileStyle === 'dark' ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold' : 'hover:bg-white/5 text-slate-300'
                   }`}
                 >
@@ -1963,29 +1962,36 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           {/* Giroscópio */}
           <button
             onClick={toggleGyroscope}
-            className={`p-2 rounded-xl transition-all ${
+            className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               useGyroscope
                 ? 'bg-cyan-500 text-slate-950 font-bold'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
             title="Giroscópio"
           >
-            <Smartphone className="w-4 h-4" />
+            <Smartphone className="w-5 h-5" />
           </button>
 
           {/* Orientação */}
           <button
             onClick={() => {
-              setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
+              if (!isAutoFollowing) {
+                setIsAutoFollowing(true);
+                window.dispatchEvent(new CustomEvent('recenter-map'));
+              } else {
+                setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
+              }
             }}
-            className={`p-2 rounded-xl transition-all ${
-              mapOrientation === 'track'
+            className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
+              !isAutoFollowing
+                ? 'bg-tech text-slate-950 font-bold shadow-[0_0_15px_rgba(209,160,84,0.4)] animate-pulse'
+                : mapOrientation === 'track'
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
-            title="Orientação"
+            title={!isAutoFollowing ? "Recentralizar Rota" : "Orientação"}
           >
-            <Navigation className="w-4 h-4" style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.3s' }} />
+            <Navigation className="w-5 h-5" style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.3s' }} />
           </button>
 
           {/* Modo 3D */}
@@ -1996,14 +2002,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 setCarCoords(polyline[0]);
               }
             }}
-            className={`p-2 rounded-xl transition-all ${
+            className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               is3DMode 
-                ? 'bg-amber-500 text-slate-950 font-bold' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-[0_0_12px_rgba(209,160,84,0.3)]' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
             title="Modo 3D"
           >
-            <Compass className="w-4 h-4" style={{ transform: `rotate(${-smoothHeading}deg)` }} />
+            <Compass className="w-5 h-5" style={{ transform: `rotate(${-smoothHeading}deg)` }} />
           </button>
 
           {/* Piloto / Simulação */}
@@ -2017,14 +2023,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                   setIs3DMode(true);
                 }
               }}
-              className={`p-2 rounded-xl transition-all ${
+              className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
                 isDriving 
                   ? 'bg-red-500 text-white' 
-                  : 'text-amber-400 hover:bg-slate-900'
+                  : 'text-amber-400 hover:bg-slate-900 border border-transparent'
               }`}
               title={isDriving ? "Parar Simulação" : "Simular GPS"}
             >
-              {isDriving ? <Square className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+              {isDriving ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
             </button>
           )}
         </div>

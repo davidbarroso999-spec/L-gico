@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 type Props = React.ComponentProps<typeof motion.svg> & {
   speed?: number;
   onAnimationComplete?: () => void;
+  skipAnimation?: boolean;
 };
 
 // Componente de scan fill — uma linha diagonal que varre a forma da esquerda pra direita
@@ -78,6 +79,7 @@ function HarpiaLogoEffect({
   className,
   speed = 1,
   onAnimationComplete,
+  skipAnimation = false,
   ...props
 }: Props) {
   const [mounted, setMounted] = useState(false);
@@ -88,6 +90,12 @@ function HarpiaLogoEffect({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (skipAnimation && onAnimationComplete) {
+      onAnimationComplete();
+    }
+  }, [skipAnimation, onAnimationComplete]);
 
   const shapes = [
     { id: "H",     drawDelay: 0.0,  drawDur: 1.0, scanDelay: 0.85, scanDur: 0.55 },
@@ -159,9 +167,9 @@ function HarpiaLogoEffect({
                 stroke="#D1A054"
                 strokeWidth="60"
                 fill="none"
-                initial={{ pathLength: 0, opacity: 0, scale: 0.97 }}
-                animate={{ pathLength: 1, opacity: 1, scale: 1 }}
-                transition={{
+                initial={skipAnimation ? { pathLength: 1, opacity: 1, scale: 1 } : { pathLength: 0, opacity: 0, scale: 0.97 }}
+                animate={skipAnimation ? { pathLength: 1, opacity: 1, scale: 1 } : { pathLength: 1, opacity: 1, scale: 1 }}
+                transition={skipAnimation ? { duration: 0 } : {
                   pathLength: {
                     duration: calc(drawDur),
                     delay: calc(drawDelay),
@@ -173,14 +181,18 @@ function HarpiaLogoEffect({
               />
 
               {/* 2. Scan fill — linha varrendo da esquerda pra direita, fluído */}
-              {mounted && (
-                <ScanFill
-                  clipId={`${uid}-clip-${id}`}
-                  delay={scanDelay}
-                  duration={scanDur}
-                  speed={speed}
-                  onComplete={isLast ? onAnimationComplete : undefined}
-                />
+              {skipAnimation ? (
+                <path d={paths[id]} fill="#D1A054" />
+              ) : (
+                mounted && (
+                  <ScanFill
+                    clipId={`${uid}-clip-${id}`}
+                    delay={scanDelay}
+                    duration={scanDur}
+                    speed={speed}
+                    onComplete={isLast ? onAnimationComplete : undefined}
+                  />
+                )
               )}
 
             </g>
@@ -192,7 +204,7 @@ function HarpiaLogoEffect({
 }
 
 const HarpiaTextEffect = memo(HarpiaLogoEffect, (prevProps, nextProps) => {
-  return prevProps.speed === nextProps.speed && prevProps.className === nextProps.className;
+  return prevProps.speed === nextProps.speed && prevProps.className === nextProps.className && prevProps.skipAnimation === nextProps.skipAnimation;
 });
 
 export { HarpiaTextEffect };

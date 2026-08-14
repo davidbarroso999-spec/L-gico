@@ -236,7 +236,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   ];
 
   return (
-    <div className="p-4 md:p-8 pt-20 md:pt-8 h-full overflow-y-auto overflow-x-hidden custom-scrollbar pb-16 md:pb-8">
+    <div className="p-4 md:p-8 pt-20 md:pt-8 h-full overflow-y-auto overflow-x-hidden custom-scrollbar pb-28 md:pb-24">
       
       {/* Header section in the dashboard modal/screen */}
       <header className="mb-8 md:mb-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">

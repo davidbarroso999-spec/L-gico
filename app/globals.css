@@ -189,11 +189,11 @@
 }
 
 .glass {
-  @apply bg-slate-950/60 backdrop-blur-xl border border-white/5;
+  @apply bg-slate-950/80 backdrop-blur-xl border border-slate-800/80;
 }
 
 .shimmer {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent);
   background-size: 200% 100%;
   animation: shimmer 2s infinite;
 }
@@ -227,11 +227,11 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  @apply bg-slate-800 rounded-full;
+  @apply bg-slate-850 rounded-full;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  @apply bg-tech/50;
+  @apply bg-slate-750;
 }
 
 @keyframes dash {
@@ -239,56 +239,23 @@
   to { stroke-dashoffset: 0; }
 }
 
-/* === APEX PREMIUM LUXURY ADDITIONS === */
-.noise-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='.03'/></svg>");
-  opacity: 0.35;
-  z-index: 40;
-}
-
-@keyframes orb-drift-1 {
-  0%, 100% { transform: translate(0px, 0px) scale(1); }
-  33% { transform: translate(40px, -60px) scale(1.1); }
-  66% { transform: translate(-30px, 20px) scale(0.9); }
-}
-
-@keyframes orb-drift-2 {
-  0%, 100% { transform: translate(0px, 0px) scale(1); }
-  50% { transform: translate(-50px, 40px) scale(1.15); }
-}
-
-.animate-orb-1 {
-  animation: orb-drift-1 25s ease-in-out infinite;
-}
-
-.animate-orb-2 {
-  animation: orb-drift-2 30s ease-in-out infinite;
-}
-
 .glass-premium {
-  background: rgba(20, 19, 18, 0.5);
-  backdrop-filter: blur(28px) saturate(160%);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 
-    0 10px 40px rgba(0, 0, 0, 0.45),
-    0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  background: rgba(20, 19, 18, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
-/* Custom interactive premium press triggers */
+/* Custom interactive minimal press triggers */
 .btn-magnetic {
-  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .btn-magnetic:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(209, 160, 84, 0.25);
+  transform: translateY(-1px);
 }
 .btn-magnetic:active {
-  transform: translateY(1px) scale(0.97);
-  transition-duration: 80ms;
+  transform: translateY(1px) scale(0.98);
 }
 
 /* Waze/Uber Premium Navigation CSS - Dark High-Res Tiles */
@@ -297,7 +264,7 @@
 .dark-map-tiles.leaflet-layer,
 .dark-map-tiles .leaflet-tile,
 .leaflet-container.dark-map-tiles .leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(60%) !important;
+  filter: grayscale(100%) invert(100%) contrast(150%) brightness(120%) !important;
 }
 
 /* Smooth Marker Animation (Uber/Waze Dead Reckoning) */

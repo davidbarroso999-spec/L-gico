@@ -13,6 +13,14 @@ import {
   VRPSolution
 } from './vrp-types';
 
+export const WEIGHTS = {
+  speed:    { w1: 0.1,  w2: 0.9,  w3: 0.0,  w4: 0.0 }, // 90% Time, 10% Distance
+  distance: { w1: 1.0,  w2: 0.0,  w3: 0.0,  w4: 0.0 }, // 100% Distance
+  economy:  { w1: 0.4,  w2: 0.4,  w3: 0.2,  w4: 0.0 }, // 40% Dist, 40% Time, 20% Eco (Elevation & Fuel penalty)
+  safety:   { w1: 0.2,  w2: 0.2,  w3: 0.0,  w4: 0.6 }, // 20% Dist, 20% Time, 60% Safety (Risk, Clima, Ocorrências)
+  balanced: { w1: 0.35, w2: 0.35, w3: 0.15, w4: 0.15 }, // Even distribution
+};
+
 function parseTimeToMinutes(timeStr?: string): number | null {
   if (!timeStr) return null;
   const parts = timeStr.split(':');
@@ -25,17 +33,20 @@ function parseTimeToMinutes(timeStr?: string): number | null {
 
 /**
  * Stage 3: Builds the adjusted cost matrix by merging raw distance/time matrix with Gemini context adjustments
+ * and strictly verifying physical viability before applying priority weights.
  */
 export function buildAdjustedMatrix(
   rawMatrix: RawCostMatrix,
   contextAdjustments: GeminiContextAdjustments,
-  vehicleConstraints: VehicleConstraints
+  vehicleConstraints: VehicleConstraints,
+  stopConstraints?: StopConstraints[]
 ): AdjustedCostMatrix {
   const n = rawMatrix.distances.length;
   const adjustedDurations: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
   const adjustedDistances: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
 
   const gMult = contextAdjustments.globalMultipliers || { timeWeight: 1.0, distanceWeight: 1.0, riskWeight: 1.0 };
+  const w = WEIGHTS[vehicleConstraints.priorityProfile] || WEIGHTS.balanced;
 
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
@@ -44,9 +55,36 @@ export function buildAdjustedMatrix(
       let baseDur = rawMatrix.durations[i]?.[j] ?? 600;
       let baseDist = rawMatrix.distances[i]?.[j] ?? 5000;
 
-      // Check specific edge penalties
+      // 1. Physical Viability Check (PRE-FILTERING - Prior to applying priority weights)
+      const targetConstraint = stopConstraints?.[j];
+      if (targetConstraint) {
+        // Physical Road Closed
+        const isRoadClosed = targetConstraint.activeOccurrences?.some((o: any) => o.type === 'road_closed');
+        if (isRoadClosed) {
+          baseDur = Infinity;
+          baseDist = Infinity;
+        }
+
+        // Severe Flood on vehicle constraint
+        const isImpassableFlood = targetConstraint.activeOccurrences?.some((o: any) => o.type === 'flood') && vehicleConstraints.avoidFloods;
+        if (isImpassableFlood && vehicleConstraints.vehicle !== 'boat') {
+          baseDur = Infinity;
+          baseDist = Infinity;
+        }
+
+        // Boat Physical Draft Constraint (Severe Vazante < 13m)
+        if (vehicleConstraints.vehicle === 'boat' && targetConstraint.amazonasHydrology) {
+          const riverMeters = targetConstraint.amazonasHydrology.riverLevelMeters;
+          if (riverMeters && riverMeters < 12.5 && vehicleConstraints.vesselType === 'balsa_heavy') {
+            baseDur = Infinity;
+            baseDist = Infinity;
+          }
+        }
+      }
+
+      // Check specific edge penalties from context/AI adjustments
       const edgePen = contextAdjustments.edgePenalties?.find(p => p.fromIndex === i && p.toIndex === j);
-      if (edgePen) {
+      if (edgePen && baseDur !== Infinity) {
         if (edgePen.multiplier) {
           baseDur *= edgePen.multiplier;
         }
@@ -65,8 +103,35 @@ export function buildAdjustedMatrix(
         baseDist = Infinity;
       }
 
-      adjustedDurations[i][j] = baseDur !== Infinity ? Math.max(0, baseDur * gMult.timeWeight) : Infinity;
-      adjustedDistances[i][j] = baseDist !== Infinity ? Math.max(0, baseDist * gMult.distanceWeight) : Infinity;
+      if (baseDur === Infinity || baseDist === Infinity) {
+        adjustedDurations[i][j] = Infinity;
+        adjustedDistances[i][j] = Infinity;
+      } else {
+        // Apply priority weights adjustment to edge traversal times
+        let effectiveDur = baseDur * gMult.timeWeight;
+        let effectiveDist = baseDist * gMult.distanceWeight;
+
+        // Safety weight (w4) elevates effective edge cost if destination has risk
+        if (targetConstraint && w.w4 > 0) {
+          const risk = targetConstraint.riskScore || 0;
+          if (risk > 0) {
+            effectiveDur += (risk * 15 * w.w4); // Adds artificial latency to high risk paths in solver
+          }
+        }
+
+        // Economy weight (w3) penalizes high elevation incline
+        if (stopConstraints && w.w3 > 0) {
+          const elevI = stopConstraints[i]?.elevation || 20;
+          const elevJ = stopConstraints[j]?.elevation || 20;
+          const deltaElev = Math.max(0, elevJ - elevI);
+          if (deltaElev > 15) {
+            effectiveDur += (deltaElev * 20 * w.w3);
+          }
+        }
+
+        adjustedDurations[i][j] = Math.max(0, effectiveDur);
+        adjustedDistances[i][j] = Math.max(0, effectiveDist);
+      }
     }
   }
 
@@ -89,6 +154,8 @@ function evaluateRouteSequence(
 ) {
   let totalDist = 0;
   let totalDur = 0;
+  let totalElevationGain = 0;
+  let totalRiskScore = 0;
   let currentTime = 480; // 08:00 AM start in minutes
   let totalLateness = 0;
   let totalWait = 0;
@@ -97,6 +164,7 @@ function evaluateRouteSequence(
   let priorityPenalty = 0;
 
   const vehicleCap = vehicleConstraints.capacityKg || Infinity;
+  const w = WEIGHTS[vehicleConstraints.priorityProfile] || WEIGHTS.balanced;
 
   const stepDetails = [];
 
@@ -128,8 +196,14 @@ function evaluateRouteSequence(
     totalDist += distMeters;
     totalDur += durSec;
 
-    const arrivalMin = currentTime + travelMin;
     const targetConstraint = stopConstraints[v] || { index: v, address: '' };
+    const arrivalMin = currentTime + travelMin;
+
+    // Environmental metrics for priority calculation
+    const elevU = stopConstraints[u]?.elevation || 20;
+    const elevV = targetConstraint.elevation || 20;
+    totalElevationGain += Math.max(0, elevV - elevU);
+    totalRiskScore += targetConstraint.riskScore || 0;
 
     // Service time
     const serviceMin = targetConstraint.serviceTimeMinutes || 15;
@@ -181,10 +255,17 @@ function evaluateRouteSequence(
     });
   }
 
-  // Combined weighted mathematical cost function
+  // Combined weighted mathematical cost function respecting w1, w2, w3, w4
+  const distCost = (totalDist / 1000) * w.w1;
+  const timeCost = (totalDur / 60) * w.w2;
+  const ecoCost = (totalElevationGain / 10) * w.w3 * 2.0;
+  const safetyCost = (totalRiskScore / 10) * w.w4 * 2.0;
+
   const latenessCost = totalLateness * 100; // Heavy penalty for missing time window
   const waitCost = totalWait * 5;          // Moderate cost for waiting
-  const cost = (totalDur / 60) * 1.0 + (totalDist / 1000) * 0.5 + latenessCost + waitCost + capacityPenalty + priorityPenalty;
+
+  const compositeBaseCost = (distCost + timeCost + ecoCost + safetyCost) * 10;
+  const cost = compositeBaseCost + latenessCost + waitCost + capacityPenalty + priorityPenalty;
 
   return {
     cost,

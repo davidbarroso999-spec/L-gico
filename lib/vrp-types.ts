@@ -37,6 +37,10 @@ export interface StopConstraints {
   priority?: 'urgent' | 'high' | 'medium' | 'low';
   modalRestriction?: 'all' | 'boat_only' | 'land_only';
   stopType?: 'pickup' | 'delivery';
+  elevation?: number;
+  riskScore?: number;
+  activeOccurrences?: any[];
+  amazonasHydrology?: any;
 }
 
 export interface VehicleConstraints {

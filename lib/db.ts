@@ -84,7 +84,7 @@ export class HarpiaDatabase extends Dexie {
   operationalMemory!: Table<OperationalMemory>;
 
   constructor() {
-    super('HarpiaDB');
+    super('HarpiaDB_Clean_v1');
     this.version(1).stores({
       routes: '++id, date, status',
       occurrences: '++id, type, timestamp, synced',

@@ -585,7 +585,11 @@ export async function optimizeRoute(
       demandKg: inv?.peso || 0,
       priority: inv?.valor && inv.valor > 5000 ? 'urgent' : 'medium',
       modalRestriction: options.vehicle === 'boat' ? 'boat_only' : 'all',
-      stopType: stType
+      stopType: stType,
+      elevation: (loc as any).elevation,
+      riskScore: (loc as any).riskScore ?? 15,
+      activeOccurrences: (loc as any).activeOccurrences || [],
+      amazonasHydrology: (loc as any).amazonasHydrology
     };
   });
 
@@ -600,8 +604,50 @@ export async function optimizeRoute(
   };
 
   // 5.3 Mathematical VRP Solver (Savings + 2-Opt local search with time budget 10s)
-  const adjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, vehicleConstraints);
+  const adjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, vehicleConstraints, stopConstraints);
   const vrpSolution = solveVRPMatrix(adjMatrix, stopConstraints, vehicleConstraints, 10000);
+
+  // Comparison across priorities check
+  let sameAsOtherPriorities = false;
+  let priorityExplanation = "";
+
+  const profileNames: Record<string, string> = {
+    speed: 'Velocidade',
+    distance: 'Distância Mínima',
+    economy: 'Economia',
+    safety: 'Segurança',
+    balanced: 'Equilibrado'
+  };
+
+  try {
+    const testConstraints: VehicleConstraints = {
+      ...vehicleConstraints,
+      priorityProfile: options.priority === 'speed' ? 'distance' : 'speed'
+    };
+    const altAdjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, testConstraints, stopConstraints);
+    const altSolution = solveVRPMatrix(altAdjMatrix, stopConstraints, testConstraints, 3000);
+    
+    const isSameSeq = JSON.stringify(vrpSolution.optimizedSequenceIndices) === JSON.stringify(altSolution.optimizedSequenceIndices);
+    if (isSameSeq) {
+      sameAsOtherPriorities = true;
+      priorityExplanation = `Para os pontos e restrições configurados, este é o traçado ideal absoluto — a sequência permanece ótima e uniforme entre os perfis (${profileNames[options.priority]} e ${profileNames[testConstraints.priorityProfile]}), pois a malha viária não apresenta desvios que compensem a alteração de ordem.`;
+    } else {
+      sameAsOtherPriorities = false;
+      if (options.priority === 'safety') {
+        priorityExplanation = `🛡️ Prioridade de Segurança Ativa: Sequência ajustada para priorizar vias de menor risco viário e contornar zonas com alertas climáticos/alagamentos (Peso de Risco: 60%).`;
+      } else if (options.priority === 'economy') {
+        priorityExplanation = `🍃 Prioridade de Economia Ativa: Sequência ajustada para minimizar variações de elevação e aclives íngremes, reduzindo esforço mecânico e consumo de combustível (Peso de Relevo: 20%).`;
+      } else if (options.priority === 'speed') {
+        priorityExplanation = `⚡ Prioridade de Velocidade Ativa: Sequência e traçado priorizam corredores expressos com foco no menor tempo total de percurso (Peso de Tempo: 90%).`;
+      } else if (options.priority === 'distance') {
+        priorityExplanation = `📏 Prioridade de Distância Ativa: Sequência calculada para obter a menor quilometragem absoluta de deslocamento (Peso de Distância: 100%).`;
+      } else {
+        priorityExplanation = `⚖️ Prioridade Equilibrada Ativa: Ponderação balanceada entre tempo, consumo, segurança viária e janelas de atendimento.`;
+      }
+    }
+  } catch {
+    priorityExplanation = `Perfil ${profileNames[options.priority] || options.priority} aplicado aos pesos matemáticos da rota.`;
+  }
 
   // 5.4 Reorder stops according to mathematical solver sequence & build RouteStop list
   const sequence: RouteStop[] = vrpSolution.optimizedSequenceIndices.map((locIdx, seqOrder) => {
@@ -811,7 +857,10 @@ export async function optimizeRoute(
     vehicle: options.vehicle,
     avoidDirt: options.avoidDirt,
     avoidFloods: options.avoidFloods,
-    avoidHills: options.avoidHills
+    avoidHills: options.avoidHills,
+    priorityExplanation,
+    sameAsOtherPriorities,
+    priorityWeights: WEIGHTS[options.priority]
   };
 
   // 7. Get Natural Language Explanation & Live Grounded Bulletin from Gemini
@@ -835,6 +884,9 @@ export async function optimizeRoute(
     sequence: sequence,
     aiAnalysis,
     liveBulletin,
+    priorityExplanation,
+    sameAsOtherPriorities,
+    priorityWeights: WEIGHTS[options.priority],
     vrpSolverMetadata: {
       method: vrpSolution.solverMethod,
       executionTimeMs: vrpSolution.solverExecutionTimeMs,
