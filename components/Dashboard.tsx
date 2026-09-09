@@ -20,18 +20,88 @@ import {
   Fuel,
   Coins,
   BookOpen,
-  Bike
+  Bike,
+  Car,
+  Ship,
+  ArrowLeft,
+  Award,
+  FileSpreadsheet
 } from 'lucide-react';
 import { db } from '@/lib/db';
 import InfoTooltip from '@/components/InfoTooltip';
+import RouteHistoryView from '@/components/RouteHistoryView';
+import ExecutiveReportModal from '@/components/ExecutiveReportModal';
+
+export type DashboardVehicleType = 'moto' | 'van' | 'truck' | 'boat';
+
+export const VEHICLE_PRESETS: {
+  id: DashboardVehicleType;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  defaultKml: number;
+  maxKml: number;
+  defaultFuelPrice: number;
+  description: string;
+}[] = [
+  { 
+    id: 'moto', 
+    label: 'Moto', 
+    icon: Bike, 
+    defaultKml: 38.0, 
+    maxKml: 60, 
+    defaultFuelPrice: 5.85,
+    description: 'Econômico e ágil para entregas urbanas rápidas.'
+  },
+  { 
+    id: 'van', 
+    label: 'Van', 
+    icon: Car, 
+    defaultKml: 12.5, 
+    maxKml: 30, 
+    defaultFuelPrice: 5.95,
+    description: 'Vans e furgões para entregas comerciais fracionadas.'
+  },
+  { 
+    id: 'truck', 
+    label: 'Caminhão', 
+    icon: Truck, 
+    defaultKml: 4.8, 
+    maxKml: 20, 
+    defaultFuelPrice: 5.99,
+    description: 'Caminhões e carretas para cargas de médio e grande porte.'
+  },
+  { 
+    id: 'boat', 
+    label: 'Barco', 
+    icon: Ship, 
+    defaultKml: 2.2, 
+    maxKml: 15, 
+    defaultFuelPrice: 6.40,
+    description: 'Embarcações, lanchas e balsas para navegação fluvial.'
+  },
+];
 
 interface KpiDashboardProps {
   activeRoute?: any;
+  onLoadRouteToPlanner?: (route: any) => void;
+  onNavigateBack?: () => void;
+  initialTab?: 'simulator' | 'history';
+  currentVehicle?: DashboardVehicleType;
+  onVehicleChange?: (vehicle: DashboardVehicleType) => void;
 }
 
-export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
+export default function KpiDashboard({ 
+  activeRoute, 
+  onLoadRouteToPlanner, 
+  onNavigateBack,
+  initialTab = 'simulator',
+  currentVehicle,
+  onVehicleChange 
+}: KpiDashboardProps = {}) {
+  const [dashboardTab, setDashboardTab] = useState<'simulator' | 'history'>(initialTab);
   const [completedRoutes, setCompletedRoutes] = useState<any[]>([]);
   const [localOccurrencesCount, setLocalOccurrencesCount] = useState(0);
+  const [isExecutiveReportOpen, setIsExecutiveReportOpen] = useState(false);
 
   // States for expanding and viewing package receipts
   const [magnifiedPhoto, setMagnifiedPhoto] = useState<string | null>(null);
@@ -39,14 +109,21 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   const [magnifiedAddress, setMagnifiedAddress] = useState<string>('');
   const [magnifiedAt, setMagnifiedAt] = useState<string>('');
 
-  // Simplified and intuitive vehicle settings
-  const [vehicleType, setVehicleType] = useState<'motorcycle' | 'van' | 'truck' | 'heavy_truck'>(() => {
+  // Simplified and intuitive vehicle settings synchronized with main menu
+  const [vehicleType, setVehicleType] = useState<DashboardVehicleType>(() => {
+    if (currentVehicle) return currentVehicle;
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('harpia_vehicle_settings_simple');
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (parsed.vehicleType) return parsed.vehicleType;
+          if (parsed.vehicleType) {
+            if (parsed.vehicleType === 'motorcycle') return 'moto';
+            if (parsed.vehicleType === 'heavy_truck') return 'truck';
+            if (['moto', 'van', 'truck', 'boat'].includes(parsed.vehicleType)) {
+              return parsed.vehicleType as DashboardVehicleType;
+            }
+          }
         }
       } catch (e) {}
     }
@@ -63,7 +140,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
         }
       } catch (e) {}
     }
-    return 14.5;
+    return 12.5;
   });
 
   const [fuelPrice, setFuelPrice] = useState<number>(() => {
@@ -76,11 +153,52 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
         }
       } catch (e) {}
     }
-    return 5.85;
+    return 5.95;
   });
 
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [manualDistance, setManualDistance] = useState<number | null>(null);
+
+  // Save configurations locally on change and notify parent menu if callback exists
+  const saveConfig = (type: DashboardVehicleType, kml: number, price: number) => {
+    setVehicleType(type);
+    setKmPerLiter(kml);
+    setFuelPrice(price);
+    
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('harpia_vehicle_settings_simple', JSON.stringify({
+        vehicleType: type,
+        kmPerLiter: kml,
+        fuelPrice: price
+      }));
+    }
+
+    if (onVehicleChange) {
+      onVehicleChange(type);
+    }
+  };
+
+  // Pre-load default values for each vehicle type preset
+  const handleVehicleTypePreset = (type: DashboardVehicleType, showToast: boolean = true) => {
+    const preset = VEHICLE_PRESETS.find(p => p.id === type) || VEHICLE_PRESETS[1];
+    saveConfig(type, preset.defaultKml, preset.defaultFuelPrice || fuelPrice);
+    
+    if (showToast) {
+      setShowSavedToast(true);
+      setTimeout(() => setShowSavedToast(false), 2000);
+    }
+  };
+
+  const [prevPropVehicle, setPrevPropVehicle] = useState(currentVehicle);
+
+  // Synchronize when currentVehicle changes from the main menu without effect cascading
+  if (currentVehicle && currentVehicle !== prevPropVehicle) {
+    setPrevPropVehicle(currentVehicle);
+    setVehicleType(currentVehicle);
+    const preset = VEHICLE_PRESETS.find(p => p.id === currentVehicle) || VEHICLE_PRESETS[1];
+    setKmPerLiter(preset.defaultKml);
+    setFuelPrice(preset.defaultFuelPrice);
+  }
 
   // Poll completed routes and occurrences from Dexie local database
   useEffect(() => {
@@ -109,33 +227,6 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
       clearInterval(interval);
     };
   }, []);
-
-  // Save configurations locally on change
-  const saveConfig = (type: 'motorcycle' | 'van' | 'truck' | 'heavy_truck', kml: number, price: number) => {
-    setVehicleType(type);
-    setKmPerLiter(kml);
-    setFuelPrice(price);
-    
-    localStorage.setItem('harpia_vehicle_settings_simple', JSON.stringify({
-      vehicleType: type,
-      kmPerLiter: kml,
-      fuelPrice: price
-    }));
-  };
-
-  // Pre-load default values for each vehicle type preset
-  const handleVehicleTypePreset = (type: 'motorcycle' | 'van' | 'truck' | 'heavy_truck') => {
-    let defaultKml = 14.5;
-    if (type === 'motorcycle') defaultKml = 42.0;
-    if (type === 'van') defaultKml = 14.5;
-    if (type === 'truck') defaultKml = 9.2;
-    if (type === 'heavy_truck') defaultKml = 4.1;
-
-    saveConfig(type, defaultKml, fuelPrice);
-    
-    setShowSavedToast(true);
-    setTimeout(() => setShowSavedToast(false), 2000);
-  };
 
   const exportToCSV = () => {
     if (completedRoutes.length === 0) return;
@@ -238,6 +329,20 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
   return (
     <div className="p-4 md:p-8 pt-20 md:pt-8 h-full overflow-y-auto overflow-x-hidden custom-scrollbar pb-28 md:pb-24">
       
+      {/* Top Navigation Bar with Back-to-Menu Button */}
+      {onNavigateBack && (
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={onNavigateBack}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/10 hover:border-tech/40 text-xs font-bold transition-all cursor-pointer shadow-sm group active:scale-95"
+          >
+            <ArrowLeft className="w-4 h-4 text-tech group-hover:-translate-x-0.5 transition-transform" />
+            <span>Voltar ao Menu Principal</span>
+          </button>
+        </div>
+      )}
+
       {/* Header section in the dashboard modal/screen */}
       <header className="mb-8 md:mb-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -253,19 +358,37 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
         </div>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Executive Corporate Report Button */}
+          <motion.button
+            whileHover={completedRoutes.length > 0 ? { scale: 1.02 } : {}}
+            whileTap={completedRoutes.length > 0 ? { scale: 0.98 } : {}}
+            onClick={() => setIsExecutiveReportOpen(true)}
+            disabled={completedRoutes.length === 0}
+            className={`font-black text-xs px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(209,160,84,0.15)] text-center shrink-0 ${
+              completedRoutes.length > 0
+                ? 'bg-tech text-slate-950 hover:brightness-110 cursor-pointer'
+                : 'bg-tech/30 text-slate-800 border border-tech/20 cursor-not-allowed'
+            }`}
+            title="Gerar Relatório Executivo Completo com SLA e ESG (Padrão Samsara/Geotab)"
+          >
+            <Award className="w-4 h-4 fill-current" />
+            <span>Relatório Executivo (PDF/Excel)</span>
+          </motion.button>
+
           <motion.button
             whileHover={completedRoutes.length > 0 ? { scale: 1.02 } : {}}
             whileTap={completedRoutes.length > 0 ? { scale: 0.98 } : {}}
             onClick={exportToCSV}
             disabled={completedRoutes.length === 0}
-            className={`font-bold text-xs px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-md text-center shrink-0 ${
+            className={`font-bold text-xs px-4 py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-md text-center shrink-0 ${
               completedRoutes.length > 0
                 ? 'bg-slate-900 hover:bg-slate-850 text-white border border-slate-800 hover:border-tech/30 cursor-pointer'
                 : 'bg-slate-900/40 text-slate-600 border border-slate-900/50 cursor-not-allowed'
             }`}
+            title="Exportar dados brutos"
           >
             <Download className="w-4 h-4 text-tech" />
-            <span>Baixar Relatório (Excel/CSV)</span>
+            <span>CSV</span>
           </motion.button>
 
           {/* Toast feedback floating */}
@@ -285,6 +408,45 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
         </div>
       </header>
 
+      {/* Tab Switcher */}
+      <div className="flex items-center gap-2 mb-8 bg-slate-900/80 p-1.5 rounded-2xl border border-white/10 w-fit">
+        <button
+          type="button"
+          onClick={() => setDashboardTab('simulator')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            dashboardTab === 'simulator'
+              ? 'bg-tech text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+          }`}
+        >
+          <Fuel className="w-3.5 h-3.5" />
+          <span>Simulador de Frota & Custos</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setDashboardTab('history')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            dashboardTab === 'history'
+              ? 'bg-tech text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span>Histórico Detalhado & Auditoria</span>
+          {completedRoutes.length > 0 && (
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+              dashboardTab === 'history' ? 'bg-slate-950 text-tech' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {completedRoutes.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {dashboardTab === 'history' ? (
+        <RouteHistoryView onLoadRouteToPlanner={onLoadRouteToPlanner} />
+      ) : (
+        <>
       {/* Visual KPI Board Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-8 sm:mb-10">
         {kpis.map((kpi, idx) => (
@@ -324,27 +486,26 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
               Diferente de sistemas complexos, aqui você escolhe o seu veículo e diz qual é o consumo médio direto dele em <strong>km/L</strong> para saber os custos exatos da rota planejada.
             </p>
 
-            {/* Flat easy selection presets for vehicles */}
+            {/* Flat easy selection presets for vehicles synchronized with main menu */}
             <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-2.5">
               1. Qual o tipo de veículo utilizado?
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6">
-              {(['motorcycle', 'van', 'truck', 'heavy_truck'] as const).map((type) => {
-                const label = type === 'motorcycle' ? 'Moto' : type === 'van' ? 'Utilitário (ex: Fiorino)' : type === 'truck' ? 'Caminhão Médio' : 'Caminhão Pesado';
-                const isActive = vehicleType === type;
+              {VEHICLE_PRESETS.map((v) => {
+                const isActive = vehicleType === v.id;
+                const IconComp = v.icon;
                 return (
                   <button
-                    key={type}
-                    onClick={() => handleVehicleTypePreset(type)}
+                    key={v.id}
+                    onClick={() => handleVehicleTypePreset(v.id)}
                     className={`py-3 px-2 text-xs font-bold rounded-xl border flex flex-col items-center justify-center gap-2 transition-all cursor-pointer ${
                       isActive 
-                        ? 'bg-tech/10 text-tech border-tech' 
-                        : 'bg-slate-900/50 text-slate-400 border-white/5 hover:border-white/10'
+                        ? 'bg-tech/15 text-tech border-tech/80 shadow-[0_0_15px_rgba(209,160,84,0.15)]' 
+                        : 'bg-slate-900/50 text-slate-400 border-white/5 hover:border-white/10 hover:text-slate-200'
                     }`}
                   >
-                    {type === 'motorcycle' && <Bike className="w-4 h-4" />}
-                    {(type === 'van' || type === 'truck' || type === 'heavy_truck') && <Truck className="w-4 h-4" />}
-                    <span className="text-center leading-tight truncate w-full">{label}</span>
+                    <IconComp className="w-4 h-4" />
+                    <span className="text-center leading-tight truncate w-full">{v.label}</span>
                   </button>
                 );
               })}
@@ -385,8 +546,8 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                 </div>
                 <input 
                   type="range"
-                  min="2"
-                  max={vehicleType === 'motorcycle' ? "60" : "30"}
+                  min="1"
+                  max={vehicleType === 'moto' ? 60 : vehicleType === 'van' ? 30 : vehicleType === 'truck' ? 20 : 15}
                   step="0.5"
                   value={kmPerLiter}
                   onChange={(e) => {
@@ -396,7 +557,9 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
                   className="w-full accent-tech cursor-pointer h-1.5 rounded-full"
                 />
                 <span className="text-[9px] text-slate-500 mt-1 block">
-                  Quantos km o veículo faz com 1 litro.
+                  {vehicleType === 'boat' 
+                    ? 'Rendimento fluvial estimado por litro de combustível.' 
+                    : 'Quantos km o veículo faz com 1 litro.'}
                 </span>
               </div>
 
@@ -455,7 +618,7 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              Ao dividir a distância total planejada pela quantidade de quilômetros que seu carro faz com cada litro obtivemos <strong>{estimatedLiters} Litros</strong> consumidos. Multiplicando pelo valor, descobrimos o custo do percurso.
+              Ao dividir a distância total planejada pela quantidade de quilômetros que seu veículo faz com cada litro obtivemos <strong>{estimatedLiters} Litros</strong> consumidos. Multiplicando pelo valor, descobrimos o custo do percurso.
             </p>
           </div>
 
@@ -637,6 +800,8 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* Expanded receipts dialog popup */}
       <AnimatePresence>
@@ -699,6 +864,14 @@ export default function KpiDashboard({ activeRoute }: KpiDashboardProps = {}) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Corporate Executive Report & SLA Modal */}
+      <ExecutiveReportModal
+        isOpen={isExecutiveReportOpen}
+        onClose={() => setIsExecutiveReportOpen(false)}
+        routes={completedRoutes}
+        reportTitle={`Auditoria Executiva do Painel (${completedRoutes.length} Rotas Concluídas)`}
+      />
     </div>
   );
 }

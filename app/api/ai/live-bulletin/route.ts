@@ -38,18 +38,15 @@ export async function POST(req: Request) {
 
     let prompt = "";
     if (task === 'FLUVIAL_CHECK') {
-      prompt = `Pesquise notícias em tempo real, boletins da Marinha/Capitania dos Portos, estado de funcionamento de balsas/lanchas, cota dos rios e tempestades nos portos e travessias fluviais entre: ${locationList}.
-Forneça um boletim objetivo de Status Fluvial HARPIA (2 a 3 frases) em Português do Brasil indicando se a navegabilidade está normal, se há ventos fortes/banzeiro ou atrasos nos atracadouros.`;
+      prompt = `Pesquise notícias em tempo real, travessias e rios em: ${locationList}.
+Forneça um alerta fluvial em EXATAMENTE 1 ÚNICA FRASE CURTA E DIRETA (máximo 15 palavras) em Português do Brasil para leitura instantânea no painel.`;
     } else if (task === 'REROUTE_CHECK') {
-      prompt = `Pesquise notícias em tempo real e ocorrências recentes (hoje) sobre o trânsito, acidentes, protestos, interdições ou alagamentos no trecho entre e perto de: ${locationList}.
-Contexto atual da rota: ${currentRouteSummary || 'Navegação ativa'}.
-
-Responda em tom de Monitoramento do Trânsito e Logística HARPIA (máximo 2 a 3 frases em Português do Brasil).
-Informa explicitamente se há algum obstáculo real ou risco que justifica desvio de rota imediato.`;
+      prompt = `Pesquise notícias em tempo real de trânsito, bloqueios ou acidentes em: ${locationList}.
+Contexto da rota: ${currentRouteSummary || 'Navegação ativa'}.
+Responda em EXATAMENTE 1 ÚNICA FRASE CURTA E DIRETA (máximo 15 palavras) em Português do Brasil indicando claramente se a via está livre ou se há obstáculo à frente para leitura instantânea.`;
     } else {
-      prompt = `Atue como um boletim de monitoramento logístico e pesquise informações atualizadas em tempo real sobre trânsito, acidentes, obras, alagamentos, previsão do tempo e cota de rios no Amazonas para as seguintes localidades: ${locationList}.
-
-Forneça um boletim objetivo de 2 a 3 frases em Português do Brasil com o estado atual das vias, alerta meteorológico/hidrológico recente e recomendações operacionais para motoristas e navegadores.`;
+      prompt = `Pesquise informações em tempo real sobre trânsito e clima em: ${locationList}.
+Forneça o status em EXATAMENTE 1 ÚNICA FRASE CURTA E DIRETA (máximo 15 palavras) em Português do Brasil para leitura instantânea do motorista.`;
     }
 
     const modelSequence = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];

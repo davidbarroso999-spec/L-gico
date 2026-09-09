@@ -33,6 +33,7 @@ import {
   ChevronUp,
   ChevronDown,
   Check,
+  ArrowRight,
   Clock,
   Sparkles,
   Database,
@@ -76,7 +77,7 @@ import QuickStartVehicleProfile, { VehicleWorkProfile } from '@/components/Quick
 import RouteDetailsModal from '@/components/RouteDetailsModal';
 import ActiveStopBottomSheet from '@/components/ActiveStopBottomSheet';
 import KpiDashboard from '@/components/Dashboard';
-import { optimizeRoute, RouteStop, RouteOptions } from '@/lib/route-engine';
+import { optimizeRoute, RouteStop, RouteOptions, getAutoDetectedAmazonSeason } from '@/lib/route-engine';
 import { fetchLiveBulletin } from '@/lib/ai-engine';
 import { checkHybridRoute } from '@/lib/hybrid-route';
 import { db } from '@/lib/db';
@@ -86,6 +87,10 @@ import InfoTooltip from '@/components/InfoTooltip';
 import RotatingEarth from '@/components/ui/wireframe-dotted-globe';
 import TruckLoader from '@/components/TruckLoader';
 import { HarpiaTextEffect } from '@/components/ui/text-effect';
+import RouteHistoryView from '@/components/RouteHistoryView';
+import { getVehicleLabel, purgeAllSimulatedData, DEMO_ROUTE_TITLES, seedRealisticHistoryIfEmpty } from '@/lib/route-history-service';
+import AccessibleTutorialGuide from '@/components/AccessibleTutorialGuide';
+import { RouteIncident } from '@/lib/db';
 
 // Dynamically import MapView to avoid SSR issues with Leaflet
 const MapView = dynamic(() => import('@/components/MapView'), { 
@@ -158,7 +163,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 export default function HarpiaApp() {
   const isMobile = useIsMobile();
   const [isBottomMenuExpanded, setIsBottomMenuExpanded] = useState(false);
-  const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'navigation' | 'dashboard' | 'settings'>('home');
+  const [currentScreen, setCurrentScreen] = useState<'home' | 'loading' | 'navigation' | 'dashboard' | 'history' | 'settings'>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isNavbarExpanded, setIsNavbarExpanded] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -247,13 +252,10 @@ export default function HarpiaApp() {
   }, []);
 
   // Roteiro de Apresentação / Intro Hero State
-  const [showDemoAssistant, setShowDemoAssistant] = useState(false);
   const [showSlogan, setShowSlogan] = useState(false);
   const [showPlanet, setShowPlanet] = useState(false);
   const [showAppContent, setShowAppContent] = useState(false);
   const [skipAnimation, setSkipAnimation] = useState(false);
-  const [demoStep, setDemoStep] = useState(0);
-  const [demoMinimized, setDemoMinimized] = useState(false);
 
   useEffect(() => {
     // Animation will play on every load for presentation purposes
@@ -311,11 +313,22 @@ export default function HarpiaApp() {
   const [routeEndAddress, setRouteEndAddress] = useState<string>('');
   const [routeHasPause, setRouteHasPause] = useState<boolean>(false);
   const [routePauseMinutes, setRoutePauseMinutes] = useState<number>(30);
+  const [presentationMode, setPresentationMode] = useState<boolean>(false);
+  const [showAccessibleTutorial, setShowAccessibleTutorial] = useState<boolean>(false);
+  const [notificationToast, setNotificationToast] = useState<string | null>(null);
 
   const loadSavedRoutes = useCallback(async () => {
     try {
       const allRoutes = await db.routes.toArray();
-      allRoutes.sort((a: any, b: any) => {
+      // Filter out completed routes, simulated demo routes, and keep only genuine scheduled/saved routes
+      const scheduledOnly = allRoutes.filter((r: any) => {
+        if (r.isSimulated || r.isDemo) return false;
+        if (DEMO_ROUTE_TITLES.some(dt => r.name?.includes(dt) || (r.notes && r.notes.includes(dt)))) return false;
+        if (r.status === 'completed' || r.status === 'failed') return false;
+        return r.isFutureRoute === true || r.status === 'scheduled' || r.status === 'saved' || (Boolean(r.scheduledDate) && r.status !== 'completed');
+      });
+
+      scheduledOnly.sort((a: any, b: any) => {
         const aTime = a.scheduledDate ? new Date(a.scheduledDate).getTime() : 0;
         const bTime = b.scheduledDate ? new Date(b.scheduledDate).getTime() : 0;
         if (aTime !== bTime) {
@@ -323,11 +336,55 @@ export default function HarpiaApp() {
         }
         return new Date(b.date).getTime() - new Date(a.date).getTime();
       });
-      setSavedRoutes(allRoutes);
+      setSavedRoutes(scheduledOnly);
     } catch (err) {
       console.error("Erro ao carregar rotas salvas:", err);
     }
   }, []);
+
+  const handleClearAllScheduledRoutes = async () => {
+    try {
+      const allRoutes = await db.routes.toArray();
+      const scheduledIds = allRoutes
+        .filter((r: any) => r.isFutureRoute || r.status === 'scheduled' || r.status === 'saved' || Boolean(r.scheduledDate))
+        .map((r: any) => r.id)
+        .filter((id: any): id is number => typeof id === 'number');
+
+      for (const id of scheduledIds) {
+        await db.routes.delete(id);
+      }
+      await loadSavedRoutes();
+      setNotificationToast("Todas as rotas agendadas foram removidas com sucesso.");
+      setTimeout(() => setNotificationToast(null), 3000);
+    } catch (err) {
+      console.error("Erro ao limpar rotas agendadas:", err);
+    }
+  };
+
+  const handleTogglePresentationMode = async () => {
+    if (!presentationMode) {
+      await seedRealisticHistoryIfEmpty(true);
+      setAddresses([
+        'CEASA, Manaus, AM',
+        'Av. Eduardo Ribeiro, 520, Centro, Manaus, AM',
+        'Av. Mário Ypiranga, 1300, Adrianópolis, Manaus, AM',
+        'Av. Djalma Batista, 482, Flores, Manaus, AM'
+      ]);
+      setStopIds([crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]);
+      await loadSavedRoutes();
+      setPresentationMode(true);
+      setNotificationToast("Modo Apresentação ATIVADO: Amostras de demonstração carregadas com sucesso!");
+      setTimeout(() => setNotificationToast(null), 4000);
+    } else {
+      await purgeAllSimulatedData();
+      setAddresses(['']);
+      setStopIds([crypto.randomUUID()]);
+      await loadSavedRoutes();
+      setPresentationMode(false);
+      setNotificationToast("Modo Apresentação DESATIVADO: Todos os dados simulados foram excluídos.");
+      setTimeout(() => setNotificationToast(null), 4000);
+    }
+  };
 
   const handleSaveFutureRoute = async () => {
     const validAddresses = addresses.filter(a => a.trim().length > 3);
@@ -370,6 +427,18 @@ export default function HarpiaApp() {
     if (route.addresses && route.addresses.length > 0) {
       setAddresses(route.addresses);
       setStopIds(route.addresses.map(() => crypto.randomUUID()));
+      if (route.vehicleType || route.originalParameters?.vehicleType) {
+        setOptions(prev => ({
+          ...prev,
+          vehicle: route.vehicleType || route.originalParameters?.vehicleType
+        }));
+      }
+      if (route.priority || route.originalParameters?.priority) {
+        setOptions(prev => ({
+          ...prev,
+          priority: route.priority || route.originalParameters?.priority
+        }));
+      }
       if (route.sequence) {
         const newCoords: Record<string, { lat: number, lon: number }> = {};
         route.sequence.forEach((stop: any) => {
@@ -382,6 +451,7 @@ export default function HarpiaApp() {
         setResolvedCoords(prev => ({ ...prev, ...newCoords }));
       }
       setApiWarning(`Rota "${route.name || 'Sem nome'}" carregada no planejador.`);
+      setCurrentScreen('home');
     }
   };
 
@@ -585,8 +655,15 @@ export default function HarpiaApp() {
         const pollResult = await fetchLiveBulletin(validAddresses, taskName, summary);
         setLastBgPollTime(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
 
+        let cleanMsg = pollResult.bulletin || '';
+        // Truncate to first sentence if multiple sentences were returned
+        if (cleanMsg.includes('.')) {
+          const firstSentence = cleanMsg.split('.')[0].trim();
+          if (firstSentence.length > 8) cleanMsg = firstSentence + '.';
+        }
+
         if (pollResult && pollResult.hasIncident) {
-          setActiveIncidentToast(pollResult);
+          setActiveIncidentToast({ ...pollResult, bulletin: cleanMsg });
         }
       } catch (err) {
         console.warn('Background incident polling error:', err);
@@ -920,21 +997,14 @@ export default function HarpiaApp() {
   }, []);
 
   useEffect(() => {
-    seedHistoryIfEmpty();
+    // Scrub all legacy simulated routes on mount so the app starts 100% clean
+    purgeAllSimulatedData().then(() => {
+      loadSavedRoutes();
+    });
     fetch('/api/diagnostic').then(r => r.json()).then(data => {
       setDiagnostic(data);
-      const failedKeys = [];
-      const hasAi = data.openai?.status === 'SUCCESS' || data.gemini?.status === 'SUCCESS' || data.anyapi?.status === 'SUCCESS' || data.anyapi?.status === 'FALLBACK_NEEDED';
-      if (!hasAi) {
-        failedKeys.push('Motor de Inteligência (OpenAI / Gemini / AnyAPI)');
-      }
-      if (data.ors?.status === 'FAILED') failedKeys.push('OpenRouteService (Motor de Rotas)');
-      if (data.weather?.status === 'FAILED') failedKeys.push('OpenWeather (Clima)');
-      if (failedKeys.length > 0) {
-        setApiWarning(`Aviso Diagnóstico: Falha de conexão com ${failedKeys.join(', ')}.`);
-      }
     }).catch(e => console.warn('Diagnostic fetch error:', e.message));
-  }, []);
+  }, [loadSavedRoutes]);
 
   const currentActiveText = (activeSuggestionIdx !== null && activeSuggestionIdx !== undefined && activeSuggestionIdx < addresses.length) 
     ? (addresses[activeSuggestionIdx] || '') 
@@ -1148,7 +1218,17 @@ export default function HarpiaApp() {
     setCurrentScreen('loading');
     setRouteResult(null); // Reset previous
     try {
-      const result = await optimizeRoute(validAddresses, { ...options, customPrompt: aiCustomPrompt }, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
+      const autoTravelMonth = scheduledDate 
+        ? (new Date(scheduledDate + 'T12:00:00').getMonth() + 1) 
+        : (new Date().getMonth() + 1);
+
+      const effectiveOptions: RouteOptions = {
+        ...options,
+        travelMonth: autoTravelMonth,
+        customPrompt: aiCustomPrompt
+      };
+
+      const result = await optimizeRoute(validAddresses, effectiveOptions, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
       setRouteResult(result);
       
       const startTime = new Date().getTime();
@@ -1156,15 +1236,75 @@ export default function HarpiaApp() {
       setActualRouteEndTime(null);
       setTotalElapsedMs(null);
 
-      // Save to IndexedDB (safe catch)
+      // Save rich historical route to IndexedDB (safe catch)
       try {
+        const calcDistKm = result.summary?.distance ? Math.round((result.summary.distance / 1000) * 10) / 10 : 0;
+        const calcDurMin = result.summary?.duration ? Math.round(result.summary.duration / 60) : 0;
+        const selectedVehicle = options.vehicle || 'van';
+        const selectedPriority = options.priority || 'balanced';
+
+        const kml = selectedVehicle === 'moto' ? 40.0 : selectedVehicle === 'truck' ? 9.0 : selectedVehicle === 'boat' ? 3.5 : selectedVehicle === 'car' ? 12.5 : 10.0;
+        const estFuelL = Math.round((calcDistKm / kml) * 10) / 10;
+        const estFuelCost = Math.round(estFuelL * 6.15 * 100) / 100;
+
+        const waypoints = (result.sequence || []).map((s: any, idx: number) => ({
+          address: s.address || validAddresses[idx] || `Parada #${idx + 1}`,
+          lat: s.lat || 0,
+          lng: s.lng || s.lon || 0,
+          stopIndex: idx,
+          stopType: s.stopType || (idx === 0 ? 'pickup' : 'delivery'),
+          status: 'pending' as const,
+          plannedArrivalTime: s.plannedArrivalTime || `${8 + Math.floor(idx * 0.5)}:${idx % 2 === 0 ? '00' : '30'}`,
+          serviceDurationMinutes: s.serviceDuration || 15,
+          fluvialPort: s.fluvialPort
+        }));
+
         await db.routes.add({
           date: new Date(),
           startedAt: new Date(startTime),
+          name: `${getVehicleLabel(selectedVehicle)} • ${validAddresses.length} Paradas (${calcDistKm} km)`,
           addresses: validAddresses,
-          sequence: result.sequence,
-          score: result.score,
-          status: 'pending'
+          sequence: waypoints,
+          score: result.score || 95,
+          finalScore: result.score || 95,
+          status: 'pending',
+          vehicleType: selectedVehicle as any,
+          priority: selectedPriority as any,
+          totalDistanceKm: calcDistKm,
+          totalDurationMinutes: calcDurMin,
+          originalParameters: {
+            addresses: validAddresses,
+            priority: selectedPriority as any,
+            vehicleType: selectedVehicle as any,
+            vehicleName: getVehicleLabel(selectedVehicle),
+            timeWindows: validWithWindows,
+            stopTypes: validStopTypes,
+            customPrompt: aiCustomPrompt
+          },
+          calculatedRoute: {
+            waypoints,
+            distanceMeters: result.summary?.distance || Math.round(calcDistKm * 1000),
+            distanceKm: calcDistKm,
+            durationSeconds: result.summary?.duration || calcDurMin * 60,
+            durationMinutes: calcDurMin,
+            estimatedFuelLiters: estFuelL,
+            estimatedFuelCost: estFuelCost,
+            isFluvial: selectedVehicle === 'boat' || result.sequence.some((s: any) => s.fluvialPort)
+          },
+          executionMetrics: {
+            startedAt: new Date(startTime),
+            totalElapsedMs: 0,
+            actualDurationMinutes: 0,
+            actualDistanceKm: calcDistKm,
+            completedStopsCount: 0,
+            failedStopsCount: 0,
+            totalStopsCount: validAddresses.length,
+            completionRatePercent: 0,
+            punctualityRatePercent: 100,
+            fuelConsumedLiters: estFuelL,
+            fuelCostTotal: estFuelCost
+          },
+          reportedIncidents: []
         });
       } catch (dbErr) {
         console.warn("Could not save to IndexedDB, continuing...", dbErr);
@@ -1310,6 +1450,28 @@ export default function HarpiaApp() {
     }
   };
 
+  const getProviderBadge = (source?: string) => {
+    switch (source) {
+      case 'google':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30 shrink-0">Google</span>;
+      case 'mapbox':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 shrink-0">Mapbox</span>;
+      case 'viacep':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">Correios / CEP</span>;
+      case 'open-meteo':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 shrink-0">Open-Meteo</span>;
+      case 'ors':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30 shrink-0">ORS</span>;
+      case 'nominatim':
+      case 'photon':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-400 border border-teal-500/30 shrink-0">OSM</span>;
+      case 'cache':
+        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 shrink-0">Hub AM</span>;
+      default:
+        return null;
+    }
+  };
+
   const renderSuggestionsDropdown = (idx: number) => {
     if (!showSuggestions || activeSuggestionIdx !== idx || suggestions.length === 0) return null;
     
@@ -1326,9 +1488,16 @@ export default function HarpiaApp() {
 
     return (
       <div 
-        className="autocomplete-container absolute left-0 right-0 z-[5000] mt-1 bg-slate-900 border border-slate-800 rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.7)] overflow-hidden max-h-[300px] flex flex-col w-full"
+        className="autocomplete-container absolute left-0 right-0 z-[5000] mt-1.5 bg-slate-900 border-2 border-black dark:border-slate-700 rounded-xl shadow-[4px_4px_0px_#000] overflow-hidden max-h-[340px] flex flex-col w-full animate-in fade-in zoom-in-95 duration-100"
       >
-        <div className="overflow-y-auto custom-scrollbar flex-1">
+        <div className="px-3.5 py-2 bg-slate-950/80 border-b border-black dark:border-slate-800 flex items-center justify-between">
+          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1.5">
+            <Search className="w-3 h-3 text-tech" />
+            Sugestões Multi-API ({uniqueSuggestions.length})
+          </span>
+          <span className="text-[9px] font-mono text-slate-500">Google • Mapbox • CEP • Open-Meteo</span>
+        </div>
+        <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-slate-800/80">
           {uniqueSuggestions.length > 0 ? (
             uniqueSuggestions.map((s, sIdx) => (
               <button
@@ -1394,32 +1563,39 @@ export default function HarpiaApp() {
                     console.error("Error choosing suggestion:", err);
                   }
                 }}
-                className="w-full px-4 py-3.5 text-left hover:bg-slate-800 border-b border-slate-800 last:border-0 group transition-colors flex items-center justify-between"
+                className="w-full px-3.5 py-3 text-left hover:bg-slate-850 group transition-colors flex items-center justify-between"
               >
-                <div className="flex-1 min-w-0 pr-4 flex items-start gap-2.5">
+                <div className="flex-1 min-w-0 pr-3 flex items-start gap-2.5">
                   <div className="mt-0.5 shrink-0">
                     {(() => {
                       const iconObj = getSuggestionIconObj(s.name, s.type);
                       const IconComp = iconObj.icon;
                       return (
-                        <div className={`p-1.5 rounded-lg ${iconObj.bg}`}>
+                        <div className={`p-1.5 rounded-lg border-2 border-black ${iconObj.bg} shadow-[1px_1px_0px_#000]`}>
                           <IconComp className="w-3.5 h-3.5" />
                         </div>
                       );
                     })()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate" title={s.label}>
-                      {s.label}
-                    </p>
-                    {s.name && s.name !== s.label && (
-                      <p className="text-[9px] text-slate-400 group-hover:text-slate-300 transition-colors line-clamp-1 mt-0.5 flex items-center gap-1.5">
-                        <span className="text-tech font-mono bg-tech/10 border border-tech/20 px-1 py-0.2 rounded text-[7.5px] uppercase tracking-wider shrink-0">
-                          {s.type === 'poi' ? 'Ponto de Interesse' : 'Local'}
-                        </span>
-                        <span className="truncate">{s.name}</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="text-xs font-bold text-slate-100 group-hover:text-tech transition-colors truncate" title={s.label}>
+                        {s.label}
                       </p>
-                    )}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                      {getProviderBadge(s.source)}
+                      {s.cep && (
+                        <span className="text-[8px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
+                          CEP {s.cep}
+                        </span>
+                      )}
+                      {s.name && s.name !== s.label && (
+                        <span className="text-[9px] text-slate-400 group-hover:text-slate-300 transition-colors truncate">
+                          {s.name}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </button>
@@ -1428,7 +1604,7 @@ export default function HarpiaApp() {
             <div className="p-6 text-center bg-slate-900/50">
               <p className="text-xs font-bold text-slate-400 mb-1">Local não encontrado</p>
               <p className="text-[9px] text-slate-500 max-w-[200px] mx-auto">
-                Busque pelo endereço completo.
+                Busque por rua, número, bairro, CEP ou estabelecimento.
               </p>
             </div>
           )}
@@ -1469,6 +1645,19 @@ export default function HarpiaApp() {
           </div>
           <button onClick={() => setApiWarning(null)} className="shrink-0 text-slate-400 hover:text-white transition-colors ml-1">
             <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Notification Toast for Presentation Mode & Quick Actions */}
+      {notificationToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] bg-slate-900/95 text-white border-2 border-amber-400 text-xs sm:text-sm font-bold py-3 px-6 rounded-2xl shadow-[0_10px_40px_rgba(251,191,36,0.4)] backdrop-blur-md animate-in slide-in-from-top-4 flex items-center gap-3 max-w-[92%]">
+          <Sparkles className="w-5 h-5 text-amber-400 shrink-0 animate-spin" />
+          <div className="flex-1 font-sans">
+            {notificationToast}
+          </div>
+          <button onClick={() => setNotificationToast(null)} className="shrink-0 text-slate-400 hover:text-white transition-colors ml-2 cursor-pointer">
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
@@ -1671,37 +1860,50 @@ export default function HarpiaApp() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsBottomMenuExpanded(false);
-                                  setFailureReason('Destinatário Ausente');
-                                  setFailureNotes('');
-                                  setShowFailureModal(true);
-                                }}
-                                className="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
-                              >
-                                <XCircle className="w-3.5 h-3.5" />
-                                <span>Insucesso</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsBottomMenuExpanded(false);
-                                  if (navIndex === 0) {
+                              {navIndex === 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsBottomMenuExpanded(false);
                                     setNavIndex(1);
-                                  } else {
-                                    setShowDeliveryModal(true);
-                                    setDeliveryPhoto(null);
-                                    setDeliveryNotes('');
-                                    startWebcam();
-                                  }
-                                }}
-                                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95 cursor-pointer"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
-                                <span>Registrar Entrega</span>
-                              </button>
+                                  }}
+                                  className="px-5 py-2 rounded-xl bg-tech hover:brightness-110 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shadow-md shadow-tech/20 active:scale-95 cursor-pointer"
+                                >
+                                  <Play className="w-4 h-4 fill-current text-slate-950" />
+                                  <span>Iniciar Saída da Garagem</span>
+                                  <ArrowRight className="w-3.5 h-3.5 text-slate-950" />
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsBottomMenuExpanded(false);
+                                      setFailureReason('Destinatário Ausente');
+                                      setFailureNotes('');
+                                      setShowFailureModal(true);
+                                    }}
+                                    className="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span>Insucesso</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsBottomMenuExpanded(false);
+                                      setShowDeliveryModal(true);
+                                      setDeliveryPhoto(null);
+                                      setDeliveryNotes('');
+                                      startWebcam();
+                                    }}
+                                    className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95 cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
+                                    <span>Registrar Entrega</span>
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1807,19 +2009,20 @@ export default function HarpiaApp() {
                       <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block mb-2 px-1">
                         Módulos do Sistema
                       </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-3">
                         {[
                           { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
                           { id: 'route_details', label: 'Detalhes da Rota', icon: Sliders, desc: 'Custos, Horários e Veículo' },
                           ...(routeResult ? [
                             { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' }
                           ] : []),
+                          { id: 'history', label: 'Histórico', icon: Clock, desc: 'Auditoria e Relatórios' },
                           { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
                           { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
                           { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
                         ].map((tab) => {
                           const isActive = tab.id === 'tutorial' 
-                            ? (showDemoAssistant && !demoMinimized) 
+                            ? showAccessibleTutorial 
                             : tab.id === 'route_details'
                             ? showRouteDetailsModal
                             : currentScreen === tab.id;
@@ -1832,9 +2035,7 @@ export default function HarpiaApp() {
                               onClick={() => {
                                 setIsBottomMenuExpanded(false);
                                 if (tab.id === 'tutorial') {
-                                  setShowDemoAssistant(true);
-                                  setDemoStep(0);
-                                  setDemoMinimized(false);
+                                  setShowAccessibleTutorial(true);
                                   setCurrentScreen('home');
                                 } else if (tab.id === 'route_details') {
                                   setShowRouteDetailsModal(true);
@@ -1931,6 +2132,17 @@ export default function HarpiaApp() {
                 >
                   <div className="flex flex-col items-center w-full max-w-full px-1 sm:px-2">
                     <div className="relative w-[90vw] max-w-[400px] sm:max-w-[500px] md:max-w-[650px] lg:max-w-[800px] xl:max-w-[950px] mx-auto aspect-square @container">
+                      {/* Botão invisível sobre a logo para ativar/desativar o Modo Apresentação de dados simulados */}
+                      <button
+                        type="button"
+                        aria-label="Modo Apresentação Secreto"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleTogglePresentationMode();
+                        }}
+                        className="absolute top-0 left-0 w-full h-[55%] z-30 opacity-0 cursor-default"
+                        title=""
+                      />
                       <HarpiaTextEffect 
                         speed={1.4} 
                         skipAnimation={skipAnimation}
@@ -1972,38 +2184,41 @@ export default function HarpiaApp() {
                           </motion.div>
                         )}
                       </AnimatePresence>
+
+                      {/* Scroll Indicator Prompt positioned with balanced spacing beneath the logo slogan */}
+                      <AnimatePresence>
+                        {showSlogan && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -8 }}
+                            transition={{ duration: 0.5, delay: 0.2 }}
+                            className="absolute z-30 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center justify-center"
+                            style={{ top: '79%' }}
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triggerImmediateReveal();
+                                setTimeout(() => {
+                                  const el = document.getElementById('rotas-section');
+                                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                                }, 100);
+                              }}
+                              className="group flex flex-col items-center gap-1 text-slate-400 hover:text-tech transition-colors cursor-pointer py-1.5 px-4 rounded-full hover:bg-slate-900/50"
+                            >
+                              <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.2em] opacity-80 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                Explorar Rotas
+                              </span>
+                              <ChevronDown className="w-4 h-4 opacity-70 group-hover:opacity-100 transition-all group-hover:translate-y-0.5 animate-bounce" />
+                            </button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </div>
                 </h1>
-
-                {/* Scroll Indicator Prompt when Animation Completes */}
-                <AnimatePresence>
-                  {showSlogan && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      transition={{ duration: 0.5, delay: 0.2 }}
-                      className="mt-6 flex flex-col items-center justify-center z-30"
-                    >
-                      <button
-                        onClick={() => {
-                          triggerImmediateReveal();
-                          setTimeout(() => {
-                            const el = document.getElementById('rotas-section');
-                            if (el) el.scrollIntoView({ behavior: 'smooth' });
-                          }, 100);
-                        }}
-                        className="group flex flex-col items-center gap-1.5 text-slate-500 hover:text-tech transition-colors cursor-pointer"
-                      >
-                        <span className="text-[9px] font-bold uppercase tracking-[0.2em] opacity-80 group-hover:opacity-100 transition-opacity">
-                          Explorar Rotas
-                        </span>
-                        <ChevronDown className="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" />
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
               </motion.div>
 
               {/* Functional App Options & Route Grid - Revealed after Logo Animation */}
@@ -2019,27 +2234,23 @@ export default function HarpiaApp() {
                 {/* Left Section: Itinerary inputs and Main Planning */}
                 <div className="w-full flex flex-col gap-6">
                   {/* Main Planning Card */}
-                  <div className="glass p-4 xs:p-6 md:p-8 rounded-3xl md:rounded-[32px] relative h-fit flex flex-col border border-slate-800">
-                  <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
-                    <MapIcon className="w-32 h-32" />
-                  </div>
-
+                  <div className="glass p-5 sm:p-7 md:p-8 rounded-2xl relative h-fit flex flex-col border border-slate-800/70">
                   {/* Quick Action Control Bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 mb-6 pb-4 border-b border-slate-850">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b-2 border-slate-800">
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => setShowQuickStartModal(true)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-200 hover:text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                        className="neo-btn px-3.5 py-1.5 rounded-xl bg-slate-900 border-2 border-slate-700 hover:border-amber-400 text-slate-200 text-xs font-black transition-all flex items-center gap-1.5"
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-tech shrink-0" />
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                         <span>Início Rápido</span>
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-850 text-slate-300">
-                      <Truck className="w-3.5 h-3.5 text-tech" />
-                      <span className="text-[11px] font-semibold text-slate-300">
+                    <div className="neo-badge-tech flex items-center gap-1.5 px-3 py-1 text-[11px]">
+                      <Truck className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="font-bold">
                         {vehicleProfile === 'packages' && 'Pacotes / Encomendas'}
                         {vehicleProfile === 'food_delivery' && 'Pedidos de Comida'}
                         {vehicleProfile === 'services' && 'Prestação de Serviços'}
@@ -2049,43 +2260,41 @@ export default function HarpiaApp() {
                     </div>
                   </div>
 
-                  <h3 className="text-lg font-bold mb-5 flex items-center gap-2 font-display border-b border-slate-850 pb-3 flex-wrap">
-                    <div className="w-2 h-2 rounded-full bg-tech shrink-0" />
+                  <h3 className="text-base font-black mb-5 flex items-center gap-2 font-display border-b-2 border-slate-800 pb-3 flex-wrap text-white">
+                    <div className="w-2.5 h-2.5 bg-amber-400 border border-black shadow-[1px_1px_0px_0px_#000] shrink-0" />
                     <span>
                       Paradas de Entrega
-                      <InfoTooltip text="Adicione o local de partida e as paradas desejadas. A plataforma traçará no mapa o melhor trajeto conectando esses pontos." />
                     </span>
                   </h3>
                   
                   <div className="space-y-5 mb-8 relative">
                     {/* Vertical Connecting Itinerary Line */}
-                    <div className="absolute left-6 top-8 bottom-8 w-0.5 border-l-2 border-dashed border-slate-800 pointer-events-none" />
+                    <div className="absolute left-6 top-8 bottom-8 w-0.5 border-l-2 border-dashed border-slate-700 pointer-events-none" />
 
                     {/* Starting Point */}
-                    <div key={stopIds[0]} className="relative flex gap-4 items-start">
-                      <div className="w-4 h-4 rounded-full bg-tech text-slate-950 font-black flex items-center justify-center text-[10px] mt-4.5 z-10 shadow-[0_0_15px_rgba(0,242,255,0.4)]">
+                    <div key={stopIds[0]} id="tutorial-origin-stop" className="relative flex gap-3.5 items-start">
+                      <div className="w-6 h-6 rounded-lg bg-amber-400 text-black font-black flex items-center justify-center text-xs mt-3 z-10 shrink-0 border-2 border-black shadow-[2px_2px_0px_0px_#000]">
                         A
                       </div>
-                      <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex-1 min-w-0 space-y-1.5">
                         <div className="flex items-center justify-between flex-wrap gap-1">
-                          <label className="text-[10px] text-tech font-black uppercase tracking-widest px-1 flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-tech animate-pulse" />
-                            Ponto de Partida (Origem)
+                          <label className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-wider px-0.5 flex items-center gap-1.5">
+                            Ponto de Partida
                           </label>
                           {invoiceData[0] && (invoiceData[0].key || invoiceData[0].pdfUrl) ? (
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
                                 onClick={() => handleShowInvoice(0)}
-                                className="text-[10px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                className="text-[10px] font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
                               >
-                                <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
+                                <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" /> Exibir nota
                               </button>
                               <span className="text-slate-700 text-[10px]">|</span>
                               <button
                                 type="button"
                                 onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === 0 ? null : 0)}
-                                className="text-[10px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                                className="text-[10px] font-bold text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
                               >
                                 Alterar
                               </button>
@@ -2094,9 +2303,9 @@ export default function HarpiaApp() {
                             <button
                               type="button"
                               onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === 0 ? null : 0)}
-                              className="text-[10px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                              className="text-[10px] font-bold text-slate-400 hover:text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
                             >
-                              <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                              <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" /> Atribuir nota
                             </button>
                           )}
                         </div>
@@ -2147,8 +2356,8 @@ export default function HarpiaApp() {
                                 setActiveSuggestionIdx(null);
                               }
                             }}
-                            placeholder="De onde você está saindo? (Empresa, Praça, Rua...)"
-                            className="w-full bg-slate-900/80 border border-tech/30 rounded-2xl px-4 py-4 text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all pr-10 hover:border-slate-700 font-sans"
+                            placeholder="De onde você está saindo? (Empresa, Rua...)"
+                            className="neo-input w-full px-3.5 py-3 text-sm pr-10 text-white placeholder:text-slate-500"
                           />
                           <button
                             type="button"
@@ -2161,25 +2370,25 @@ export default function HarpiaApp() {
                                 setShowSuggestions(true);
                               }
                             }}
-                            className="absolute right-3.5 top-4 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                            className="absolute right-3.5 top-3.5 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer z-10"
                             title="Pesquisar local"
                           >
-                            <Search className="w-5 h-5 text-slate-600 hover:text-tech" />
+                            <Search className="w-4 h-4" />
                           </button>
                           {renderSuggestionsDropdown(0)}
                         </div>
 
                         {/* Quick Action Toolbar for Departure Point */}
-                        <div className="flex items-center gap-2 flex-wrap pt-1.5 pb-1">
+                        <div className="flex items-center gap-2 flex-wrap pt-1">
                           <button
                             type="button"
                             onClick={handleUseCurrentGpsAsOrigin}
                             disabled={isLocatingGps}
-                            className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-tech hover:border-tech/40 text-[10.5px] font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                            title="Definir ponto de partida com base no GPS em tempo real e ponto de referência mais próximo"
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-tech hover:border-slate-700 text-[10.5px] font-medium transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Definir ponto de partida com base no GPS em tempo real"
                           >
                             <Navigation className={`w-3 h-3 text-tech shrink-0 ${isLocatingGps ? 'animate-spin' : ''}`} />
-                            {isLocatingGps ? 'Estimando Ponto de Referência...' : 'Usar GPS Tempo Real'}
+                            {isLocatingGps ? 'Estimando GPS...' : 'Usar GPS Atual'}
                           </button>
                         </div>
 
@@ -2323,18 +2532,18 @@ export default function HarpiaApp() {
 
                     {/* Intermediate Stops */}
                     {addresses.length > 2 && (
-                      <div className="space-y-5 pl-10">
+                      <div className="space-y-4 pl-8">
                         {addresses.slice(1, -1).map((addr, idx) => {
                           const realIdx = idx + 1;
                           return (
-                            <div key={stopIds[realIdx]} className="space-y-2 relative">
-                              <div className="absolute -left-10 top-3 w-4 h-4 rounded-full bg-slate-800 text-slate-300 font-bold flex items-center justify-center text-[9px] z-10 border border-slate-750">
+                            <div key={stopIds[realIdx]} className="space-y-1.5 relative">
+                              <div className="absolute -left-8 top-3.5 w-6 h-6 rounded-lg bg-slate-900 text-slate-200 font-mono font-black flex items-center justify-center text-xs z-10 border-2 border-slate-700 shadow-[2px_2px_0px_0px_#000]">
                                 {idx + 1}
                               </div>
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between flex-wrap gap-1">
                                   <div className="flex items-center gap-2">
-                                    <label className="text-[9px] text-slate-500 font-bold uppercase tracking-widest px-1">
+                                    <label className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-wider px-0.5">
                                       Parada {idx + 1}
                                     </label>
                                     <button
@@ -2345,21 +2554,21 @@ export default function HarpiaApp() {
                                           [realIdx]: prev[realIdx] === 'pickup' ? 'delivery' : 'pickup'
                                         }));
                                       }}
-                                      className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border ${
+                                      className={`neo-btn px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border-2 ${
                                         stopTypes[realIdx] === 'pickup'
-                                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                                          : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                          ? 'bg-amber-400 text-black border-black shadow-[2px_2px_0px_0px_#000]'
+                                          : 'bg-slate-900 text-slate-300 border-slate-700'
                                       }`}
-                                      title="Alternar entre Ponto de Coleta e Destino de Entrega"
+                                      title="Alternar tipo de parada"
                                     >
                                       {stopTypes[realIdx] === 'pickup' ? (
                                         <>
-                                          <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
-                                          <span>Coleta (Não é entrega)</span>
+                                          <ShoppingBag className="w-2.5 h-2.5 text-black shrink-0" />
+                                          <span>Coleta</span>
                                         </>
                                       ) : (
                                         <>
-                                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                                          <MapPin className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                                           <span>Entrega</span>
                                         </>
                                       )}
@@ -2370,15 +2579,15 @@ export default function HarpiaApp() {
                                       <button
                                         type="button"
                                         onClick={() => handleShowInvoice(realIdx)}
-                                        className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                        className="text-[10px] font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
                                       >
-                                        <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
+                                        <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" /> Exibir nota
                                       </button>
-                                      <span className="text-slate-700 text-[9px]">|</span>
+                                      <span className="text-slate-700 text-[10px]">|</span>
                                       <button
                                         type="button"
                                         onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === realIdx ? null : realIdx)}
-                                        className="text-[9px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                                        className="text-[10px] font-bold text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
                                       >
                                         Alterar
                                       </button>
@@ -2387,9 +2596,9 @@ export default function HarpiaApp() {
                                     <button
                                       type="button"
                                       onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === realIdx ? null : realIdx)}
-                                      className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                      className="text-[10px] font-bold text-slate-400 hover:text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
                                     >
-                                      <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                                      <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" /> Atribuir nota
                                     </button>
                                   )}
                                 </div>
@@ -2441,8 +2650,8 @@ export default function HarpiaApp() {
                                           setActiveSuggestionIdx(null);
                                         }
                                       }}
-                                      placeholder="Empresa, hospital, praça ou rua..."
-                                      className="w-full bg-slate-900/50 border border-slate-800/80 rounded-xl px-4 py-3 text-sm focus:border-slate-600 outline-none transition-all pr-10 hover:border-slate-700/60 font-sans"
+                                      placeholder="Empresa, rua ou ponto de referência..."
+                                      className="neo-input w-full px-3.5 py-3 text-sm pr-10 text-white placeholder:text-slate-500"
                                     />
                                     <button
                                       type="button"
@@ -2455,16 +2664,17 @@ export default function HarpiaApp() {
                                           setShowSuggestions(true);
                                         }
                                       }}
-                                      className="absolute right-3.5 top-3 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                                      className="absolute right-3.5 top-3.5 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer z-10"
                                       title="Pesquisar local"
                                     >
-                                      <Search className="w-4 h-4 text-slate-600 hover:text-tech" />
+                                      <Search className="w-4 h-4 text-slate-500 hover:text-amber-400" />
                                     </button>
                                     {renderSuggestionsDropdown(realIdx)}
                                   </div>
                                   <button 
                                     onClick={() => removeAddress(realIdx)}
-                                    className="p-3 text-slate-600 hover:text-alert hover:bg-slate-950/40 rounded-xl transition-all"
+                                    className="neo-btn p-3 text-slate-400 hover:text-red-400 hover:border-red-500 bg-slate-900 border-2 border-slate-700 rounded-xl"
+                                    title="Remover parada"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -2479,52 +2689,47 @@ export default function HarpiaApp() {
                                   </div>
                                 )}
                                 {invoiceData[realIdx] && (invoiceData[realIdx].key || invoiceData[realIdx].pdfUrl) && (
-                                  <div className="flex flex-col gap-1.5 mt-2 bg-slate-900/30 border border-slate-800/40 p-2.5 rounded-xl">
+                                  <div className="flex flex-col gap-1 mt-2 bg-slate-900/40 border border-slate-800/60 p-2.5 rounded-xl">
                                     <div className="flex items-center justify-between flex-wrap gap-1">
                                       <div className="flex items-center gap-1.5">
-                                        <FileCheck className="w-3.5 h-3.5 text-tech animate-pulse" />
-                                        <span className="text-[10px] font-black uppercase text-tech tracking-wider">
-                                          {invoiceData[realIdx]?.valor ? 'NFe Vinculada via API' : 'DANFE Anexada'}
+                                        <FileCheck className="w-3.5 h-3.5 text-tech" />
+                                        <span className="text-[10px] font-bold text-tech">
+                                          {invoiceData[realIdx]?.valor ? 'NFe Vinculada' : 'DANFE Anexada'}
                                         </span>
                                       </div>
                                       {invoiceData[realIdx]?.valor !== undefined && (
-                                        <span className="text-[10px] font-bold text-emerald-400 font-mono">
+                                        <span className="text-[10px] font-medium text-emerald-400 font-mono">
                                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoiceData[realIdx]?.valor || 0)}
                                         </span>
                                       )}
                                     </div>
-                                    <div className="text-[9.5px] text-slate-400 line-clamp-1 font-medium">
+                                    <div className="text-[9.5px] text-slate-400 line-clamp-1">
                                       {invoiceData[realIdx]?.destinatario ? `Destinatário: ${invoiceData[realIdx]?.destinatario}` : `Chave: ${invoiceData[realIdx]?.key}`}
                                     </div>
-                                    {invoiceData[realIdx]?.peso !== undefined && (invoiceData[realIdx]?.peso ?? 0) > 0 && (
-                                      <div className="text-[9px] text-slate-500 font-mono">
-                                        Peso: {invoiceData[realIdx]?.peso} kg
-                                      </div>
-                                    )}
                                   </div>
                                 )}
                                 {/* Stop Delivery Time Window */}
-                                <div className="flex flex-wrap items-center gap-2 mt-2 px-1 pb-1">
-                                  <Clock className="w-3.5 h-3.5 text-slate-650 shrink-0" />
-                                  <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">Janela de Entrega:</span>
-                                  <div className="flex flex-wrap items-center gap-1.5 ml-1">
+                                <div className="flex flex-wrap items-center gap-2 mt-1.5 px-0.5">
+                                  <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                                  <span className="text-[9.5px] font-medium text-slate-500">Janela:</span>
+                                  <div className="flex flex-wrap items-center gap-1.5">
                                     <input 
                                       type="time"
                                       value={timeWindows[realIdx]?.start || ''}
                                       onChange={(e) => updateTimeWindow(realIdx, 'start', e.target.value)}
-                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-0.5 outline-none focus:border-tech transition-all font-mono"
                                     />
-                                    <span className="text-[10px] text-slate-600">até</span>
+                                    <span className="text-[10px] text-slate-600">às</span>
                                     <input 
                                       type="time"
                                       value={timeWindows[realIdx]?.end || ''}
                                       onChange={(e) => updateTimeWindow(realIdx, 'end', e.target.value)}
-                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                      className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-0.5 outline-none focus:border-tech transition-all font-mono"
                                     />
                                     {(timeWindows[realIdx]?.start || timeWindows[realIdx]?.end) && (
                                       <button 
                                         onClick={() => removeTimeWindow(realIdx)}
-                                        className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                                        className="text-slate-500 hover:text-rose-400 text-[9px] uppercase font-bold ml-1 transition-all"
                                       >
                                         Limpar
                                       </button>
@@ -2543,21 +2748,20 @@ export default function HarpiaApp() {
                       const lastIdx = addresses.length - 1;
                       const isLastPickup = stopTypes[lastIdx] === 'pickup';
                       return (
-                        <div key={stopIds[lastIdx]} className="relative flex gap-4 items-start">
-                          <div className={`w-4 h-4 rounded-full font-black flex items-center justify-center text-[10px] mt-4.5 z-10 ${
+                        <div key={stopIds[lastIdx]} className="relative flex gap-3.5 items-start">
+                          <div className={`w-6 h-6 rounded-lg font-black flex items-center justify-center text-xs mt-3 z-10 shrink-0 border-2 border-black shadow-[2px_2px_0px_0px_#000] ${
                             isLastPickup 
-                              ? 'bg-amber-500 text-slate-950 shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
-                              : 'bg-alert text-white shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                              ? 'bg-amber-400 text-black' 
+                              : 'bg-rose-500 text-white'
                           }`}>
                             {isLastPickup ? 'C' : 'B'}
                           </div>
-                          <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex-1 min-w-0 space-y-1.5">
                             <div className="flex items-center justify-between flex-wrap gap-1">
                               <div className="flex items-center gap-2">
-                                <label className={`text-[10px] font-black uppercase tracking-widest px-1 flex items-center gap-2 ${
-                                  isLastPickup ? 'text-amber-400' : 'text-alert'
+                                <label className={`text-[10px] font-mono font-bold uppercase tracking-wider px-0.5 flex items-center gap-1.5 ${
+                                  isLastPickup ? 'text-amber-400' : 'text-slate-300'
                                 }`}>
-                                  <div className={`w-1.5 h-1.5 rounded-full ${isLastPickup ? 'bg-amber-400' : 'bg-alert'}`} />
                                   {isLastPickup ? 'Ponto de Coleta' : 'Destino Final'}
                                 </label>
 
@@ -2569,22 +2773,22 @@ export default function HarpiaApp() {
                                       [lastIdx]: prev[lastIdx] === 'pickup' ? 'delivery' : 'pickup'
                                     }));
                                   }}
-                                  className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border ${
+                                  className={`neo-btn px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border-2 ${
                                     isLastPickup
-                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                                      ? 'bg-amber-400 text-black border-black shadow-[2px_2px_0px_0px_#000]'
+                                      : 'bg-slate-900 text-slate-300 border-slate-700'
                                   }`}
-                                  title="Alternar entre Ponto de Coleta e Destino de Entrega"
+                                  title="Alternar entre Coleta e Entrega"
                                 >
                                   {isLastPickup ? (
                                     <>
-                                      <ShoppingBag className="w-3 h-3 text-amber-400 shrink-0" />
-                                      <span>Coleta (Não é entrega)</span>
+                                      <ShoppingBag className="w-2.5 h-2.5 text-black shrink-0" />
+                                      <span>Coleta</span>
                                     </>
                                   ) : (
                                     <>
-                                      <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                      <span>Definir como Coleta</span>
+                                      <MapPin className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                                      <span>Entrega</span>
                                     </>
                                   )}
                                 </button>
@@ -2594,15 +2798,15 @@ export default function HarpiaApp() {
                                  <button
                                    type="button"
                                    onClick={() => handleShowInvoice(addresses.length - 1)}
-                                   className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                   className="text-[10px] font-medium text-tech hover:underline flex items-center gap-1 cursor-pointer"
                                  >
                                    <Eye className="w-3.5 h-3.5 text-tech shrink-0" /> Exibir nota
                                  </button>
-                                 <span className="text-slate-700 text-[9px]">|</span>
+                                 <span className="text-slate-700 text-[10px]">|</span>
                                  <button
                                    type="button"
                                    onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === addresses.length - 1 ? null : addresses.length - 1)}
-                                   className="text-[9px] uppercase font-black tracking-wider text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
+                                   className="text-[10px] font-medium text-slate-400 hover:text-white hover:underline flex items-center gap-1 cursor-pointer"
                                  >
                                    Alterar
                                  </button>
@@ -2611,9 +2815,9 @@ export default function HarpiaApp() {
                                <button
                                  type="button"
                                  onClick={() => setActiveNFeSearchIdx(activeNFeSearchIdx === addresses.length - 1 ? null : addresses.length - 1)}
-                                 className="text-[9px] uppercase font-black tracking-wider text-tech hover:underline flex items-center gap-1 cursor-pointer"
+                                 className="text-[10px] font-medium text-slate-400 hover:text-tech hover:underline flex items-center gap-1 cursor-pointer"
                                >
-                                 <FileText className="w-3.5 h-3.5 text-tech shrink-0" /> Atribuir nota
+                                 <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" /> Atribuir nota
                                </button>
                              )}
                           </div>
@@ -2666,8 +2870,8 @@ export default function HarpiaApp() {
                                   setActiveSuggestionIdx(null);
                                 }
                               }}
-                              placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping...)"
-                              className="w-full bg-slate-900/80 border border-alert/30 rounded-2xl px-4 py-4 text-sm focus:border-alert focus:ring-1 focus:ring-alert outline-none transition-all pr-10 hover:border-slate-705 font-sans"
+                              placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping, Rua...)"
+                              className="neo-input w-full px-3.5 py-3 text-sm pr-10 text-white placeholder:text-slate-500"
                             />
                             <button
                               type="button"
@@ -2681,10 +2885,10 @@ export default function HarpiaApp() {
                                   setShowSuggestions(true);
                                 }
                               }}
-                              className="absolute right-3.5 top-4 text-slate-500 hover:text-tech transition-colors cursor-pointer z-10"
+                              className="absolute right-3.5 top-3.5 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer z-10"
                               title="Pesquisar local"
                             >
-                              <Search className="w-5 h-5 text-slate-600 hover:text-tech" />
+                              <Search className="w-4 h-4 text-slate-500 hover:text-amber-400" />
                             </button>
                             {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
@@ -2698,11 +2902,11 @@ export default function HarpiaApp() {
                             </div>
                           )}
                           {invoiceData[addresses.length - 1] && (invoiceData[addresses.length - 1].key || invoiceData[addresses.length - 1].pdfUrl) && (
-                            <div className="flex flex-col gap-1.5 mt-2.5 bg-slate-900/30 border border-slate-800/40 p-3 rounded-xl">
+                            <div className="flex flex-col gap-1.5 mt-2.5 bg-slate-900/40 border-2 border-slate-800 p-3 rounded-xl">
                               <div className="flex items-center justify-between flex-wrap gap-1">
                                 <div className="flex items-center gap-1.5">
-                                  <FileCheck className="w-3.5 h-3.5 text-tech animate-pulse" />
-                                  <span className="text-[10px] font-black uppercase text-tech tracking-wider">
+                                  <FileCheck className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                                  <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
                                     {invoiceData[addresses.length - 1]?.valor ? 'NFe Vinculada via API' : 'DANFE Anexada'}
                                   </span>
                                 </div>
@@ -2724,26 +2928,26 @@ export default function HarpiaApp() {
                           )}
                           {/* Final Destination Time Window */}
                           <div className="flex flex-wrap items-center gap-2 mt-2 px-1 pb-1">
-                            <Clock className="w-3.5 h-3.5 text-slate-650 shrink-0" />
-                            <span className="text-[9.5px] uppercase font-bold text-slate-500 tracking-wider">Janela de Entrega:</span>
+                            <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="text-[9.5px] uppercase font-mono font-bold text-slate-400 tracking-wider">Janela de Entrega:</span>
                             <div className="flex flex-wrap items-center gap-1.5 ml-1">
                               <input 
                                 type="time"
                                 value={timeWindows[addresses.length - 1]?.start || ''}
                                 onChange={(e) => updateTimeWindow(addresses.length - 1, 'start', e.target.value)}
-                                className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                className="neo-input text-[11px] px-2 py-1 font-mono"
                               />
-                              <span className="text-[10px] text-slate-600">até</span>
+                              <span className="text-[10px] text-slate-500 font-mono font-bold">até</span>
                               <input 
                                 type="time"
                                 value={timeWindows[addresses.length - 1]?.end || ''}
                                 onChange={(e) => updateTimeWindow(addresses.length - 1, 'end', e.target.value)}
-                                className="bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-tech focus:ring-1 focus:ring-tech/30 transition-all font-mono"
+                                className="neo-input text-[11px] px-2 py-1 font-mono"
                               />
                               {(timeWindows[addresses.length - 1]?.start || timeWindows[addresses.length - 1]?.end) && (
                                 <button 
                                   onClick={() => removeTimeWindow(addresses.length - 1)}
-                                  className="text-slate-500 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
+                                  className="text-slate-400 hover:text-red-400 text-[9px] uppercase font-bold ml-1 hover:underline transition-all"
                                 >
                                   Limpar
                                 </button>
@@ -2756,61 +2960,63 @@ export default function HarpiaApp() {
                   })()}
                   </div>
 
-                  <div className="flex flex-col gap-3.5 mt-auto">
+                  <div className="flex flex-col gap-2.5 mt-auto pt-2">
                     <button 
+                      id="tutorial-add-stop-btn"
                       onClick={() => handleAddStop()}
-                      className="w-full py-4 border border-dashed border-slate-800 hover:border-tech hover:bg-tech/5 hover:text-tech rounded-2xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer"
+                      className="neo-btn w-full py-3 bg-slate-900 border-2 border-dashed border-slate-700 hover:border-amber-400 hover:text-amber-400 text-slate-200 rounded-xl text-xs font-black uppercase tracking-wider transition-all"
                     >
-                      + Adicionar Parada Intermediária
+                      + Adicionar Parada
                     </button>
-                    <div>
-                      <button 
-                        onClick={() => { setAddresses(DEFAULT_ADDRESSES); setStopIds(DEFAULT_ADDRESSES.map(() => crypto.randomUUID())); }}
-                        className="w-full py-3 bg-slate-950/30 hover:bg-slate-800/40 border border-slate-800/40 rounded-xl text-[10px] uppercase tracking-wider font-bold transition-all text-slate-500 hover:text-white"
-                      >
-                        Usar Rota de Laboratório Demo (Manaus / AM)
-                      </button>
-                    </div>
                   </div>
                 </div>
 
                 {/* Bento Box 6: Saved & Shared Routes List */}
-                <div className="glass p-5 xs:p-6 md:p-7 rounded-3xl border border-slate-800/40">
-                  <h3 className="text-sm font-black uppercase tracking-widest text-[#D1A054] mb-2.5 font-display flex items-center gap-2 flex-wrap">
-                    <RouteIcon className="w-4 h-4 text-[#D1A054] shrink-0" />
-                    <span>
-                      Rotas Salvas e Agendadas
-                      <InfoTooltip text="Todas as suas rotas salvas ou agendadas no sistema. Carregue-as no planejador com um clique ou compartilhe-as via link." />
-                    </span>
-                  </h3>
+                <div id="tutorial-saved-routes" className="neo-card p-5 sm:p-6 rounded-2xl bg-slate-950">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
+                      <RouteIcon className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Rotas Salvas e Agendadas</span>
+                    </h3>
+                    {savedRoutes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearAllScheduledRoutes}
+                        className="text-[10px] font-bold text-slate-400 hover:text-rose-400 flex items-center gap-1 transition-colors cursor-pointer uppercase"
+                        title="Remover todas as rotas agendadas"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Limpar</span>
+                      </button>
+                    )}
+                  </div>
                   
                   {savedRoutes.length === 0 ? (
-                    <div className="text-center py-6 border border-dashed border-slate-850 rounded-2xl bg-slate-950/20 font-sans">
-                      <RouteIcon className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                      <p className="text-xs text-slate-500 font-bold">Nenhuma rota programada</p>
-                      <p className="text-[10px] text-slate-600 mt-0.5 max-w-[200px] mx-auto leading-relaxed">As rotas que você planejar e agendar aparecerão aqui.</p>
+                    <div className="text-center py-5 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/40 font-mono">
+                      <p className="text-xs text-slate-400 font-bold">Nenhuma rota programada</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5 max-w-[200px] mx-auto leading-relaxed">As rotas salvas ou agendadas aparecerão aqui.</p>
                     </div>
                   ) : (
-                    <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar font-sans pr-1">
+                    <div className="space-y-2.5 max-h-[280px] overflow-y-auto custom-scrollbar font-sans pr-1">
                       {savedRoutes.map((route: any) => {
                         const isCopied = copiedRouteId === route.id;
                         return (
                           <div 
                             key={route.id} 
-                            className="p-3 rounded-xl bg-slate-950/40 border border-slate-900/80 hover:border-slate-800 transition-all space-y-2"
+                            className="p-3 rounded-xl bg-slate-900 border-2 border-slate-800 hover:border-slate-700 transition-all space-y-2"
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
-                                <h4 className="text-xs font-bold text-slate-150 truncate leading-tight" title={route.name || 'Rota Sem Nome'}>
+                                <h4 className="text-xs font-bold text-white truncate leading-tight font-mono" title={route.name || 'Rota Sem Nome'}>
                                   {route.name || 'Rota Sem Nome'}
                                 </h4>
                                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                  <span className="text-[9px] font-mono font-bold text-tech bg-tech/10 border border-tech/20 px-1 py-0.2 rounded leading-none shrink-0">
+                                  <span className="neo-badge-tech text-[9px] px-1.5 py-0.5 shrink-0">
                                     {route.addresses.length} Paradas
                                   </span>
                                   {route.scheduledDate && (
-                                    <span className="text-[9px] text-slate-400 font-medium flex items-center gap-1 leading-none">
-                                      <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                                    <span className="text-[9px] text-slate-300 font-mono font-medium flex items-center gap-1 leading-none">
+                                      <Clock className="w-3 h-3 text-amber-400 shrink-0" />
                                       {new Date(route.scheduledDate + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
                                       {route.scheduledTime ? ` às ${route.scheduledTime}` : ''}
                                     </span>
@@ -2821,18 +3027,18 @@ export default function HarpiaApp() {
                               <button
                                 type="button"
                                 onClick={() => handleDeleteSavedRoute(route.id)}
-                                className="text-slate-600 hover:text-red-400 p-1 rounded hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                                className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
                                 title="Excluir Rota"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                             
-                            <div className="flex gap-2 pt-1 border-t border-slate-900/50">
+                            <div className="flex gap-2 pt-1 border-t-2 border-slate-800">
                               <button
                                 type="button"
                                 onClick={() => handleLoadSavedRoute(route)}
-                                className="flex-1 py-1.5 bg-tech/10 border border-tech/20 hover:bg-tech/20 hover:border-tech/40 text-tech text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center cursor-pointer"
+                                className="neo-btn flex-1 py-1.5 bg-amber-400 text-black border-2 border-black text-[10px] font-black uppercase tracking-wider rounded-lg shadow-[2px_2px_0px_0px_#000] text-center cursor-pointer"
                               >
                                 Carregar
                               </button>
@@ -2840,14 +3046,14 @@ export default function HarpiaApp() {
                               <button
                                 type="button"
                                 onClick={() => handleShareRoute(route)}
-                                className={`flex-1 py-1.5 border text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer ${
+                                className={`neo-btn flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-2 ${
                                   isCopied 
-                                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
-                                    : 'bg-indigo-500/10 border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/40 text-indigo-400'
+                                    ? 'bg-emerald-400 border-black text-black shadow-[2px_2px_0px_0px_#000]' 
+                                    : 'bg-slate-800 border-slate-700 text-white hover:border-slate-500'
                                 }`}
                               >
                                 <Share2 className="w-3 h-3 shrink-0" />
-                                {isCopied ? 'Copiado!' : 'Compartilhar'}
+                                {isCopied ? 'Copiado' : 'Compartilhar'}
                               </button>
                             </div>
                           </div>
@@ -2861,45 +3067,42 @@ export default function HarpiaApp() {
               {/* Right Section: Dynamic Logistics Configuration Bento Box List */}
               <div className="w-full flex flex-col gap-6">
                   {/* Bento Box 1: Vehicle selection */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3.5 flex items-center gap-2 flex-wrap">
-                      <Truck className="w-4 h-4 text-tech shrink-0" />
-                      <span>
-                        Perfil de Transporte
-                        <InfoTooltip text="Selecione o tipo de veículo usado. O roteador adaptará o cálculo de tempo e viabilidade de ruas automaticamente." />
-                      </span>
+                  <div id="tutorial-vehicle-selector" className="neo-card p-5 sm:p-6 rounded-2xl bg-slate-950">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-white mb-3.5 flex items-center gap-2 flex-wrap">
+                      <Truck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Perfil de Transporte</span>
                     </h3>
                     <div className="grid grid-cols-2 xs:grid-cols-4 gap-2">
                       {[
                         { id: 'moto', icon: Bike, label: 'Moto' },
                         { id: 'van', icon: Car, label: 'Van' },
                         { id: 'truck', icon: Truck, label: 'Caminhão' },
-                        { id: 'boat', icon: MapIcon, label: 'Barco' },
+                        { id: 'boat', icon: Ship, label: 'Barco' },
                       ].map((v) => (
                         <button
                           key={v.id}
                           onClick={() => setOptions({ ...options, vehicle: v.id as any })}
-                          className={`flex flex-col items-center justify-center py-3 px-1 rounded-xl border transition-all cursor-pointer ${
+                          className={`neo-btn flex flex-col items-center justify-center py-2.5 px-1 rounded-xl border-2 transition-all cursor-pointer ${
                             options.vehicle === v.id
-                              ? 'bg-tech/15 border-tech text-tech font-bold'
-                              : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-800'
+                              ? 'bg-amber-400 text-black border-black shadow-[3px_3px_0px_0px_#000] font-black'
+                              : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white hover:border-slate-500'
                           }`}
                         >
                           <v.icon className="w-4 h-4 mb-1" />
-                          <span className="text-[10px] font-semibold uppercase">{v.label}</span>
+                          <span className="text-[10px] uppercase tracking-wider font-mono">{v.label}</span>
                         </button>
                       ))}
                     </div>
 
                     {/* Subpanel de Rota Fluvial & Embarcação quando 'boat' está ativo */}
                     {options.vehicle === 'boat' && (
-                      <div className="mt-4 pt-4 border-t border-slate-800/60 animate-fadeIn space-y-3">
+                      <div className="mt-4 pt-4 border-t-2 border-slate-800 animate-fadeIn space-y-3">
                         <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                            <Anchor className="w-3.5 h-3.5 text-tech shrink-0" />
+                          <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                            <Anchor className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                             Tipo de Embarcação & Calado
                           </label>
-                          <span className="text-[9px] font-medium text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-full">
+                          <span className="neo-badge-tech text-[9px] px-2 py-0.5">
                             Matriz Fluvial
                           </span>
                         </div>
@@ -2915,42 +3118,61 @@ export default function HarpiaApp() {
                               key={vessel.id}
                               type="button"
                               onClick={() => setOptions({ ...options, vesselType: vessel.id as any })}
-                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                              className={`neo-btn p-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
                                 (options.vesselType || 'express_lancha') === vessel.id
-                                  ? 'bg-slate-900 border-tech text-white font-medium'
-                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200'
+                                  ? 'bg-amber-400 border-black text-black shadow-[2px_2px_0px_0px_#000] font-black'
+                                  : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white'
                               }`}
                             >
                               <div className="flex items-center gap-1.5 mb-1">
-                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-tech' : 'text-slate-500' }`} />
+                                <vessel.icon className={`w-3.5 h-3.5 ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-black' : 'text-amber-400' }`} />
                                 <span className="text-[10px] font-bold uppercase">{vessel.label}</span>
                               </div>
-                              <p className="text-[8.5px] text-slate-400 font-mono leading-none">{vessel.desc}</p>
+                              <p className={`text-[8.5px] font-mono leading-none ${ (options.vesselType || 'express_lancha') === vessel.id ? 'text-slate-900 font-bold' : 'text-slate-400' }`}>{vessel.desc}</p>
                             </button>
                           ))}
                         </div>
 
-                        <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-[10.5px] text-slate-300 space-y-1 font-sans">
-                          <p className="font-semibold text-tech flex items-center gap-1.5 text-[11px]">
-                            <Waves className="w-3.5 h-3.5 text-tech" />
-                            Diferencial Hidrovia Ativo
-                          </p>
-                          <p className="text-slate-400 text-[10px] leading-relaxed">
-                            Cálculo automático de velocidade da correnteza a favor ou contra o fluxo do rio e canais de navegação.
-                          </p>
-                        </div>
+                        {/* Sazonalidade do Rio Detectada Automaticamente */}
+                        {(() => {
+                          const autoSeason = getAutoDetectedAmazonSeason(scheduledDate || null);
+                          return (
+                            <div className="mt-3.5 p-3 rounded-xl bg-slate-900 border-2 border-slate-800 text-slate-300 font-sans space-y-1.5">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5">
+                                  <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-200">
+                                    Sazonalidade do Rio
+                                  </span>
+                                </div>
+                                <span className="neo-badge-tech text-[9px] px-2 py-0.5 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                  {scheduledDate ? 'Detectado por Agendamento' : 'Detectado Automaticamente'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-black text-white">
+                                  {autoSeason.badgeLabel}
+                                </span>
+                                <span className="text-[10px] font-mono text-amber-400">
+                                  (Cota est. ~{autoSeason.riverLevelEstimate}m)
+                                </span>
+                              </div>
+                              <p className="text-[9.5px] text-slate-400 leading-relaxed">
+                                {autoSeason.description}
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
 
                   {/* Bento Box 2: Route optimization priority */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3.5 flex items-center gap-2 flex-wrap">
-                      <Zap className="w-4 h-4 text-tech shrink-0" />
-                      <span>
-                        Prioridade de Rota
-                        <InfoTooltip text="Escolha entre Tempo e Distância. Roteiros mais rápidos podem usar vias expressas, mas nem sempre são o caminho mais curto." />
-                      </span>
+                  <div className="neo-card p-5 sm:p-6 rounded-2xl bg-slate-950">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-white mb-3.5 flex items-center gap-2 flex-wrap">
+                      <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Prioridade de Rota</span>
                     </h3>
                     <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                       {[
@@ -2963,90 +3185,70 @@ export default function HarpiaApp() {
                         <button
                           key={p.id}
                           onClick={() => setOptions({ ...options, priority: p.id })}
-                          className={`flex flex-col items-center justify-center p-2.5 rounded-xl border transition-all cursor-pointer ${
+                          className={`neo-btn flex flex-col items-center justify-center p-2 rounded-xl border-2 transition-all cursor-pointer ${
                             options.priority === p.id 
-                            ? 'bg-tech/15 border-tech text-tech font-bold' 
-                            : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-800'
+                            ? 'bg-amber-400 border-black text-black shadow-[2px_2px_0px_0px_#000] font-black' 
+                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white hover:border-slate-500'
                           }`}
                         >
                           <p.icon className="w-4 h-4 mb-1 shrink-0" />
-                          <span className="text-[9px] font-bold uppercase leading-none">{p.label}</span>
+                          <span className="text-[9px] uppercase font-mono font-bold leading-none">{p.label}</span>
                         </button>
                       ))}
-                    </div>
-
-                    <div className="mt-3.5 p-3 rounded-xl bg-slate-950/60 border border-slate-850 text-xs text-slate-400 leading-relaxed font-sans">
-                      {options.priority === 'speed' && <p><strong className="text-slate-200">Velocidade (Rápido):</strong> Privilegia vias com tráfego ágil, reduzindo o tempo total do percurso.</p>}
-                      {options.priority === 'distance' && <p><strong className="text-slate-200">Distância Mínima:</strong> Traçado com a menor quilometragem total entre as paradas.</p>}
-                      {options.priority === 'economy' && <p><strong className="text-slate-200">Economia (Eco):</strong> Trajeto plano visando menor consumo de combustível e estabilidade.</p>}
-                      {options.priority === 'safety' && <p><strong className="text-slate-200">Segurança (Seguro):</strong> Evita áreas de alto risco, ocorrências climáticas e vias impróprias.</p>}
-                      {options.priority === 'balanced' && <p><strong className="text-slate-200">Equilibrado:</strong> Algoritmo heurístico que pondera tempo, consumo e segurança operacional.</p>}
                     </div>
                   </div>
 
                   {/* Bento Box 4: AI Custom Prompts */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-2.5 flex items-center gap-2 flex-wrap">
-                      <Sparkles className="w-4 h-4 text-tech shrink-0" />
-                      <span>
-                        Instruções Adicionais
-                        <InfoTooltip text="Regras e restrições semânticas. Ex: 'Chegar até às 15h, caminhão pesado não sobe ladeira'." />
-                      </span>
+                  <div className="neo-card p-5 sm:p-6 rounded-2xl bg-slate-950">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-white mb-2 flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Instruções Adicionais</span>
                     </h3>
-                    <p className="text-slate-400 text-xs mb-3 leading-relaxed font-sans">
-                      Diretrizes opcionais para o cálculo inteligente do percurso.
-                    </p>
                     <textarea
                       value={aiCustomPrompt}
                       onChange={(e) => setAiCustomPrompt(e.target.value)}
                       placeholder="Ex: 'priorizar vias principais', 'evitar travessias lentas'..."
                       rows={2}
-                      className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs md:text-sm focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all resize-none text-slate-100 placeholder-slate-600 font-sans"
+                      className="neo-input w-full px-3.5 py-2.5 text-xs resize-none text-white placeholder-slate-500 font-mono"
                     />
                   </div>
 
                   {/* Bento Box 5: Future Routing & Scheduling */}
-                  <div className="glass p-5 xs:p-6 md:p-7 rounded-2xl border border-slate-850">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 mb-2.5 flex items-center gap-2 flex-wrap">
-                      <Calendar className="w-4 h-4 text-tech shrink-0" />
-                      <span>
-                        Agendar Rota
-                        <InfoTooltip text="Programe e salve rotas para dias ou horários futuros no sistema. Você poderá recarregá-las a qualquer momento." />
-                      </span>
+                  <div className="neo-card p-5 sm:p-6 rounded-2xl bg-slate-950">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-white mb-3 flex items-center gap-2 flex-wrap">
+                      <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Agendar Rota</span>
                     </h3>
-                    <p className="text-slate-400 text-xs mb-3.5 leading-relaxed font-sans">
-                      Salve o itinerário atual para executar em data futura.
-                    </p>
                     
                     <div className="space-y-3 font-sans">
                       <div>
-                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Nome da Rota</label>
+                        <label className="text-[9px] text-slate-400 font-mono font-bold uppercase tracking-wider block mb-1">Nome da Rota</label>
                         <input
                           type="text"
                           value={scheduledName}
                           onChange={(e) => setScheduledName(e.target.value)}
                           placeholder="Ex: Rota Centro / Manhã"
-                          className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600"
+                          className="neo-input w-full px-3 py-2 text-xs text-white placeholder-slate-500 font-mono"
                         />
                       </div>
                       
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Data Agendada</label>
+                          <label className="text-[9px] text-slate-400 font-mono font-bold uppercase tracking-wider block mb-1">Data</label>
                           <input
                             type="date"
                             value={scheduledDate}
                             onChange={(e) => setScheduledDate(e.target.value)}
-                            className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600 [color-scheme:dark]"
+                            className="neo-input w-full px-3 py-2 text-xs text-white placeholder-slate-500 font-mono [color-scheme:dark]"
                           />
                         </div>
                         <div>
-                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Horário de Saída</label>
+                          <label className="text-[9px] text-slate-400 font-mono font-bold uppercase tracking-wider block mb-1">Horário</label>
                           <input
                             type="time"
                             value={scheduledTime}
                             onChange={(e) => setScheduledTime(e.target.value)}
-                            className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:border-tech focus:ring-1 focus:ring-tech outline-none transition-all text-slate-100 placeholder-slate-600 [color-scheme:dark]"
+                            className="neo-input w-full px-3 py-2 text-xs text-white placeholder-slate-500 font-mono [color-scheme:dark]"
                           />
                         </div>
                       </div>
@@ -3055,27 +3257,27 @@ export default function HarpiaApp() {
                         type="button"
                         onClick={handleSaveFutureRoute}
                         disabled={addresses.filter(a => a.trim().length > 3).length < 2}
-                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-200 disabled:text-slate-600 disabled:border-slate-900 disabled:bg-slate-950 text-xs font-semibold uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        className="neo-btn w-full py-2.5 bg-slate-900 border-2 border-slate-700 hover:border-amber-400 text-slate-200 disabled:text-slate-600 disabled:border-slate-800 disabled:bg-slate-950 text-xs font-black uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
-                        <Plus className="w-3.5 h-3.5 text-tech" />
+                        <Plus className="w-3.5 h-3.5 text-amber-400" />
                         Salvar e Agendar
                       </button>
                     </div>
                   </div>
 
-
                   <div className="pt-2">
                     <button 
+                      id="tutorial-optimize-btn"
                       onClick={runOptimization}
                       disabled={!hasTwoOrMoreAddresses}
-                      className={`w-full font-bold py-4 rounded-xl text-sm sm:text-base shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider ${
+                      className={`w-full font-black py-4 rounded-xl text-sm transition-all flex items-center justify-center gap-2 uppercase tracking-wider ${
                         hasTwoOrMoreAddresses 
-                          ? 'bg-tech text-slate-950 hover:brightness-105 active:scale-[0.99]' 
-                          : 'bg-slate-900 border border-slate-800 text-slate-500 cursor-not-allowed'
+                          ? 'neo-btn-primary text-black' 
+                          : 'bg-slate-900 border-2 border-slate-800 text-slate-600 cursor-not-allowed shadow-none'
                       }`}
                     >
                       <Sparkles className="w-4 h-4" />
-                      <span>{hasTwoOrMoreAddresses ? `Calcular Melhor Rota (${enteredAddresses.length} Paradas)` : 'Adicione pelo menos 2 endereços'}</span>
+                      <span>{hasTwoOrMoreAddresses ? `Calcular Rota (${enteredAddresses.length} Paradas)` : 'Adicione pelo menos 2 endereços'}</span>
                     </button>
                   </div>
                 </div>
@@ -3109,63 +3311,65 @@ export default function HarpiaApp() {
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               className="h-full flex flex-col relative overflow-hidden"
             >
-              <div className="relative flex-1">
+              <div id="tutorial-map-section" className="relative flex-1">
                  <MapView stops={routeResult.sequence} geometry={routeResult.geometry} routeSegments={routeResult.segments} alternatives={routeResult.alternatives || []} isNavigationScreen={true} navIndex={navIndex} onRouteRecalculated={setRouteResult} />
                  
-                 {/* Floating Background Incident Polling Alert Toast */}
-                 <AnimatePresence>
-                   {activeIncidentToast && (
-                     <motion.div
-                       initial={{ opacity: 0, y: -30, scale: 0.95 }}
-                       animate={{ opacity: 1, y: 0, scale: 1 }}
-                       exit={{ opacity: 0, y: -30, scale: 0.95 }}
-                       className="absolute top-16 left-1/2 -translate-x-1/2 z-[4500] max-w-lg md:max-w-xl lg:max-w-2xl xl:max-w-3xl w-[92%] bg-slate-950/95 backdrop-blur-xl border-2 border-rose-500/80 rounded-3xl p-4 shadow-[0_10px_40px_rgba(244,63,94,0.35)] text-white"
-                     >
-                       <div className="flex items-start gap-3">
-                         <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400 shrink-0">
-                           <AlertTriangle className="w-5 h-5 animate-bounce" />
-                         </div>
-                         <div className="flex-1 text-xs">
-                           <div className="flex items-center justify-between mb-1">
-                             <span className="text-[10px] uppercase font-black tracking-wider text-rose-400 flex items-center gap-1.5">
-                               <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                               Alerta de Polling em Tempo Real
-                             </span>
-                             {lastBgPollTime && (
-                               <span className="text-[9px] text-slate-400 font-mono">Checado às {lastBgPollTime}</span>
-                             )}
-                           </div>
-                           <p className="text-slate-200 font-medium leading-normal mb-2.5">
-                             {activeIncidentToast.bulletin}
-                           </p>
-                           <div className="flex items-center gap-2">
-                             <button
-                               onClick={() => {
-                                 setActiveIncidentToast(null);
-                                 setOptions(prev => ({
-                                   ...prev,
-                                   avoidFloods: true,
-                                   customPrompt: (prev.customPrompt || '') + ' Aplicar desvio por ocorrência detectada em tempo real.'
-                                 }));
-                                 setTimeout(() => runOptimization(), 100);
-                               }}
-                               className="px-3.5 py-2 bg-tech text-slate-950 rounded-xl font-black text-[11px] uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 shadow-[0_0_15px_rgba(209,160,84,0.4)]"
-                             >
-                               <Zap className="w-3.5 h-3.5" />
-                               <span>Recalcular Rota</span>
-                             </button>
-                             <button
-                               onClick={() => setActiveIncidentToast(null)}
-                               className="px-3 py-2 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-xl font-bold text-[10.5px] uppercase transition-colors cursor-pointer"
-                             >
-                               Ignorar
-                             </button>
-                           </div>
-                         </div>
-                       </div>
-                     </motion.div>
-                   )}
-                 </AnimatePresence>
+                 {/* Floating Background Incident Polling Alert Toast - 1 Frase Clara */}
+                  <AnimatePresence>
+                    {activeIncidentToast && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -20, scale: 0.95 }}
+                        className="absolute top-16 left-1/2 -translate-x-1/2 z-[4500] max-w-md md:max-w-lg w-[90%] bg-slate-950/95 backdrop-blur-xl border border-rose-500/80 rounded-2xl p-3 shadow-[0_8px_30px_rgba(244,63,94,0.35)] text-white"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400 shrink-0">
+                            <AlertTriangle className="w-4 h-4 animate-bounce" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1 mb-0.5">
+                              <span className="text-[9px] uppercase font-black tracking-wider text-rose-400 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+                                Ocorrência na Rota
+                              </span>
+                              {lastBgPollTime && (
+                                <span className="text-[8.5px] text-slate-400 font-mono shrink-0">{lastBgPollTime}</span>
+                              )}
+                            </div>
+                            <p className="text-slate-100 font-semibold text-xs leading-snug truncate">
+                              {activeIncidentToast.bulletin}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => {
+                                setActiveIncidentToast(null);
+                                setOptions(prev => ({
+                                  ...prev,
+                                  avoidFloods: true,
+                                  customPrompt: (prev.customPrompt || '') + ' Aplicar desvio por ocorrência detectada em tempo real.'
+                                }));
+                                setTimeout(() => runOptimization(), 100);
+                              }}
+                              className="px-2.5 py-1.5 bg-tech text-slate-950 rounded-lg font-black text-[10px] uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all cursor-pointer flex items-center gap-1 shadow-[0_0_10px_rgba(209,160,84,0.3)]"
+                              title="Recalcular Rota com Desvio"
+                            >
+                              <Zap className="w-3 h-3" />
+                              <span>Desviar</span>
+                            </button>
+                            <button
+                              onClick={() => setActiveIncidentToast(null)}
+                              className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                              title="Dispensar"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                  
                  {/* Top-Left Retractable Drawer Toggle Button ("Menu Ioiô") */}
                  <button
@@ -3251,6 +3455,7 @@ export default function HarpiaApp() {
                                  {[
                                    { id: 'home', label: 'Planejamento', icon: MapIcon, desc: 'Inserir e Alterar Cidades' },
                                    { id: 'navigation', label: 'Rota Ativa', icon: NavIcon, desc: 'Navegação GPS em Tempo Real' },
+                                   { id: 'history', label: 'Histórico', icon: Clock, desc: 'Auditoria e Relatórios' },
                                    { id: 'dashboard', label: 'Métricas', icon: LayoutDashboard, desc: 'Desempenho e Logística' },
                                    { id: 'settings', label: 'Configurações', icon: Settings, desc: 'Ajustes Finos do Sistema' },
                                    { id: 'tutorial', label: 'Tutorial Guiado', icon: Sparkles, desc: 'Aprenda todas as funções' },
@@ -3263,9 +3468,7 @@ export default function HarpiaApp() {
                                        onClick={() => {
                                          setIsNavDrawerOpen(false);
                                          if (tab.id === 'tutorial') {
-                                           setShowDemoAssistant(true);
-                                           setDemoStep(0);
-                                           setDemoMinimized(false);
+                                           setShowAccessibleTutorial(true);
                                            setCurrentScreen('home');
                                          } else {
                                            setCurrentScreen(tab.id as any);
@@ -3567,6 +3770,12 @@ export default function HarpiaApp() {
                                   const startTime = actualRouteStartTime || (latest?.date ? new Date(latest.date).getTime() : endTime - 900000);
                                   const elapsedMs = Math.max(0, endTime - startTime);
                                   
+                                  const completedCountSoFar = updatedSequence.filter((s: any) => s.status === 'completed').length;
+                                  const failedCountSoFar = updatedSequence.filter((s: any) => s.status === 'failed').length;
+                                  const totalStopsCount = updatedSequence.length;
+                                  const actualMinutes = Math.round(elapsedMs / 60000);
+                                  const plannedMinutes = latest.totalDurationMinutes || Math.round((routeResult.summary?.duration || 0) / 60);
+
                                   await db.routes.update(latest.id, { 
                                     status: isLastStop ? 'completed' : 'pending',
                                     sequence: updatedSequence,
@@ -3574,7 +3783,22 @@ export default function HarpiaApp() {
                                     deliveryNotes: deliveryNotes || 'Entrega efetuada com sucesso',
                                     startedAt: new Date(startTime),
                                     completedAt: isLastStop ? new Date(endTime) : undefined,
-                                    totalElapsedMs: isLastStop ? elapsedMs : undefined
+                                    totalElapsedMs: isLastStop ? elapsedMs : undefined,
+                                    executionMetrics: {
+                                      startedAt: new Date(startTime),
+                                      completedAt: isLastStop ? new Date(endTime) : undefined,
+                                      totalElapsedMs: elapsedMs,
+                                      actualDurationMinutes: actualMinutes,
+                                      actualDistanceKm: latest.totalDistanceKm || (routeResult.summary?.distance ? Math.round((routeResult.summary.distance / 1000) * 10) / 10 : 0),
+                                      completedStopsCount: completedCountSoFar,
+                                      failedStopsCount: failedCountSoFar,
+                                      totalStopsCount: totalStopsCount,
+                                      completionRatePercent: Math.round((completedCountSoFar / totalStopsCount) * 100),
+                                      punctualityRatePercent: actualMinutes <= plannedMinutes * 1.15 ? 100 : Math.max(50, Math.round((1 - (actualMinutes - plannedMinutes) / (plannedMinutes || 1)) * 100)),
+                                      timeDeviationMinutes: actualMinutes - plannedMinutes,
+                                      fuelConsumedLiters: latest.calculatedRoute?.estimatedFuelLiters || 0,
+                                      fuelCostTotal: latest.calculatedRoute?.estimatedFuelCost || 0
+                                    }
                                   });
                                   
                                   setRouteResult((prev: any) => ({
@@ -3726,12 +3950,22 @@ export default function HarpiaApp() {
                          <button
                            onClick={() => {
                              setShowRouteCompletedModal(false);
-                             setCurrentScreen('dashboard');
+                             setCurrentScreen('history');
                            }}
                            className="flex-1 py-3.5 px-4 bg-tech text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(209,160,84,0.3)] cursor-pointer flex items-center justify-center gap-2"
                          >
+                           <Clock className="w-4 h-4" />
+                           <span>Ver Histórico & Auditoria</span>
+                         </button>
+                         <button
+                           onClick={() => {
+                             setShowRouteCompletedModal(false);
+                             setCurrentScreen('dashboard');
+                           }}
+                           className="py-3.5 px-4 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-bold text-xs uppercase tracking-wider rounded-xl border border-slate-800 transition-all cursor-pointer flex items-center justify-center gap-2"
+                         >
                            <LayoutDashboard className="w-4 h-4" />
-                           <span>Ver no Dashboard</span>
+                           <span>Métricas</span>
                          </button>
                          <button
                            onClick={() => {
@@ -3808,13 +4042,26 @@ export default function HarpiaApp() {
                  />
                </div>
 
-               {/* Mock Exit Button */}
+               {/* Back to Menu / Exit Navigation Buttons */}
+               <button 
+                 onClick={() => {
+                   setNavIndex(0);
+                   setCurrentScreen('home');
+                 }}
+                 className="absolute top-6 left-6 z-[1002] px-3.5 py-2 bg-black/60 backdrop-blur-md text-white border border-white/20 hover:border-tech/40 rounded-2xl flex items-center gap-2 hover:bg-black/80 transition-all font-bold text-xs shadow-lg cursor-pointer active:scale-95 group"
+                 title="Encerrar navegação e voltar ao menu principal"
+               >
+                 <ArrowLeft className="w-4 h-4 text-tech group-hover:-translate-x-0.5 transition-transform" />
+                 <span className="hidden sm:inline">Voltar ao Menu</span>
+               </button>
+
                <button 
                  onClick={() => {
                    setNavIndex(0);
                    setCurrentScreen('dashboard');
                  }}
-                 className="absolute top-6 right-6 z-[1002] w-10 h-10 bg-black/20 backdrop-blur-md text-white rounded-full flex items-center justify-center hover:bg-black/40 transition-colors"
+                 className="absolute top-6 right-6 z-[1002] w-10 h-10 bg-black/40 backdrop-blur-md text-white border border-white/15 rounded-full flex items-center justify-center hover:bg-black/70 transition-all cursor-pointer shadow-lg"
+                 title="Sair para o Painel"
                >
                  <XCircle className="w-6 h-6" />
                </button>
@@ -3869,16 +4116,43 @@ export default function HarpiaApp() {
                        </div>
 
                        <button 
-                        onClick={() => {
+                        onClick={async () => {
                           // Save occurrence to Dexie
-                          db.occurrences.add({
-                            type: 'other',
-                            lat: routeResult.sequence[navIndex].lat,
-                            lon: routeResult.sequence[navIndex].lon,
-                            description: reportType,
-                            timestamp: new Date(),
-                            synced: false
-                          });
+                          try {
+                            await db.occurrences.add({
+                              type: 'other',
+                              lat: routeResult.sequence[navIndex]?.lat || 0,
+                              lon: routeResult.sequence[navIndex]?.lon || 0,
+                              description: reportType,
+                              timestamp: new Date(),
+                              synced: false
+                            });
+
+                            const latest = await db.routes.toCollection().last();
+                            if (latest?.id) {
+                              const existingIncidents = latest.reportedIncidents || [];
+                              const newIncident: RouteIncident = {
+                                id: `inc-${Date.now()}`,
+                                type: reportType.toLowerCase().includes('areia') ? 'sandbank' :
+                                      reportType.toLowerCase().includes('cota') || reportType.toLowerCase().includes('repiquete') ? 'repiquete' :
+                                      reportType.toLowerCase().includes('trânsito') || reportType.toLowerCase().includes('lentidão') ? 'congestion' :
+                                      reportType.toLowerCase().includes('acidente') ? 'accident' :
+                                      reportType.toLowerCase().includes('alag') ? 'flood' :
+                                      reportType.toLowerCase().includes('buraco') ? 'pothole' : 'other',
+                                description: reportType,
+                                reportedAt: new Date(),
+                                severity: 'medium',
+                                lat: routeResult.sequence[navIndex]?.lat,
+                                lng: routeResult.sequence[navIndex]?.lon,
+                                stopIndex: navIndex
+                              };
+                              await db.routes.update(latest.id, {
+                                reportedIncidents: [...existingIncidents, newIncident]
+                              });
+                            }
+                          } catch (err) {
+                            console.warn("Could not attach incident to route:", err);
+                          }
                           window.dispatchEvent(new CustomEvent('occurrence-reported'));
                           setIsReporting(false);
                         }}
@@ -3981,18 +4255,36 @@ export default function HarpiaApp() {
                                  if (latest?.id) {
                                    if (!startTime && latest.date) startTime = new Date(latest.date).getTime();
                                    const elapsedMs = Math.max(0, endTime - (startTime || endTime - 900000));
+                                   const completedCount = updatedSequence.filter((s: any) => s.status === 'completed').length;
+                                   const failedCount = updatedSequence.filter((s: any) => s.status === 'failed').length;
+                                   const totalStopsCount = updatedSequence.length;
+                                   const actualMinutes = Math.round(elapsedMs / 60000);
+                                   const plannedMinutes = latest.totalDurationMinutes || Math.round((routeResult.summary?.duration || 0) / 60);
+
                                    await db.routes.update(latest.id, {
                                      status: 'completed',
                                      sequence: updatedSequence,
                                      startedAt: new Date(startTime || endTime - 900000),
                                      completedAt: new Date(endTime),
-                                     totalElapsedMs: elapsedMs
+                                     totalElapsedMs: elapsedMs,
+                                     executionMetrics: {
+                                       startedAt: new Date(startTime || endTime - 900000),
+                                       completedAt: new Date(endTime),
+                                       totalElapsedMs: elapsedMs,
+                                       actualDurationMinutes: actualMinutes,
+                                       actualDistanceKm: latest.totalDistanceKm || (routeResult.summary?.distance ? Math.round((routeResult.summary.distance / 1000) * 10) / 10 : 0),
+                                       completedStopsCount: completedCount,
+                                       failedStopsCount: failedCount,
+                                       totalStopsCount: totalStopsCount,
+                                       completionRatePercent: Math.round((completedCount / totalStopsCount) * 100),
+                                       punctualityRatePercent: actualMinutes <= plannedMinutes * 1.15 ? 100 : Math.max(50, Math.round((1 - (actualMinutes - plannedMinutes) / (plannedMinutes || 1)) * 100)),
+                                       timeDeviationMinutes: actualMinutes - plannedMinutes,
+                                       fuelConsumedLiters: latest.calculatedRoute?.estimatedFuelLiters || 0,
+                                       fuelCostTotal: latest.calculatedRoute?.estimatedFuelCost || 0
+                                     }
                                    });
                                    setActualRouteEndTime(endTime);
                                    setTotalElapsedMs(elapsedMs);
-
-                                   const completedCount = updatedSequence.filter((s: any) => s.status === 'completed').length;
-                                   const failedCount = updatedSequence.filter((s: any) => s.status === 'failed').length;
 
                                    setCompletedSummaryData({
                                      startTimeStr: new Date(startTime || endTime - 900000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
@@ -4039,7 +4331,29 @@ export default function HarpiaApp() {
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className="h-full w-full"
             >
-              <KpiDashboard activeRoute={routeResult} />
+              <KpiDashboard 
+                activeRoute={routeResult} 
+                onLoadRouteToPlanner={handleLoadSavedRoute} 
+                onNavigateBack={() => setCurrentScreen('home')}
+                currentVehicle={options.vehicle as any}
+                onVehicleChange={(v) => setOptions(prev => ({ ...prev, vehicle: v as any }))}
+              />
+            </motion.div>
+          )}
+
+          {currentScreen === 'history' && (
+            <motion.div 
+              key="history" 
+              initial={{ opacity: 0, y: 20 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+              className="h-full w-full"
+            >
+              <RouteHistoryView 
+                onLoadRouteToPlanner={handleLoadSavedRoute} 
+                onNavigateToPlanner={() => setCurrentScreen('home')}
+              />
             </motion.div>
           )}
 
@@ -4053,6 +4367,18 @@ export default function HarpiaApp() {
               className={`h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar ${isMobile ? 'px-4 pt-20 pb-28' : 'p-12 pb-28'}`}
             >
               <div className="max-w-2xl md:max-w-3xl lg:max-w-4xl xl:max-w-5xl mx-auto w-full">
+                {/* Top Corner Back Button */}
+                <div className="mb-6">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentScreen('home')}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-white/10 hover:border-tech/40 text-xs font-bold transition-all cursor-pointer shadow-sm group active:scale-95"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-tech group-hover:-translate-x-0.5 transition-transform" />
+                    <span>Voltar ao Menu Principal</span>
+                  </button>
+                </div>
+
                 <h1 className="text-4xl font-bold font-display mb-8">Preferências</h1>
                 
                 <div className="space-y-8">
@@ -4103,15 +4429,13 @@ export default function HarpiaApp() {
                     
                     <button
                       onClick={() => {
-                        setShowDemoAssistant(true);
-                        setDemoStep(0);
-                        setDemoMinimized(false);
+                        setShowAccessibleTutorial(true);
                         setCurrentScreen('home');
                       }}
                       className="w-full sm:w-auto bg-tech text-slate-950 font-black text-xs px-6 py-4 rounded-2xl uppercase tracking-wider hover:brightness-110 hover:shadow-[0_0_15px_rgba(209,160,84,0.3)] active:scale-95 transition-all text-center cursor-pointer flex items-center justify-center gap-2 font-sans"
                     >
                       <Play className="w-4 h-4 fill-current" />
-                      Iniciar Tutorial Passo a Passo (5 Passos)
+                      Iniciar Tutorial Passo a Passo Visual e Acessível
                     </button>
                   </div>
 
@@ -4467,387 +4791,77 @@ export default function HarpiaApp() {
         )}
       </AnimatePresence>
 
-      {/* 🔮 ASSISTENTE INTERATIVO DE TUTORIAL GUIADO DO APP */}
-      {showDemoAssistant && demoMinimized && (
-        <motion.button
-          initial={{ opacity: 0, scale: 0.8, y: 30 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          onClick={() => setDemoMinimized(false)}
-          className="fixed bottom-20 right-4 md:bottom-20 md:right-8 z-[10000] bg-slate-950/95 border-2 border-tech hover:bg-slate-900 shadow-[0_0_25px_rgba(209,160,84,0.55)] text-white font-extrabold px-5 py-3.5 rounded-full flex items-center justify-center gap-2.5 cursor-pointer transition-all hover:scale-105 active:scale-95 group font-sans animate-pulse"
-          title="Retomar Tutorial"
-        >
-          <Sparkles className="w-4 h-4 text-tech group-hover:rotate-12 transition-transform" />
-          <span className="text-xs tracking-wide text-white/95">Retomar Tutorial ({demoStep}/5)</span>
-          <div className="bg-tech text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-mono">
-            {demoStep}
-          </div>
-        </motion.button>
-      )}
+      {/* 🔮 TUTORIAL ULTRA-ACESSÍVEL DE FUNCIONAMENTO DO APP (COM DESTAQUE E PREENCHIMENTO ATIVO) */}
+      <AccessibleTutorialGuide
+        isOpen={showAccessibleTutorial}
+        onClose={() => {
+          setShowAccessibleTutorial(false);
+        }}
+        onStepChange={(stepIdx) => {
+          if (stepIdx <= 3) {
+            if (currentScreen !== 'home') setCurrentScreen('home');
+          }
+        }}
+        onFillDemoData={(stepIdx) => {
+          const demoOrigin = 'Av. Torquato Tapajós, 2200 - Flores, Manaus - AM';
+          const demoStopsList = [
+            'Av. Torquato Tapajós, 2200 - Flores, Manaus - AM',
+            'Av. Noel Nutels, 1762 - Cidade Nova, Manaus - AM',
+            'Av. Djalma Batista, 482 - Parque 10, Manaus - AM',
+            'Rua Marquês de Santa Cruz, 25 - Centro, Manaus - AM'
+          ];
 
-      {showDemoAssistant && !demoMinimized && (
-        <motion.div
-          id="panel-demo-assistant"
-          initial={{ opacity: 0, y: 30, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          className="fixed bottom-20 left-4 right-4 md:left-auto md:right-8 md:bottom-20 z-[10000] md:w-[420px] bg-slate-950/98 backdrop-blur-md rounded-[28px] border-2 border-tech/40 shadow-[0_15px_50px_rgba(209,160,84,0.25)] p-5 flex flex-col gap-3.5 font-sans text-white transition-all max-h-[80vh] overflow-y-auto custom-scrollbar"
-        >
-          {/* Cabeçalho com Barra de Progresso */}
-          <div className="flex flex-col gap-2.5 border-b border-white/10 pb-3">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-tech animate-bounce shrink-0" />
-                <div>
-                  <span className="text-[9px] font-black uppercase text-tech tracking-wider block">Guia Interativo HARPIA</span>
-                  <span className="text-xs text-slate-200 font-bold">
-                    {demoStep === 0 ? 'Apresentação do Sistema' : `Passo ${demoStep} de 5`}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setDemoMinimized(true)}
-                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
-                  title="Minimizar (Ocultar para ver a tela)"
-                >
-                  <EyeOff className="w-4 h-4 text-slate-350" />
-                </button>
-                <button
-                  onClick={() => {
-                    setShowDemoAssistant(false);
-                    setDemoStep(0);
-                  }}
-                  className="text-slate-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full cursor-pointer"
-                  title="Encerrar Tutorial"
-                >
-                  <XCircle className="w-4 h-4 text-slate-350" />
-                </button>
-              </div>
-            </div>
+          if (stepIdx === 0) {
+            if (currentScreen !== 'home') setCurrentScreen('home');
+            setAddresses(prev => {
+              const next = [...prev];
+              next[0] = demoOrigin;
+              return next;
+            });
+            setResolvedCoords(prev => ({
+              ...prev,
+              [demoOrigin]: { lat: -3.0355, lon: -60.0125 }
+            }));
+          } else if (stepIdx === 1) {
+            if (currentScreen !== 'home') setCurrentScreen('home');
+            setAddresses(demoStopsList);
+            setStopIds([crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]);
+            setTimeWindows({
+              1: { start: '08:30', end: '10:30' },
+              2: { start: '11:00', end: '13:00' },
+              3: { start: '14:30', end: '16:30' }
+            });
+            setResolvedCoords(prev => ({
+              ...prev,
+              [demoStopsList[0]]: { lat: -3.0355, lon: -60.0125 },
+              [demoStopsList[1]]: { lat: -3.0248, lon: -59.9678 },
+              [demoStopsList[2]]: { lat: -3.1025, lon: -60.0278 },
+              [demoStopsList[3]]: { lat: -3.1312, lon: -60.0268 }
+            }));
+          } else if (stepIdx === 2) {
+            if (currentScreen !== 'home') setCurrentScreen('home');
+            setOptions(prev => ({
+              ...prev,
+              vehicle: 'van',
+              avoidFloods: true,
+              avoidDirt: true,
+              priority: 'balanced'
+            }));
+          } else if (stepIdx === 3) {
+            if (currentScreen !== 'home') setCurrentScreen('home');
+          } else if (stepIdx === 4) {
+            // Trigger calculation to showcase navigation map and active telemetry
+            if (!routeResult) {
+              runOptimization(demoStopsList);
+            } else {
+              setCurrentScreen('navigation');
+            }
+          } else if (stepIdx === 5) {
+            // Show saved route & proof of delivery capabilities
+          }
+        }}
+      />
 
-            {/* Indicator de passos com pontos e barra */}
-            <div className="flex items-center gap-1.5 pt-0.5">
-              <div className="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden border border-white/5">
-                <div 
-                  className="bg-gradient-to-r from-tech to-emerald-400 h-full transition-all duration-300"
-                  style={{ width: `${(demoStep / 5) * 100}%` }}
-                />
-              </div>
-              <span className="text-[10px] font-mono font-bold text-slate-400 shrink-0">
-                {demoStep}/5
-              </span>
-            </div>
-          </div>
-
-          {demoStep === 0 && (
-            <div className="flex flex-col gap-3">
-              <h3 className="text-sm font-black text-white flex items-center gap-2">
-                <span>🚀</span> Bem-vindo ao HARPIA!
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                O <strong>HARPIA</strong> é a sua central logística inteligente de planejamento de rotas, telemetria, navegação por voz e monitoramento climático.
-              </p>
-              <div className="bg-slate-900/90 p-3 rounded-2xl border border-tech/20 text-[11px] text-slate-200 space-y-2 font-sans">
-                <p className="font-bold text-tech text-[10.5px] uppercase tracking-wider">💡 O que você vai aprender em 5 passos:</p>
-                <div className="space-y-1.5 text-slate-300 text-[11px]">
-                  <p className="flex items-center gap-1.5">
-                    <span className="text-tech font-bold">1.</span> Inserir paradas e definir horários limite
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <span className="text-tech font-bold">2.</span> Configurar veículos e parâmetros de custo/consumo
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <span className="text-tech font-bold">3.</span> Otimizar a rota com o motor VRP e IA climática
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <span className="text-tech font-bold">4.</span> Navegar com GPS e registrar ocorrências de campo
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    <span className="text-tech font-bold">5.</span> Capturar comprovante de entrega (POD) e ver relatórios
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setDemoStep(1);
-                  setCurrentScreen('home');
-                }}
-                className="w-full mt-1 bg-tech text-slate-950 font-black text-xs py-3 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)] flex items-center justify-center gap-2"
-              >
-                <span>Iniciar Guia Passo a Passo</span>
-                <span>→</span>
-              </button>
-            </div>
-          )}
-
-          {demoStep === 1 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 1 de 5</span>
-                <span className="text-tech">Entrada de Paradas</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📍</span> 1. Adicionar Endereços & Importação
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Monte sua lista de entregas rapidamente na aba <strong>Planejamento</strong>:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
-                <p><strong>🔍 Digitação Rápida:</strong> Busque endereços integrados e atribua diretamente as paradas.</p>
-                <p><strong>📄 Leitor NFe Simulado:</strong> Consulte Notas Fiscais para extrair os locais da entrega rapidamente (Ex: digite &quot;Aleixo&quot;).</p>
-                <p><strong>⏱️ Janela de Horários:</strong> Defina restrições de recebimento (ex: <i>&quot;Recebe entre 08:00 e 11:00&quot;</i>).</p>
-                <p><strong>🎯 Ordem Livre:</strong> Organize paradas que o motor da IA irá re-sequenciar da melhor forma.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(0)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    const newAddresses = [
-                      'CEASA, Manaus, AM',
-                      'Centro, Manaus, AM',
-                      'Adrianópolis, Manaus, AM',
-                      'Compensa, Manaus, AM',
-                      'BR-319, Manaus, AM'
-                    ];
-                    setAddresses(newAddresses);
-                    setStopIds(newAddresses.map(() => crypto.randomUUID()));
-                    setTimeWindows({
-                      1: { start: '08:00', end: '11:00' },
-                      2: { start: '13:00', end: '15:30' }
-                    });
-                    setDemoStep(2);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Carregar Endereços de Exemplo & Avançar →
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 2 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 2 de 5</span>
-                <span className="text-tech">Veículo & Restrições</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🚚</span> 2. Frota, Carga & Balança de Peso
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Ajuste as configurações do seu transporte e requisitos dos clientes:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
-                <p><strong>🚛 Perfil da Frota:</strong> Indique seu tipo de operação (Entregas Fracionadas, Delivery Rápido, Serviços Técnicos, etc).</p>
-                <p><strong>⚙️ Configuração Automática:</strong> O sistema pré-ajusta os pesos do VRP de acordo com a operação escolhida.</p>
-                <p><strong>🎯 Modos de Prioridade:</strong> Você pode forçar manualmente uma rota voltada para Menor Tempo, Menor Distância, Equilíbrio ou Segurança Máxima.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(1)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={() => {
-                    setOptions(prev => ({ ...prev, vehicle: 'truck', priority: 'safety' }));
-                    setDemoStep(3);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                >
-                  Ajustar Frota & Avançar →
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 3 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 3 de 5</span>
-                <span className="text-tech">Motor de Otimização</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🧮</span> 3. Otimização VRP & IA Climática
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                O motor matemático de roteamento encontra a sequência ideal:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
-                <p><strong>⚡ Solver Matemático (VRP):</strong> Utiliza matriz de distância e tempo para calcular a sequência exata de menor custo e emissão.</p>
-                <p><strong>🌧️ Inteligência Hidrológica:</strong> Monitora previsão meteorológica (INMET) e bacias fluviais para evitar alagamentos e atoleiros.</p>
-                <p><strong>🤖 Diretivas Táticas de IA:</strong> Envie instruções em linguagem simples, como <i>&quot;Priorizar entregas comerciais de manhã e evitar a orla&quot;</i>.</p>
-                <p><strong>💬 Rota Explicada:</strong> A IA gera um resumo explicativo justificando o porquê daquela sequência de paradas.</p>
-              </div>
-              <div className="flex gap-2 mt-1">
-                <button
-                  onClick={() => setDemoStep(2)}
-                  className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                >
-                  Voltar
-                </button>
-                <button
-                  onClick={async () => {
-                    setAiCustomPrompt('Evitar trechos com risco de alagamento e priorizar janelas de horário comercial.');
-                    await runOptimization([
-                      'CEASA, Manaus, AM',
-                      'Centro, Manaus, AM',
-                      'Adrianópolis, Manaus, AM',
-                      'Compensa, Manaus, AM',
-                      'BR-319, Manaus, AM'
-                    ]);
-                    setDemoStep(4);
-                  }}
-                  className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans flex items-center justify-center gap-1.5"
-                >
-                  <span>⚡ Executar Otimização da Rota</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 4 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 4 de 5</span>
-                <span className="text-tech">Navegação & Campo</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>🧭</span> 4. GPS por Voz & Operação Offline
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Interface de navegação para a cabine do motorista:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
-                <p><strong>🔊 GPS por Voz:</strong> Instruções faladas curva a curva com recálculo automático em caso de desvios.</p>
-                <p><strong>🗺️ Camadas de Mapa HD:</strong> Alterne entre Satélite HD, Ruas e Relevo Topográfico.</p>
-                <p><strong>📲 Funciona 100% Offline:</strong> Se perder o sinal nas rodovias, o app salva tudo localmente no dispositivo (IndexedDB) e sincroniza depois.</p>
-                <p><strong>⚠️ Reporte de Ocorrências:</strong> Registre alagamentos, acidentes ou bloqueios de pista em tempo real.</p>
-              </div>
-              <div className="flex flex-col gap-2 mt-1">
-                <button
-                  onClick={async () => {
-                    try {
-                      await db.occurrences.add({
-                        type: 'flood',
-                        description: 'Alagamento em via de acesso reportado via GPS',
-                        lat: -3.134,
-                        lon: -60.024,
-                        timestamp: new Date(),
-                        synced: false
-                      });
-                      setApiWarning("OCORRÊNCIA REGISTRADA: Alerta salvo localmente no celular!");
-                    } catch(e){}
-                  }}
-                  className="w-full bg-slate-900/80 border border-alert/30 text-alert hover:bg-slate-900 font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
-                >
-                  ⚠️ Testar Reporte de Ocorrência (Sinistro)
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setDemoStep(3)}
-                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                  >
-                    Voltar
-                  </button>
-                  <button
-                    onClick={() => {
-                      setNavIndex(0);
-                      setCurrentScreen('navigation');
-                      setDemoStep(5);
-                    }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans"
-                  >
-                    Iniciar GPS de Navegação →
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {demoStep === 5 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex justify-between items-center text-[9.5px] text-slate-400 uppercase font-extrabold font-mono">
-                <span>Passo 5 de 5</span>
-                <span className="text-tech">Comprovação & Gestão</span>
-              </div>
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>📸</span> 5. Comprovante Digital (POD) & Painel
-              </h4>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                Conclusão de entregas e monitoramento gerencial:
-              </p>
-              <div className="bg-slate-900 border border-white/5 p-2.5 rounded-xl text-[10.5px] text-slate-300 space-y-2 font-sans">
-                <p><strong>📸 Comprovante Digital (POD):</strong> Capture foto do recebimento com carimbo de segurança (GPS, data e hora) gravado para auditoria.</p>
-                <p><strong>📊 Painel de Histórico:</strong> Acesse todas as rotas concluídas na aba Métricas para avaliar pontualidade.</p>
-                <p><strong>💰 Telemetria Logística:</strong> Visualize o gasto total estimado de combustível e tempo das operações diárias.</p>
-              </div>
-              <div className="flex flex-col gap-2 mt-1">
-                <button
-                  onClick={() => {
-                    const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
-                    setDeliveryPhoto(boxSvg);
-                    setDeliveryNotes("Mercadoria entregue em perfeito estado sob fiscalização.");
-                    setShowDeliveryModal(true);
-                  }}
-                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 text-tech font-extrabold text-[10px] py-2 rounded-lg text-center cursor-pointer transition-colors"
-                >
-                  📷 Abrir Câmera / Comprovante POD de Teste
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setDemoStep(4)}
-                    className="px-3 bg-slate-900 border border-slate-800 text-slate-400 font-bold text-xs rounded-xl hover:text-white"
-                  >
-                    Voltar
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const boxSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="100%" height="100%" fill="%230f172a"/><rect x="150" y="100" width="300" height="200" rx="10" fill="%23854d0e"/><rect x="150" y="100" width="300" height="40" fill="%23a16207"/><line x1="300" y1="100" x2="300" y2="300" stroke="%23713f12" stroke-width="4"/><rect x="240" y="160" width="120" height="80" rx="4" fill="%23f1f5f9" opacity="0.9"/><rect x="260" y="180" width="80" height="8" rx="2" fill="%23020617"/><rect x="260" y="196" width="60" height="6" rx="2" fill="%23475569"/><rect x="260" y="210" width="40" height="6" rx="2" fill="%23475569"/><circle cx="340" cy="220" r="10" fill="%2322c55e"/><path d="M336 220 l3 3 l5 -5" stroke="white" stroke-width="2" fill="none"/><text x="300" y="340" fill="%2300D4AA" font-family="monospace" font-size="12" text-anchor="middle" font-weight="bold">HARPIA - COMPROVANTE SEGURO</text></svg>`;
-                      try {
-                        const finalAddresses = [
-                          'CEASA, Manaus, AM',
-                          'Centro, Manaus, AM',
-                          'Adrianópolis, Manaus, AM',
-                          'Compensa, Manaus, AM',
-                          'BR-319, Manaus, AM'
-                        ];
-                        await db.routes.add({
-                          date: new Date(),
-                          addresses: finalAddresses,
-                          sequence: finalAddresses.map((a, i) => ({ address: a, index: i })),
-                          score: 95,
-                          status: 'completed',
-                          deliveryPhoto: boxSvg,
-                          deliveryNotes: 'Entrega concluída com comprovante digital seguro.',
-                          completedAt: new Date()
-                        });
-                      } catch (err) {
-                        console.warn(err);
-                      }
-                      stopWebcam();
-                      setShowDeliveryModal(false);
-                      setNavIndex(0);
-                      setCurrentScreen('dashboard');
-                      setShowDemoAssistant(false);
-                      setDemoStep(0);
-                    }}
-                    className="flex-1 bg-tech text-slate-950 font-black text-[11px] py-2.5 rounded-xl uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all text-center cursor-pointer font-sans shadow-[0_0_15px_rgba(209,160,84,0.3)]"
-                  >
-                    🎉 Finalizar Guia & Usar o App
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </motion.div>
-      )}
 
       
       <AnimatePresence>

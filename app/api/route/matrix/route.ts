@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getMatrix } from '@/lib/api-services';
-import { FLUVIAL_PORTS, getFluvialPathStats } from '@/lib/route-engine';
+import { calculateFluvialPath, findClosestFluvialNode, calculateDistanceKm, FLUVIAL_PORTS } from '@/lib/fluvial-engine';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { locations, vehicle, priority, vesselType, engine } = body;
+    const { locations, vehicle, priority, vesselType, travelMonth, engine } = body;
 
     if (!locations || !Array.isArray(locations) || locations.length === 0) {
       return NextResponse.json({ error: "Parâmetro 'locations' é obrigatório" }, { status: 400 });
@@ -23,14 +23,28 @@ export async function POST(req: Request) {
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < n; j++) {
           if (i === j) continue;
-          const fromPortName = locations[i].fluvialPort || FLUVIAL_PORTS[0].name;
-          const toPortName = locations[j].fluvialPort || FLUVIAL_PORTS[0].name;
-          const fromPort = FLUVIAL_PORTS.find(p => p.name === fromPortName) || FLUVIAL_PORTS[0];
-          const toPort = FLUVIAL_PORTS.find(p => p.name === toPortName) || FLUVIAL_PORTS[0];
+          const fromNode = findClosestFluvialNode(locations[i].lat, locations[i].lon);
+          const toNode = findClosestFluvialNode(locations[j].lat, locations[j].lon);
 
-          const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, priority || 'speed', vesselType);
-          distances[i][j] = stats.distance * 1000; // meters
-          durations[i][j] = stats.duration * 60; // seconds
+          const stats = calculateFluvialPath(
+            fromNode.nodeId,
+            toNode.nodeId,
+            (priority as any) || 'speed',
+            (vesselType as any) || 'express_lancha',
+            travelMonth
+          );
+
+          let distMeters = stats.distanceKm * 1000;
+          let durSeconds = stats.durationMinutes * 60;
+
+          if (fromNode.nodeId === toNode.nodeId) {
+            const directKm = calculateDistanceKm(locations[i].lat, locations[i].lon, locations[j].lat, locations[j].lon);
+            distMeters = Math.max(250, directKm * 1000);
+            durSeconds = Math.max(120, (distMeters / 1000 / 25) * 3600);
+          }
+
+          distances[i][j] = Math.round(distMeters);
+          durations[i][j] = Math.round(durSeconds);
         }
       }
 

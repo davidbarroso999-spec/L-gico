@@ -1,11 +1,18 @@
 import { getMatrix, getWeather, getElevation, getTrafficIncidents, getDirections, getInmetForecast } from './api-services';
-import { preciseGeocode } from './geocode-engine';
+import { preciseGeocode, sanitizeDrivableCoordinates } from './geocode-engine';
 import { getGeminiAnalysis, getGeminiContextAdjustments, fetchLiveBulletin } from './ai-engine';
 import { OfflineManager } from './offline-manager';
 import { db } from './db';
 import { analyzeAddressesHistory } from './history-analyzer';
 import { buildAdjustedMatrix, solveVRPMatrix } from './vrp-engine';
 import { StopConstraints, VehicleConstraints } from './vrp-types';
+import {
+  FLUVIAL_PORTS as ENGINE_FLUVIAL_PORTS,
+  FLUVIAL_GRAPH_NODES,
+  calculateFluvialPath,
+  findClosestFluvialNode,
+  calculateDistanceKm
+} from './fluvial-engine';
 
 export interface RouteStop {
   id: string;
@@ -22,7 +29,7 @@ export interface RouteStop {
   invoice?: { key?: string; pdfUrl?: string; isImage?: boolean; valor?: number; peso?: number; destinatario?: string; dataEmissao?: string; descricao?: string; fullData?: any };
   activeOccurrences?: any[];
   amazonasHydrology?: {
-    season: 'cheia' | 'vazante';
+    season: 'cheia' | 'vazante' | 'seca';
     seasonLabel: string;
     warning: string;
     historicalContext: string;
@@ -44,153 +51,25 @@ export interface RouteStop {
   isPickup?: boolean;
 }
 
-interface FluvialNode {
-  id: string;
-  lat: number;
-  lon: number;
-  riverName?: string;
-  connections: string[];
+export const FLUVIAL_PORTS = ENGINE_FLUVIAL_PORTS;
+export const FLUVIAL_GRAPH = FLUVIAL_GRAPH_NODES;
+export { getAutoDetectedAmazonSeason } from './fluvial-engine';
+
+export function getFluvialRoute(startNodeId: string, endNodeId: string, travelMonth?: number): [number, number][] {
+  const result = calculateFluvialPath(startNodeId, endNodeId, 'speed', 'express_lancha', travelMonth);
+  return result.path;
 }
 
-export const FLUVIAL_GRAPH: Record<string, FluvialNode> = {
-  ponta_negra: { id: 'ponta_negra', lat: -3.0620, lon: -60.1020, riverName: 'Rio Negro', connections: ['taruma'] },
-  taruma: { id: 'taruma', lat: -3.0900, lon: -60.0800, riverName: 'Igarapé do Tarumã / Rio Negro', connections: ['ponta_negra', 'compensa'] },
-  compensa: { id: 'compensa', lat: -3.1150, lon: -60.0650, riverName: 'Rio Negro', connections: ['taruma', 'ponte'] },
-  ponte: { id: 'ponte', lat: -3.1250, lon: -60.0550, riverName: 'Canal da Ponte Rio Negro', connections: ['compensa', 'sao_raimundo', 'cacau_pirera'] },
-  sao_raimundo: { id: 'sao_raimundo', lat: -3.1350, lon: -60.0450, riverName: 'Rio Negro / Orla São Raimundo', connections: ['ponte', 'porto'] },
-  porto: { id: 'porto', lat: -3.1410, lon: -60.0260, riverName: 'Porto de Manaus (Rio Negro)', connections: ['sao_raimundo', 'educandos'] },
-  educandos: { id: 'educandos', lat: -3.1480, lon: -60.0120, riverName: 'Igarapé de Educandos', connections: ['porto', 'chibatao'] },
-  chibatao: { id: 'chibatao', lat: -3.1510, lon: -59.9880, riverName: 'Polo Industrial Chibatão / SuperTerminais', connections: ['educandos', 'castanhal'] },
-  castanhal: { id: 'castanhal', lat: -3.1550, lon: -59.9800, riverName: 'Rio Negro / Distrito Industrial', connections: ['chibatao', 'ceasa'] },
-  ceasa: { id: 'ceasa', lat: -3.1450, lon: -59.9420, riverName: 'Canal do Ceasa / Encontro das Águas', connections: ['castanhal', 'encontro', 'careiro'] },
-  encontro: { id: 'encontro', lat: -3.1350, lon: -59.9030, riverName: 'Encontro das Águas (Rio Negro + Solimões)', connections: ['ceasa', 'puraquequara', 'autazes'] },
-  puraquequara: { id: 'puraquequara', lat: -3.0760, lon: -59.8700, riverName: 'Rio Amazonas / Puraquequara', connections: ['encontro', 'itacoatiara'] },
-  careiro: { id: 'careiro', lat: -3.1970, lon: -59.8220, riverName: 'Careiro da Várzea / Rio Solimões', connections: ['ceasa', 'cacau_pirera'] },
-  cacau_pirera: { id: 'cacau_pirera', lat: -3.1670, lon: -60.0650, riverName: 'Cacau Pirêra / Iranduba (Rio Negro)', connections: ['ponte', 'iranduba', 'careiro'] },
-  iranduba: { id: 'iranduba', lat: -3.2800, lon: -60.1700, riverName: 'Orla Fluvial de Iranduba', connections: ['cacau_pirera', 'manacapuru'] },
-  manacapuru: { id: 'manacapuru', lat: -3.2990, lon: -60.6210, riverName: 'Porto de Manacapuru (Rio Solimões)', connections: ['iranduba', 'coari'] },
-  novo_airao: { id: 'novo_airao', lat: -2.6210, lon: -60.9420, riverName: 'Novo Airão / Arquipélago Anavilhanas', connections: ['ponta_negra'] },
-  itacoatiara: { id: 'itacoatiara', lat: -3.1430, lon: -58.4440, riverName: 'Porto de Itacoatiara (Rio Amazonas)', connections: ['puraquequara', 'parintins'] },
-  parintins: { id: 'parintins', lat: -2.6280, lon: -56.7350, riverName: 'Porto de Parintins (Rio Amazonas)', connections: ['itacoatiara'] },
-  autazes: { id: 'autazes', lat: -3.5790, lon: -59.1310, riverName: 'Porto de Autazes (Rio Madeira)', connections: ['encontro'] },
-  coari: { id: 'coari', lat: -4.0840, lon: -63.1410, riverName: 'Porto de Coari (Rio Solimões / Urucu)', connections: ['manacapuru', 'tefe'] },
-  tefe: { id: 'tefe', lat: -3.3540, lon: -64.7110, riverName: 'Porto de Tefé (Médio Solimões)', connections: ['coari'] },
-};
-
-export const FLUVIAL_PORTS = [
-  { name: "Porto de Manaus (Centro / Roadway)", nodeId: 'porto', lat: -3.1410, lon: -60.0260 },
-  { name: "Porto da Ceasa (Balsas & Terminal)", nodeId: 'ceasa', lat: -3.1450, lon: -59.9420 },
-  { name: "Terminal Fluvial Chibatão / SuperTerminais", nodeId: 'chibatao', lat: -3.1510, lon: -59.9880 },
-  { name: "Marina do Davi (Pontal / Tarumã)", nodeId: 'taruma', lat: -3.0900, lon: -60.0800 },
-  { name: "Porto de São Raimundo", nodeId: 'sao_raimundo', lat: -3.1350, lon: -60.0450 },
-  { name: "Porto do Educandos", nodeId: 'educandos', lat: -3.1480, lon: -60.0120 },
-  { name: "Ponta Negra (Atracação Orla)", nodeId: 'ponta_negra', lat: -3.0620, lon: -60.1020 },
-  { name: "Fronteira Puraquequara", nodeId: 'puraquequara', lat: -3.0760, lon: -59.8700 },
-  { name: "Porto do Careiro da Várzea", nodeId: 'careiro', lat: -3.1970, lon: -59.8220 },
-  { name: "Porto de Iranduba", nodeId: 'iranduba', lat: -3.2800, lon: -60.1700 },
-  { name: "Porto de Cacau Pirêra", nodeId: 'cacau_pirera', lat: -3.1670, lon: -60.0650 },
-  { name: "Porto de Manacapuru (Solimões)", nodeId: 'manacapuru', lat: -3.2990, lon: -60.6210 },
-  { name: "Porto de Novo Airão (Anavilhanas)", nodeId: 'novo_airao', lat: -2.6210, lon: -60.9420 },
-  { name: "Porto de Itacoatiara (Amazonas)", nodeId: 'itacoatiara', lat: -3.1430, lon: -58.4440 },
-  { name: "Porto de Parintins", nodeId: 'parintins', lat: -2.6280, lon: -56.7350 },
-  { name: "Porto de Autazes (Rio Madeira)", nodeId: 'autazes', lat: -3.5790, lon: -59.1310 },
-  { name: "Terminal Fluvial de Coari", nodeId: 'coari', lat: -4.0840, lon: -63.1410 },
-  { name: "Porto de Tefé", nodeId: 'tefe', lat: -3.3540, lon: -64.7110 },
-];
-
-export function getFluvialRoute(startNodeId: string, endNodeId: string): [number, number][] {
-  const distances: Record<string, number> = {};
-  const previous: Record<string, string | null> = {};
-  const queue: string[] = [];
-
-  for (const node in FLUVIAL_GRAPH) {
-    distances[node] = Infinity;
-    previous[node] = null;
-    queue.push(node);
-  }
-
-  distances[startNodeId] = 0;
-
-  while (queue.length > 0) {
-    queue.sort((a, b) => distances[a] - distances[b]);
-    const current = queue.shift()!;
-
-    if (current === endNodeId) break;
-    if (distances[current] === Infinity) break;
-
-    const currentLat = FLUVIAL_GRAPH[current].lat;
-    const currentLon = FLUVIAL_GRAPH[current].lon;
-
-    for (const neighbor of FLUVIAL_GRAPH[current].connections) {
-      if (!queue.includes(neighbor)) continue;
-      
-      const neighborNode = FLUVIAL_GRAPH[neighbor];
-      const dist = calculateDistance(currentLat, currentLon, neighborNode.lat, neighborNode.lon);
-      const alt = distances[current] + dist;
-
-      if (alt < distances[neighbor]) {
-        distances[neighbor] = alt;
-        previous[neighbor] = current;
-      }
-    }
-  }
-
-  const pathNodes: string[] = [];
-  let u: string | null = endNodeId;
-  if (previous[u] !== null || u === startNodeId) {
-    while (u !== null) {
-      pathNodes.unshift(u);
-      u = previous[u];
-    }
-  }
-
-  return pathNodes.map(id => [FLUVIAL_GRAPH[id].lat, FLUVIAL_GRAPH[id].lon]);
-}
-
-export function getFluvialPathStats(startNodeId: string, endNodeId: string, priority: string, vesselType?: string) {
-  const pathCoords = getFluvialRoute(startNodeId, endNodeId);
-  let totalDistanceAttr = 0;
-  for (let i = 0; i < pathCoords.length - 1; i++) {
-    totalDistanceAttr += calculateDistance(
-      pathCoords[i][0], pathCoords[i][1],
-      pathCoords[i + 1][0], pathCoords[i + 1][1]
-    );
-  }
-  
-  // Velocidade base em km/h ajustada pelo tipo de embarcação e prioridade
-  let speed = 28; // default lancha / voadeira média
-  if (vesselType === 'express_lancha') speed = 48; // Lancha Rápida Express (48 km/h)
-  else if (vesselType === 'voadeira') speed = 36; // Voadeira de Alumínio (36 km/h)
-  else if (vesselType === 'regional_gaiola') speed = 18; // Barco Regional Gaiola (18 km/h)
-  else if (vesselType === 'balsa_heavy') speed = 14; // Balsa / Empurrador Heavy (14 km/h)
-  else {
-    // Fallback por algoritmo de prioridade se o tipo de embarcação não for especificado
-    if (priority === 'speed') speed = 45;
-    else if (priority === 'economy') speed = 18;
-    else if (priority === 'safety') speed = 28;
-    else if (priority === 'distance') speed = 22;
-  }
-
-  // Fator de correnteza dinâmico (Rio Solimões / Amazonas corre para Leste ~lon aumentando; Rio Negro corre para Sudeste)
-  const startNode = FLUVIAL_GRAPH[startNodeId];
-  const endNode = FLUVIAL_GRAPH[endNodeId];
-  let currentBonusKmH = 0;
-
-  if (startNode && endNode) {
-    const isGoingDownstream = endNode.lon > startNode.lon; // A favor da correnteza para o Atlântico
-    currentBonusKmH = isGoingDownstream ? 5.5 : -6.2; // A favor: +5.5 km/h; Contra: -6.2 km/h
-  }
-
-  const effectiveSpeed = Math.max(8, speed + currentBonusKmH);
-  const durationHours = totalDistanceAttr / effectiveSpeed;
-  const durationMinutes = durationHours * 60;
-
+export function getFluvialPathStats(startNodeId: string, endNodeId: string, priority: string, vesselType?: string, travelMonth?: number) {
+  const res = calculateFluvialPath(startNodeId, endNodeId, (priority as any) || 'speed', (vesselType as any) || 'express_lancha', travelMonth);
   return {
-    path: pathCoords,
-    distance: totalDistanceAttr, // km
-    duration: durationMinutes, // minutes
-    effectiveSpeedKmH: Math.round(effectiveSpeed),
-    currentVectorBonus: currentBonusKmH
+    path: res.path,
+    distance: res.distanceKm,
+    duration: res.durationMinutes,
+    effectiveSpeedKmH: res.effectiveSpeedKmH,
+    currentVectorBonus: res.currentVectorKmH,
+    hydrology: res.hydrology,
+    navigationSteps: res.navigationSteps
   };
 }
 
@@ -198,6 +77,7 @@ export interface RouteOptions {
   priority: 'speed' | 'distance' | 'economy' | 'safety' | 'balanced';
   vehicle: 'car' | 'moto' | 'truck' | 'van' | 'boat';
   vesselType?: 'express_lancha' | 'voadeira' | 'regional_gaiola' | 'balsa_heavy';
+  travelMonth?: number; // 1-12
   avoidDirt: boolean;
   avoidFloods: boolean;
   avoidHills: boolean;
@@ -241,7 +121,7 @@ function timeToMinutes(timeStr?: string): number | null {
   return h * 60 + m;
 }
 
-export function getAmazonasHydrology(address: string, lat: number, lon: number, weather?: any) {
+export function getAmazonasHydrology(address: string, lat: number, lon: number, weather?: any, travelMonth?: number) {
   const isAmazonas = 
     address.toLowerCase().includes('manaus') || 
     address.toLowerCase().includes('am') || 
@@ -260,7 +140,7 @@ export function getAmazonasHydrology(address: string, lat: number, lon: number, 
                              weatherDesc.toLowerCase().includes('chuva') ||
                              weatherDesc.toLowerCase().includes('tempestade');
 
-  const month = new Date().getMonth() + 1; // 1-indexed (1 = Jan, 12 = Dec)
+  const month = travelMonth ? travelMonth : (new Date().getMonth() + 1); // 1-indexed (1 = Jan, 12 = Dec)
   const isCheia = month >= 12 || month <= 6; 
   const season: 'cheia' | 'vazante' = isCheia ? 'cheia' : 'vazante';
   
@@ -376,9 +256,10 @@ export async function optimizeRoute(
   let locations = await Promise.all(addresses.map(async (addr, i) => {
     try {
       if (knownCoords && knownCoords[addr]) {
+        const sanitized = sanitizeDrivableCoordinates(knownCoords[addr].lat, knownCoords[addr].lon, addr);
         return {
-          lat: knownCoords[addr].lat,
-          lon: knownCoords[addr].lon,
+          lat: sanitized.lat,
+          lon: sanitized.lon,
           id: i.toString(),
           address: addr,
           label: addr,
@@ -389,13 +270,24 @@ export async function optimizeRoute(
         };
       }
       const geo = await preciseGeocode(addr);
-      return { ...geo, id: i.toString(), address: addr, fluvialPort: undefined as string | undefined };
+      const sanitized = sanitizeDrivableCoordinates(geo.lat, geo.lon, `${geo.name || ''} ${addr}`);
+      return { 
+        ...geo, 
+        lat: sanitized.lat,
+        lon: sanitized.lon,
+        id: i.toString(), 
+        address: addr, 
+        fluvialPort: undefined as string | undefined 
+      };
     } catch (error) {
       console.warn('Geocoding failed, falling back to approximation.', error);
       // Rough emergency approximation for fallback (Manaus center)
+      const approxLat = -3.119 + (Math.random() - 0.5) * 0.02;
+      const approxLon = -60.021 + (Math.random() - 0.5) * 0.02;
+      const sanitized = sanitizeDrivableCoordinates(approxLat, approxLon, addr);
       return {
-        lat: -3.119 + (Math.random() - 0.5) * 0.02,
-        lon: -60.021 + (Math.random() - 0.5) * 0.02,
+        lat: sanitized.lat,
+        lon: sanitized.lon,
         id: i.toString(),
         address: addr,
         fluvialPort: undefined as string | undefined
@@ -405,21 +297,14 @@ export async function optimizeRoute(
 
   if (options.vehicle === 'boat') {
     locations = locations.map(loc => {
-      let closestPort = FLUVIAL_PORTS[0];
-      let minDistance = Infinity;
-      for (const port of FLUVIAL_PORTS) {
-        const d = calculateDistance(loc.lat, loc.lon, port.lat, port.lon);
-        if (d < minDistance) {
-          minDistance = d;
-          closestPort = port;
-        }
-      }
+      const closestNode = findClosestFluvialNode(loc.lat, loc.lon);
+      const isExplicitPort = FLUVIAL_PORTS.some(p => loc.address.toLowerCase().includes(p.name.toLowerCase().split(' ')[0]));
       return {
         ...loc,
-        lat: closestPort.lat, // Exact port departure/arrival water coordinate
-        lon: closestPort.lon, // Exact port departure/arrival water coordinate
-        fluvialPort: closestPort.name,
-        address: `${loc.address.split(' (Atracado')[0]} (Atracado no ${closestPort.name})`
+        lat: isExplicitPort ? closestNode.lat : loc.lat,
+        lon: isExplicitPort ? closestNode.lon : loc.lon,
+        fluvialPort: closestNode.name,
+        address: loc.address.includes('Atracado') ? loc.address : `${loc.address} (Atracado no ${closestNode.name})`
       };
     });
   }
@@ -469,11 +354,21 @@ export async function optimizeRoute(
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
         if (i === j) continue;
-        const fromPort = FLUVIAL_PORTS.find(p => p.name === locations[i].fluvialPort) || FLUVIAL_PORTS[0];
-        const toPort = FLUVIAL_PORTS.find(p => p.name === locations[j].fluvialPort) || FLUVIAL_PORTS[0];
-        const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority, options.vesselType);
-        distances[i][j] = stats.distance * 1000;
-        durations[i][j] = stats.duration * 60;
+        const fromNode = findClosestFluvialNode(locations[i].lat, locations[i].lon);
+        const toNode = findClosestFluvialNode(locations[j].lat, locations[j].lon);
+        const stats = calculateFluvialPath(fromNode.nodeId, toNode.nodeId, options.priority as any, options.vesselType as any, options.travelMonth);
+        
+        let distMeters = stats.distanceKm * 1000;
+        let durSeconds = stats.durationMinutes * 60;
+
+        if (fromNode.nodeId === toNode.nodeId) {
+          const directKm = calculateDistanceKm(locations[i].lat, locations[i].lon, locations[j].lat, locations[j].lon);
+          distMeters = Math.max(250, directKm * 1000);
+          durSeconds = Math.max(120, (distMeters / 1000 / 25) * 3600);
+        }
+
+        distances[i][j] = Math.round(distMeters);
+        durations[i][j] = Math.round(durSeconds);
       }
     }
     matrix = { distances, durations };
@@ -530,7 +425,7 @@ export async function optimizeRoute(
       }
 
       // Cruze de dados hidrológicos/climáticos do Amazonas com dados meteorológicos reais (somente para perfil fluvial de barco)
-      const amazonasHydrology = options.vehicle === 'boat' ? getAmazonasHydrology(loc.address, loc.lat, loc.lon, weather) : undefined;
+      const amazonasHydrology = options.vehicle === 'boat' ? getAmazonasHydrology(loc.address, loc.lat, loc.lon, weather, options.travelMonth) : undefined;
       if (amazonasHydrology) {
         risk += amazonasHydrology.riskPenalty;
       }
@@ -603,9 +498,9 @@ export async function optimizeRoute(
     avoidHills: options.avoidHills
   };
 
-  // 5.3 Mathematical VRP Solver (Savings + 2-Opt local search with time budget 10s)
+  // 5.3 Mathematical VRP Solver (Savings + 2-Opt local search with optimized time budget for rapid execution)
   const adjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, vehicleConstraints, stopConstraints);
-  const vrpSolution = solveVRPMatrix(adjMatrix, stopConstraints, vehicleConstraints, 10000);
+  const vrpSolution = solveVRPMatrix(adjMatrix, stopConstraints, vehicleConstraints, 3500);
 
   // Comparison across priorities check
   let sameAsOtherPriorities = false;
@@ -625,7 +520,7 @@ export async function optimizeRoute(
       priorityProfile: options.priority === 'speed' ? 'distance' : 'speed'
     };
     const altAdjMatrix = buildAdjustedMatrix(matrix, contextAdjustments, testConstraints, stopConstraints);
-    const altSolution = solveVRPMatrix(altAdjMatrix, stopConstraints, testConstraints, 3000);
+    const altSolution = solveVRPMatrix(altAdjMatrix, stopConstraints, testConstraints, 1000);
     
     const isSameSeq = JSON.stringify(vrpSolution.optimizedSequenceIndices) === JSON.stringify(altSolution.optimizedSequenceIndices);
     if (isSameSeq) {
@@ -702,31 +597,33 @@ export async function optimizeRoute(
     // Calculate 3 legs
     try {
       const leg1 = await getDirections([[origin.lat, origin.lon], [p1.lat, p1.lon]], profile, preference, options.engine);
-      const fluvialStats = getFluvialPathStats(portOri.nodeId, portDes.nodeId, options.priority, options.vesselType);
+      const fluvialStats = calculateFluvialPath(portOri.nodeId, portDes.nodeId, options.priority as any, options.vesselType as any, options.travelMonth);
       const leg3 = await getDirections([[p2.lat, p2.lon], [dest.lat, dest.lon]], profile, preference, options.engine);
       
       const c1 = leg1?.features?.[0]?.geometry?.coordinates || [[origin.lon, origin.lat], [p1.lon, p1.lat]];
-      const c2 = [[p1.lon, p1.lat], [p2.lon, p2.lat]]; // straight line for fluvial
+      const c2 = fluvialStats.path.map(p => [p[1], p[0]]); // [lon, lat] high-resolution river curve
       const c3 = leg3?.features?.[0]?.geometry?.coordinates || [[p2.lon, p2.lat], [dest.lon, dest.lat]];
       
       const dist1 = leg1?.features?.[0]?.properties?.summary?.distance || 0;
       const dur1 = leg1?.features?.[0]?.properties?.summary?.duration || 0;
-      const dist2 = fluvialStats.distance * 1000;
-      const dur2 = fluvialStats.duration * 60;
+      const dist2 = fluvialStats.distanceKm * 1000;
+      const dur2 = fluvialStats.durationMinutes * 60;
       const dist3 = leg3?.features?.[0]?.properties?.summary?.distance || 0;
       const dur3 = leg3?.features?.[0]?.properties?.summary?.duration || 0;
       
       directions = {
+        type: 'FeatureCollection',
         features: [{
+          type: 'Feature',
           geometry: { type: 'LineString', coordinates: [...c1, ...c2, ...c3] },
           properties: {
             summary: { distance: dist1 + dist2 + dist3, duration: dur1 + dur2 + dur3 },
             segments: [
-              { distance: dist1, duration: dur1, instruction: 'Etapa 1: Terrestre até Porto' },
-              { distance: dist2, duration: dur2, instruction: 'Etapa 2: Travessia Fluvial' },
-              { distance: dist3, duration: dur3, instruction: 'Etapa 3: Terrestre até Destino' }
+              { distance: dist1, duration: dur1, instruction: `Etapa 1: Terrestre até ${portOri.name}` },
+              { distance: dist2, duration: dur2, instruction: `Etapa 2: Travessia Fluvial pelo Talvegue (${fluvialStats.hydrology.seasonLabel})` },
+              { distance: dist3, duration: dur3, instruction: `Etapa 3: Terrestre até Destino Final` }
             ],
-            hybridAnalysis: 'Rota Multimodal Híbrida Gerada com Sucesso (Terrestre -> Fluvial -> Terrestre)'
+            hybridAnalysis: `Rota Multimodal Híbrida: Terrestre -> Fluvial (${portOri.name} até ${portDes.name}) -> Terrestre`
           }
         }]
       };
@@ -737,62 +634,67 @@ export async function optimizeRoute(
     const rawCoordinates: [number, number][] = [];
     let fluvialDistance = 0;
     let fluvialDuration = 0;
+    const allSegments: any[] = [];
 
     for (let i = 0; i < sequence.length - 1; i++) {
       const fromStop = sequence[i];
       const toStop = sequence[i + 1];
       
-      const fromPort = FLUVIAL_PORTS.find(p => p.name === fromStop.fluvialPort) || FLUVIAL_PORTS[0];
-      const toPort = FLUVIAL_PORTS.find(p => p.name === toStop.fluvialPort) || FLUVIAL_PORTS[0];
+      const fromNode = findClosestFluvialNode(fromStop.lat, fromStop.lon);
+      const toNode = findClosestFluvialNode(toStop.lat, toStop.lon);
       
-      if (fromPort.name === toPort.name) {
-        // Same port node
-        rawCoordinates.push([fromPort.lon, fromPort.lat]);
-        rawCoordinates.push([toPort.lon, toPort.lat]);
-        
-        const dLand = calculateDistance(fromPort.lat, fromPort.lon, toPort.lat, toPort.lon);
-        fluvialDistance += dLand * 1000;
-        fluvialDuration += (dLand / 30) * 3600; // 30 km/h average
-      } else {
-        // Fluvial water path: Origin departure port -> river waterway -> arrival port
-        rawCoordinates.push([fromPort.lon, fromPort.lat]);
-        
-        const stats = getFluvialPathStats(fromPort.nodeId, toPort.nodeId, options.priority, options.vesselType);
-        fluvialDistance += stats.distance * 1000; // in meters (for GeoJSON summary)
-        fluvialDuration += stats.duration * 60; // in seconds (for GeoJSON summary)
-        
-        stats.path.forEach((c) => {
-          rawCoordinates.push([c[1], c[0]]); // [lon, lat]
-        });
-        
-        rawCoordinates.push([toPort.lon, toPort.lat]);
+      const stats = calculateFluvialPath(
+        fromNode.nodeId,
+        toNode.nodeId,
+        (options.priority as any) || 'speed',
+        (options.vesselType as any) || 'express_lancha',
+        options.travelMonth
+      );
+      
+      let legDistMeters = Math.round(stats.distanceKm * 1000);
+      let legDurSeconds = Math.round(stats.durationMinutes * 60);
+
+      if (fromNode.nodeId === toNode.nodeId) {
+        const directKm = calculateDistanceKm(fromStop.lat, fromStop.lon, toStop.lat, toStop.lon);
+        legDistMeters = Math.max(300, Math.round(directKm * 1000));
+        legDurSeconds = Math.max(120, Math.round((legDistMeters / 1000 / 25) * 3600));
       }
+
+      fluvialDistance += legDistMeters;
+      fluvialDuration += legDurSeconds;
+      
+      // Converte coordenadas da curva fluvial para o padrão GeoJSON [lon, lat]
+      const legCoordsGeoJson: [number, number][] = stats.path.map(pt => [pt[1], pt[0]]);
+      
+      legCoordsGeoJson.forEach(pt => {
+        if (rawCoordinates.length === 0) {
+          rawCoordinates.push(pt);
+        } else {
+          const last = rawCoordinates[rawCoordinates.length - 1];
+          if (Math.abs(last[0] - pt[0]) > 0.00005 || Math.abs(last[1] - pt[1]) > 0.00005) {
+            rawCoordinates.push(pt);
+          }
+        }
+      });
+
+      allSegments.push({
+        distance: legDistMeters,
+        duration: legDurSeconds,
+        steps: stats.navigationSteps.map(step => ({
+          instruction: step.instruction,
+          distance: step.distanceMeters,
+          duration: step.durationSeconds,
+          way_points: step.way_points,
+          name: step.riverName,
+          type: step.type
+        }))
+      });
     }
 
-    // Clean up consecutive redundant/duplicate coordinates for high-fidelity Leaflet lines
-    const allCoordinates: [number, number][] = [];
-    rawCoordinates.forEach(c => {
-      if (allCoordinates.length === 0) {
-        allCoordinates.push(c);
-      } else {
-        const last = allCoordinates[allCoordinates.length - 1];
-        if (Math.abs(last[0] - c[0]) > 0.0001 || Math.abs(last[1] - c[1]) > 0.0001) {
-          allCoordinates.push(c);
-        }
-      }
-    });
-
-    // Ensure we have at least 2 points to be a valid LineString
-    if (allCoordinates.length < 2) {
-      if (allCoordinates.length === 1) {
-        allCoordinates.push([allCoordinates[0][0] + 0.001, allCoordinates[0][1] + 0.001]);
-      } else {
-        sequence.forEach(s => allCoordinates.push([s.lon, s.lat]));
-        if (allCoordinates.length === 1) {
-          allCoordinates.push([allCoordinates[0][0] + 0.001, allCoordinates[0][1] + 0.001]);
-        }
-      }
-    }
+    // Garante no mínimo 2 pontos válidos
+    const allCoordinates = rawCoordinates.length >= 2 
+      ? rawCoordinates 
+      : sequence.map(s => [s.lon, s.lat] as [number, number]);
 
     directions = {
       type: 'FeatureCollection',
@@ -807,7 +709,7 @@ export async function optimizeRoute(
             distance: fluvialDistance,
             duration: fluvialDuration
           },
-          segments: []
+          segments: allSegments
         }
       }]
     };

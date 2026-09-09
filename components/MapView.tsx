@@ -4,7 +4,12 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe, LocateFixed, Plus } from 'lucide-react';
+import { Compass, Navigation, Eye, Play, Square, AlertTriangle, CloudRain, Shield, AlertOctagon, Car, Sun, RefreshCw, Sliders, X, Radio, ArrowUp, ArrowLeft, ArrowRight, ArrowUpLeft, ArrowUpRight, RotateCcw, Sparkles, Layers, Smartphone, MapPin, Globe, LocateFixed, Plus, Waves, Anchor, Volume2, Volume1, VolumeX, PlusCircle, Camera, Navigation2, Satellite } from 'lucide-react';
+import LaneGuidance from './LaneGuidance';
+import WazeReportModal from './WazeReportModal';
+import QuickStopModal from './QuickStopModal';
+import { voiceNav, VoiceNavigationMode } from '@/lib/voice-navigation';
+import { sanitizeDrivableCoordinates } from '@/lib/geocode-engine';
 
 // Fix Leaflet icons in Next.js safely
 const defaultIcon = typeof window !== 'undefined' ? L.icon({
@@ -87,16 +92,28 @@ function MapController({
   // Listen for physical user gestures on Leaflet map to release lock and allow free pan/zoom/rotate
   useEffect(() => {
     if (!map) return;
-    const handleUserGesture = (e: any) => {
-      if (e.originalEvent) {
-        onUserPan();
+    const handleUserGesture = () => {
+      onUserPan();
+    };
+
+    map.on('dragstart', handleUserGesture);
+    map.on('zoomstart', handleUserGesture);
+    map.on('touchstart', handleUserGesture);
+
+    const handleRecenter = () => {
+      if (carCoords) {
+        map.setView(carCoords, 19.5, { animate: true, duration: 0.4 });
       }
     };
-    map.on('movestart dragstart touchstart', handleUserGesture);
+    window.addEventListener('recenter-map', handleRecenter);
+
     return () => {
-      map.off('movestart dragstart touchstart', handleUserGesture);
+      map.off('dragstart', handleUserGesture);
+      map.off('zoomstart', handleUserGesture);
+      map.off('touchstart', handleUserGesture);
+      window.removeEventListener('recenter-map', handleRecenter);
     };
-  }, [map, onUserPan]);
+  }, [map, onUserPan, carCoords]);
 
   useEffect(() => {
     if (!isAutoFollowing) return; // User is manually panning/exploring map, do not override position
@@ -328,7 +345,7 @@ const createNumberedIcon = (
   });
 };
 
-// Custom car vehicle icon (pulsing glowing neon or compass)
+// Custom car vehicle icon (Waze 3D chevron with highway headlight projection & radar halo)
 const createCarIcon = (
   heading: number, 
   smoothHeading: number, 
@@ -337,118 +354,74 @@ const createCarIcon = (
   mapOrientation: 'north' | 'track',
   isNavigationScreen = false
 ) => {
-  if (isNavigationScreen) {
-    return L.divIcon({
-      html: `
-        <div style="
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 54px;
-          height: 54px;
-          position: relative;
-        ">
-          <!-- Outer Compass Dial (Locked North-up for ultra UX stability) -->
-          <div style="
-            position: absolute;
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            border: 2px solid rgba(209,160,84, 0.55);
-            background: rgba(9, 13, 22, 0.85);
-            box-shadow: 0 0 15px rgba(209,160,84, 0.25);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          ">
-            <span style="
-              position: absolute;
-              top: 1px;
-              font-family: monospace;
-              font-size: 10px;
-              font-weight: 950;
-              color: #ff453a;
-              text-shadow: 0 0 6px rgba(255, 69, 58, 0.75);
-            ">N</span>
-            <div style="
-              position: absolute;
-              width: 4px;
-              height: 4px;
-              background-color: #D1A054;
-              border-radius: 50%;
-            "></div>
-          </div>
-          
-          <!-- Inner Navigation Compass Pointer (Apontando sempre para cima / Norte) -->
-          <div style="
-            transform: rotate(${mapOrientation === 'track' ? 0 : smoothHeading}deg);
-            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 54px;
-            height: 54px;
-            z-index: 2;
-          ">
-            <svg viewBox="0 0 24 24" fill="currentColor" style="width: 28px; height: 28px; color: #D1A054; filter: drop-shadow(0 0 8px #D1A054);">
-              <path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" />
-            </svg>
-          </div>
-        </div>
-      `,
-      className: '',
-      iconSize: [54, 54],
-      iconAnchor: [27, 27], // Center anchor for perfectly centered rotation symmetry
-    });
-  }
-
-  // O ponteiro do carro permanece apontando para o Norte / Pra Cima (0 deg) no modo de rotação do mapa, girando o mapa ao redor dele
-  let rotationAdjustment = '';
-  if (is3D) {
-    if (mapOrientation === 'track') {
-      rotationAdjustment = 'rotateX(-50deg) rotate(0deg)';
-    } else {
-      rotationAdjustment = `rotateX(-45deg) rotate(${smoothHeading}deg)`;
-    }
-  } else {
-    if (mapOrientation === 'track') {
-      rotationAdjustment = 'rotate(0deg)';
-    } else {
-      rotationAdjustment = `rotate(${smoothHeading}deg)`;
-    }
-  }
+  // In track mode, the map rotates underneath, so the vehicle chevron always points forward (0deg).
+  // In north mode, the map is static, so the chevron rotates with the vehicle heading.
+  const angle = mapOrientation === 'track' ? 0 : smoothHeading;
+  const tilt = is3D ? 'rotateX(-45deg)' : '';
 
   return L.divIcon({
     html: `
       <div style="
-        transform: ${rotationAdjustment};
-        transition: transform 1s linear;
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 48px;
-        height: 48px;
+        width: 64px;
+        height: 64px;
+        position: relative;
+        transform: ${tilt} rotate(${angle}deg);
+        transform-origin: 50% 50%;
+        transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        pointer-events: none;
       ">
-        <!-- Pulsing locator glow circle -->
+        <!-- Forward Headlight Projector Beam (Waze Highway Illumination) -->
         <div style="
           position: absolute;
+          top: -36px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 0;
+          height: 0;
+          border-left: 20px solid transparent;
+          border-right: 20px solid transparent;
+          border-top: 48px solid rgba(56, 189, 248, 0.25);
+          filter: blur(4px);
+          pointer-events: none;
+        "></div>
+
+        <!-- Pulsing Ground Radar Halo -->
+        <div style="
+          position: absolute;
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          background: radial-gradient(circle, rgba(14, 165, 233, 0.35) 0%, rgba(14, 165, 233, 0) 70%);
+          border: 1.5px solid rgba(56, 189, 248, 0.6);
+          box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
+          animation: pulseMarker 1.4s infinite alternate ease-in-out;
+        "></div>
+
+        <!-- Waze-style 3D Navigation Vehicle Body -->
+        <div style="
+          position: relative;
           width: 38px;
           height: 38px;
           border-radius: 50%;
-          background: rgba(209,160,84, 0.28);
-          border: 1.5px solid rgba(209,160,84, 0.7);
-          box-shadow: 0 0 22px rgba(209,160,84, 0.95);
-          animation: pulseMarker 1.2s infinite alternate ease-in-out;
-        "></div>
-        <!-- Directional vehicle arrow pointing to front -->
-        <svg viewBox="0 0 24 24" fill="currentColor" style="width: 26px; height: 26px; color: #D1A054; filter: drop-shadow(0 0 8px #D1A054); transform: translateY(-1px);">
-          <path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" />
-        </svg>
+          background: linear-gradient(135deg, #0284c7, #0369a1);
+          border: 2.5px solid #ffffff;
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 14px rgba(14, 165, 233, 0.8);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        ">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width: 24px; height: 24px; color: #ffffff; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transform: translateY(-1px);">
+            <path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" />
+          </svg>
+        </div>
       </div>
     `,
     className: '',
-    iconSize: [48, 48],
-    iconAnchor: [24, 24],
+    iconSize: [64, 64],
+    iconAnchor: [32, 32],
   });
 };
 
@@ -532,7 +505,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [instructionHUD, setInstructionHUD] = useState("Pronto para iniciar a jornada");
 
   // Advanced Waze Simulator Controls & Traffic Injections
-  const [useRealGPS, setUseRealGPS] = useState(true); // Default to Real GPS on device!
+  const [useRealGPS, setUseRealGPS] = useState(false); // Default to simulation for instant interactivity; toggleable to Real GPS!
   const [simSpeedFactor, setSimSpeedFactor] = useState(1); // Default to 1x realistic speed
   const [activeSimIncident, setActiveSimIncident] = useState<'none' | 'congested' | 'blocked'>('none');
   const [autoRerouteEnabled, setAutoRerouteEnabled] = useState(true); // Auto rerouting on severe delay
@@ -544,6 +517,23 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     cause: string;
     reason: string;
   } | null>(null);
+
+  // Voice Navigation, Community Reports, Quick Stops & Speed limits
+  const [voiceNavMode, setVoiceNavMode] = useState<VoiceNavigationMode>('all');
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isQuickStopModalOpen, setIsQuickStopModalOpen] = useState(false);
+  const [speedLimitHUD, setSpeedLimitHUD] = useState(60);
+
+  const toggleVoiceNavMode = () => {
+    const nextMode: VoiceNavigationMode = voiceNavMode === 'all' ? 'alerts_only' : voiceNavMode === 'alerts_only' ? 'mute' : 'all';
+    voiceNav.setMode(nextMode);
+    setVoiceNavMode(nextMode);
+    if (nextMode === 'all') {
+      voiceNav.speak("Voz ativada com instruções completas");
+    } else if (nextMode === 'alerts_only') {
+      voiceNav.speak("Apenas alertas de perigo e radares ativados");
+    }
+  };
 
   // Real Device Orientation (Gyroscope / Compass Sensor Listener - Always Active)
   useEffect(() => {
@@ -729,9 +719,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     return Math.round(distKm * 1000); // exact meters
   }, [carCoords, activeStep, polyline, stopIndices, navIndex]);
 
-  // Live traffic and weather layer controls (disabled by default for clean map view)
+  // Live traffic, weather and fluvial sonar radar controls
   const [showTrafficLayer, setShowTrafficLayer] = useState(false);
   const [showWeatherLayer, setShowWeatherLayer] = useState(false);
+  
+  // Fluvial boat route detection
+  const isFluvialRoute = useMemo(() => {
+    return stops.some(s => s.fluvialPort || s.amazonasHydrology || (s.address && (s.address.toLowerCase().includes('porto') || s.address.toLowerCase().includes('marina') || s.address.toLowerCase().includes('fluvial') || s.address.includes('Atracado'))));
+  }, [stops]);
 
   // Local Occurrences database state
   const [localOccurrences, setLocalOccurrences] = useState<any[]>([]);
@@ -758,6 +753,56 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     };
   }, []);
 
+  // Real-time voice guidance effect for upcoming maneuvers
+  useEffect(() => {
+    if (!isNavigationScreen || !activeStep) return;
+
+    if (realTimeTurnDistanceMeters !== null) {
+      if (realTimeTurnDistanceMeters <= 35 && realTimeTurnDistanceMeters > 5) {
+        voiceNav.playTurnChime();
+        const stepText = activeStep.instruction || "Vire agora na via indicada";
+        voiceNav.speak(`${stepText} agora`, false, 6000);
+      } else if (realTimeTurnDistanceMeters <= 180 && realTimeTurnDistanceMeters >= 120) {
+        voiceNav.playTurnChime();
+        const stepText = activeStep.instruction || "Curva à frente";
+        voiceNav.speak(`Em cento e cinquenta metros, ${stepText}`, false, 8000);
+      } else if (realTimeTurnDistanceMeters <= 550 && realTimeTurnDistanceMeters >= 450) {
+        voiceNav.playTurnChime();
+        const stepText = activeStep.instruction || "Atenção à manobra";
+        voiceNav.speak(`Em quinhentos metros, ${stepText}`, false, 12000);
+      }
+    }
+  }, [isNavigationScreen, activeStep, realTimeTurnDistanceMeters]);
+
+  // Speed limit overspeed warning chime & voice alert
+  useEffect(() => {
+    if (!isNavigationScreen || speedHUD <= speedLimitHUD + 5) return;
+    voiceNav.playSpeedLimitBeep();
+    voiceNav.speak("Atenção: Limite de velocidade de 60 quilômetros por hora excedido.", true, 12000);
+  }, [isNavigationScreen, speedHUD, speedLimitHUD]);
+
+  // Proximity radar and community hazard alert chime
+  useEffect(() => {
+    if (!isNavigationScreen || !carCoords || localOccurrences.length === 0) return;
+
+    for (const occ of localOccurrences) {
+      const dist = calculateDistanceInKm(carCoords[0], carCoords[1], occ.lat, occ.lon);
+      if (dist <= 0.35 && dist >= 0.05) {
+        voiceNav.playRadarWarningBeep();
+        if (occ.type === 'speed_camera') {
+          voiceNav.speak("Atenção: Radar fixo de fiscalização a trezentos metros.", true, 15000);
+        } else if (occ.type === 'police') {
+          voiceNav.speak("Atenção: Fiscalização policial reportada na via à frente.", true, 15000);
+        } else if (occ.type === 'accident' || occ.type === 'road_closed') {
+          voiceNav.speak("Atenção: Acidente ou via bloqueada logo à frente.", true, 15000);
+        } else if (occ.type === 'sandbank' || occ.type === 'repiquete') {
+          voiceNav.speak("Alerta fluvial: Restrição de calado ou banco de areia à frente.", true, 15000);
+        }
+        break;
+      }
+    }
+  }, [isNavigationScreen, carCoords, localOccurrences]);
+
   // Sync state with props in render to avoid synchronous useEffect setState calls
   const [prevPolyline, setPrevPolyline] = useState<[number, number][]>(polyline);
   if (polyline !== prevPolyline) {
@@ -768,20 +813,23 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [prevIsNavScreen, setPrevIsNavScreen] = useState(isNavigationScreen);
   if (isNavigationScreen !== prevIsNavScreen) {
     setPrevIsNavScreen(isNavigationScreen);
-    setIs3DMode(false); // Force flat 2D map during active navigation screen
-    setMapOrientation('north'); // Force strictly stable locked North up orientation
-    if (!isNavigationScreen) {
+    if (isNavigationScreen) {
+      setIs3DMode(true); // Waze 3D perspective mode!
+      setMapOrientation('track'); // Waze Track-Up rotation (car points forward, road turns)!
+      setIsDriving(true);
+      setIsAutoFollowing(true);
+    } else {
       setIsDriving(false);
+      setIs3DMode(false);
+      setMapOrientation('north');
+      setSmoothHeading(0);
+      setHeading(0);
     }
   }
 
   const [prevIs3DMode, setPrevIs3DMode] = useState(is3DMode);
   if (is3DMode !== prevIs3DMode) {
     setPrevIs3DMode(is3DMode);
-    if (!is3DMode) {
-      setSmoothHeading(0);
-      setHeading(0);
-    }
   }
 
   // Build high-resolution color-graded segments based on stops risk interpolation and Dexie reported occurrences
@@ -896,7 +944,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   }, [polyline, stops, localOccurrences]);
 
 // Core Dynamic Rerouting Engine (Consults live Maps engines from current vehicle position)
-  const triggerWazeReroute = React.useCallback(async (forcedOrigin?: [number, number]) => {
+  const triggerWazeReroute = React.useCallback(async (forcedOrigin?: [number, number], customStops?: any[]) => {
     const startPoint = forcedOrigin || carCoords;
     if (isRerouting || !startPoint || polyline.length === 0) return;
     setIsRerouting(true);
@@ -907,7 +955,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     try {
-      const remainingStops = stops.slice(navIndex);
+      const activeStopsList = customStops || stops;
+      const remainingStops = activeStopsList.slice(navIndex);
       if (remainingStops.length === 0) {
         setIsRerouting(false);
         setReroutingAlert(null);
@@ -915,9 +964,13 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       }
 
       // Origin point is now the exact active simulated car location!
+      const startSan = sanitizeDrivableCoordinates(startPoint[0], startPoint[1]);
       const recalculatePoints = [
-        [startPoint[0], startPoint[1]],
-        ...remainingStops.map(s => [s.lat, s.lon])
+        [startSan.lat, startSan.lon],
+        ...remainingStops.map(s => {
+          const san = sanitizeDrivableCoordinates(s.lat, s.lon, `${s.name || ''} ${s.address || ''}`);
+          return [san.lat, san.lon];
+        })
       ];
       
       // Clean points to avoid ORS 400 error on identical consecutive points
@@ -1001,7 +1054,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         // Propagate the new road geometry to the parent controller to synchronize all UI segments
         if (onRouteRecalculated) {
           const newRouteResult = {
-            sequence: stops,
+            sequence: activeStopsList,
             geometry: newGeometry,
             summary: newSummary,
             segments: newSegments
@@ -1170,9 +1223,10 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   useEffect(() => {
     if (!isNavigationScreen || polyline.length === 0 || stops.length === 0 || stopIndices.length === 0) return;
 
-    // Determine bounds for active navigation leg: from stops[Math.max(0, navIndex - 1)] to stops[navIndex]
-    const startIdx = stopIndices[Math.max(0, navIndex - 1)] || 0;
-    const endIdx = stopIndices[Math.min(stops.length - 1, navIndex)] || (polyline.length - 1);
+    // Determine bounds for active navigation leg: from stops[Math.max(0, activeNavIndex - 1)] to stops[activeNavIndex]
+    const activeNavIndex = navIndex > 0 ? navIndex : (stops.length > 1 ? 1 : 0);
+    const startIdx = stopIndices[Math.max(0, activeNavIndex - 1)] || 0;
+    const endIdx = stopIndices[Math.min(stops.length - 1, activeNavIndex)] || (polyline.length - 1);
 
     setTimeout(() => {
       setSimStartIdx(startIdx);
@@ -1181,15 +1235,11 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       if (polyline[startIdx]) {
         setCarCoords(polyline[startIdx]);
       }
-      // If navIndex > 0 (user pressed Começar / Start), activate tracking & 3D orientation
-      if (navIndex > 0) {
-        setIs3DMode(true);
-        setInstructionHUD("Navegação ativa. Siga a rota até o destino.");
-      } else {
-        setIsDriving(false);
-        setSpeedHUD(0);
-        setInstructionHUD("Pronto para iniciar - Toque em Começar");
-      }
+      setIsDriving(true);
+      setIs3DMode(true);
+      setMapOrientation('track');
+      setIsAutoFollowing(true);
+      setInstructionHUD("Navegação ativa estilo Waze. Siga a rota até o destino.");
       
       // Set initial bearing orientation
       if (startIdx < polyline.length - 1) {
@@ -1302,20 +1352,56 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
     }, intervalDuration);
 
     return () => clearInterval(timer);
-  }, [isDriving, useRealGPS, isNavigationScreen, polyline, simEndIdx, simSpeedFactor, activeSimIncident, autoRerouteEnabled, isRerouting, localOccurrences, simStartIdx, triggerWazeReroute]);
+  }, [isDriving, useRealGPS, isNavigationScreen, polyline, simEndIdx, simSpeedFactor, activeSimIncident, autoRerouteEnabled, isRerouting, localOccurrences, simStartIdx, triggerWazeReroute, detourProposal]);
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
   // Active rotation angle (uses physical device gyroscope/compass orientation when active, or route bearing when navigating)
-    // Map styling - strictly 2D flat without 3D transforms
-  const mapTransformStyles = {
-    height: '100%',
-    width: '100%',
-    background: '#2D2C2A'
-  };
+  const activeRotation = (mapOrientation === 'track' && (isDriving || isNavigationScreen))
+    ? (useGyroscope && gyroActive ? smoothGyroHeading : smoothHeading)
+    : 0;
+
+  // Waze 3D Perspective and Continuous Track-Up Rotation Transform
+  const mapTransformStyles: React.CSSProperties = is3DMode
+    ? {
+        position: 'absolute',
+        width: '160%',
+        height: '160%',
+        left: '-30%',
+        top: '-30%',
+        transform: `rotateX(48deg) rotateZ(${-activeRotation}deg)`,
+        transformOrigin: '50% 65%',
+        transition: isAutoFollowing ? 'transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)' : 'none',
+        willChange: 'transform',
+        background: '#18181b'
+      }
+    : (mapOrientation === 'track' && activeRotation !== 0)
+    ? {
+        position: 'absolute',
+        width: '150%',
+        height: '150%',
+        left: '-25%',
+        top: '-25%',
+        transform: `rotateZ(${-activeRotation}deg)`,
+        transformOrigin: '50% 50%',
+        transition: isAutoFollowing ? 'transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)' : 'none',
+        willChange: 'transform',
+        background: '#18181b'
+      }
+    : {
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        transform: 'none',
+        background: '#2D2C2A',
+        transition: 'transform 0.3s ease-out'
+      };
 
   return (
-    <div className="h-full w-full relative overflow-hidden bg-[#2D2C2A]">
+    <div 
+      className="h-full w-full relative overflow-hidden bg-[#18181b] select-none"
+      style={{ perspective: is3DMode ? '850px' : 'none' }}
+    >
       
       {/* Empty State Overlay when no stops added */}
       {stops.length === 0 && !isNavigationScreen && (
@@ -1676,7 +1762,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         </MapContainer>
       </div>
 
-      {/* Floating Recenter Map Button when map is manually moved */}
+      {/* Floating Recenter Map Button when map is manually moved (Waze style centered) */}
       {!isAutoFollowing && (
         <button
           type="button"
@@ -1684,10 +1770,10 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             setIsAutoFollowing(true);
             window.dispatchEvent(new CustomEvent('recenter-map'));
           }}
-          className="fixed bottom-28 right-4 z-[1600] bg-tech text-slate-950 font-black text-xs uppercase tracking-wider px-4 py-2.5 rounded-2xl shadow-[0_10px_30px_rgba(209,160,84,0.5)] border border-white/30 flex items-center gap-2 hover:scale-105 active:scale-95 transition-all animate-bounce cursor-pointer"
+          className="neo-btn-emerald fixed bottom-36 md:bottom-28 left-1/2 -translate-x-1/2 z-[1600] text-black font-black text-xs uppercase tracking-wider px-5 py-3 rounded-xl flex items-center gap-2"
         >
-          <LocateFixed className="w-4 h-4" />
-          <span>Recentralizar Rota</span>
+          <Navigation className="w-4 h-4 fill-current" />
+          <span>Recentralizar</span>
         </button>
       )}
 
@@ -1695,77 +1781,164 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
       {isNavigationScreen && (
         <>
           {/* HIGHLY ACCESSIBLE, PREMIUM GPS NAVIGATION TOP HUD */}
-          <div className="absolute top-4 left-18 md:left-20 right-4 z-[1001] bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-xl p-3.5 max-w-2xl mx-auto flex items-center gap-3.5 transition-all duration-300 md:p-4">
-            {/* Action Arrow Icon based on next step direction */}
-            <div className="flex flex-col items-center justify-center bg-emerald-600 border border-emerald-500/30 w-12 h-12 rounded-xl shrink-0">
-              {stepDirection === 'left' && <ArrowLeft className="w-7 h-7 text-white stroke-[3px]" />}
-              {stepDirection === 'slight-left' && <ArrowUpLeft className="w-7 h-7 text-white stroke-[3px]" />}
-              {stepDirection === 'right' && <ArrowRight className="w-7 h-7 text-white stroke-[3px]" />}
-              {stepDirection === 'slight-right' && <ArrowUpRight className="w-7 h-7 text-white stroke-[3px]" />}
-              {stepDirection === 'u-turn' && <RotateCcw className="w-7 h-7 text-white stroke-[3px]" />}
-              {stepDirection === 'roundabout' && <RefreshCw className="w-7 h-7 text-white stroke-[3px] animate-spin-slow" />}
-              {stepDirection === 'straight' && <ArrowUp className="w-7 h-7 text-white stroke-[3px]" />}
-            </div>
-            
-            {/* Turn-by-Turn Info Section (Optimized for visibility from distance & real-time meters precision) */}
-            <div className="flex-1 min-w-0">
-              {activeStep ? (
-                <>
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[11px] uppercase tracking-wider text-emerald-400 font-bold flex items-center gap-1">
-                      {realTimeTurnDistanceMeters !== null ? (
-                        realTimeTurnDistanceMeters <= 25 ? (
-                          <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded font-black text-[10px]">VIRAR AGORA</span>
+          <div className="absolute top-4 left-18 md:left-20 right-4 z-[1001] bg-slate-950 border-2 border-slate-700 rounded-2xl shadow-[6px_6px_0px_0px_#000000] p-3 max-w-2xl mx-auto flex flex-col gap-2 transition-all duration-300 md:p-3.5">
+            <div className="flex items-center gap-3">
+              {/* Action Arrow Icon based on next step direction */}
+              <div className="flex flex-col items-center justify-center bg-emerald-500 border-2 border-black shadow-[2px_2px_0px_0px_#000000] w-12 h-12 rounded-xl shrink-0">
+                {stepDirection === 'left' && <ArrowLeft className="w-7 h-7 text-black stroke-[3px]" />}
+                {stepDirection === 'slight-left' && <ArrowUpLeft className="w-7 h-7 text-black stroke-[3px]" />}
+                {stepDirection === 'right' && <ArrowRight className="w-7 h-7 text-black stroke-[3px]" />}
+                {stepDirection === 'slight-right' && <ArrowUpRight className="w-7 h-7 text-black stroke-[3px]" />}
+                {stepDirection === 'u-turn' && <RotateCcw className="w-7 h-7 text-black stroke-[3px]" />}
+                {stepDirection === 'roundabout' && <RefreshCw className="w-7 h-7 text-black stroke-[3px] animate-spin-slow" />}
+                {stepDirection === 'straight' && <ArrowUp className="w-7 h-7 text-black stroke-[3px]" />}
+              </div>
+              
+              {/* Turn-by-Turn Info Section (Optimized for visibility from distance & real-time meters precision) */}
+              <div className="flex-1 min-w-0">
+                {activeStep ? (
+                  <>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-[11px] uppercase tracking-wider text-emerald-400 font-bold flex items-center gap-1">
+                        {realTimeTurnDistanceMeters !== null ? (
+                          realTimeTurnDistanceMeters <= 25 ? (
+                            <span className="neo-badge-emerald px-2 py-0.5 rounded text-[10px]">VIRAR AGORA</span>
+                          ) : (
+                            <span className="font-mono font-bold">{stepDirection === 'right' ? 'Vire à direita' : stepDirection === 'left' ? 'Vire à esquerda' : 'Siga em frente'} em {realTimeTurnDistanceMeters >= 1000 ? `${(realTimeTurnDistanceMeters/1000).toFixed(1)} km` : `${realTimeTurnDistanceMeters}m`}</span>
+                          )
                         ) : (
-                          <span>{stepDirection === 'right' ? 'Vire à direita' : stepDirection === 'left' ? 'Vire à esquerda' : 'Siga em frente'} em {realTimeTurnDistanceMeters >= 1000 ? `${(realTimeTurnDistanceMeters/1000).toFixed(1)} km` : `${realTimeTurnDistanceMeters}m`}</span>
-                        )
-                      ) : (
-                        <span>{activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}</span>
-                      )}
-                    </span>
-                  </div>
-                  <h2 className="text-sm md:text-base font-bold text-white leading-tight tracking-tight truncate">
-                    {activeStep.instruction || "Prossiga na via indicada"}
-                  </h2>
-                </>
-              ) : (
-                <>
-                  <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block mb-0.5">Navegação Ativa</span>
-                  <h2 className="text-sm md:text-base font-bold text-white leading-tight">
-                    {currentLegStatus}
-                  </h2>
-                </>
-              )}
+                          <span className="font-mono font-bold">{activeStep.distance ? `A ${Math.round(activeStep.distance)} metros` : 'Siga em frente'}</span>
+                        )}
+                      </span>
+                    </div>
+                    <h2 className="text-sm md:text-base font-black text-white leading-tight tracking-tight truncate">
+                      {activeStep.instruction || "Prossiga na via indicada"}
+                    </h2>
+                    {/* Real-time Lane Guidance visual indicators */}
+                    <div className="mt-1 flex items-center gap-2">
+                      <LaneGuidance stepDirection={stepDirection} />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block mb-0.5">Navegação Ativa</span>
+                    <h2 className="text-sm md:text-base font-black text-white leading-tight">
+                      {currentLegStatus}
+                    </h2>
+                    <div className="mt-1 flex items-center gap-2">
+                      <LaneGuidance stepDirection={stepDirection} />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Voice Mode Toggle Button (All / Alerts / Mute) */}
+              <button
+                type="button"
+                onClick={toggleVoiceNavMode}
+                className={`neo-btn p-2 rounded-xl transition-all flex items-center justify-center shrink-0 cursor-pointer ${
+                  voiceNavMode === 'all'
+                    ? 'bg-emerald-500 text-black border-2 border-black shadow-[2px_2px_0px_0px_#000]'
+                    : voiceNavMode === 'alerts_only'
+                    ? 'bg-amber-500 text-black border-2 border-black shadow-[2px_2px_0px_0px_#000]'
+                    : 'bg-slate-900 border-2 border-slate-700 text-slate-400'
+                }`}
+                title={
+                  voiceNavMode === 'all'
+                    ? 'Voz: Ativada (Todas as instruções)'
+                    : voiceNavMode === 'alerts_only'
+                    ? 'Voz: Apenas Alertas e Radares'
+                    : 'Voz: Mudo'
+                }
+              >
+                {voiceNavMode === 'all' && <Volume2 className="w-4 h-4" />}
+                {voiceNavMode === 'alerts_only' && <Volume1 className="w-4 h-4" />}
+                {voiceNavMode === 'mute' && <VolumeX className="w-4 h-4" />}
+              </button>
+
+              {/* Solicitar Desvio Button */}
+              <button
+                onClick={() => {
+                  playAlertSound();
+                  setDetourProposal({
+                    timeSavedMinutes: 6,
+                    cause: 'Solicitação de Desvio do Condutor',
+                    reason: 'Buscando alternativa de trajeto com menor tempo e maior fluidez para as paradas restantes...'
+                  });
+                }}
+                disabled={isRerouting}
+                className="neo-btn px-2.5 py-1.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-slate-300 hover:text-white hover:border-amber-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shrink-0"
+                title="Solicitar recomendação de desvio de rota"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Desvio</span>
+              </button>
+
+              {/* Simulated progress percentage */}
+              <div className="flex flex-col items-end shrink-0 pl-2.5 border-l-2 border-slate-800">
+                <span className="text-base font-black font-mono text-amber-400 leading-none">{simProgress}%</span>
+                <span className="text-[8px] text-slate-500 font-mono font-bold uppercase tracking-wider mt-0.5">concluído</span>
+              </div>
             </div>
 
-            {/* Solicitar Desvio Button */}
-            <button
-              onClick={() => {
-                playAlertSound();
-                setDetourProposal({
-                  timeSavedMinutes: 6,
-                  cause: 'Solicitação de Desvio do Condutor',
-                  reason: 'Buscando alternativa de trajeto com menor tempo e maior fluidez para as paradas restantes...'
-                });
-              }}
-              disabled={isRerouting}
-              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 active:scale-95 transition-all text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shrink-0 cursor-pointer"
-              title="Solicitar recomendação de desvio de rota"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRerouting ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Desvio</span>
-            </button>
+            {/* Waze Mode & Quick Settings Strip */}
+            <div className="flex items-center justify-between pt-1.5 border-t-2 border-slate-800 text-[10px]">
+              <div className="flex items-center gap-1.5">
+                {/* GPS / Simulation mode switch */}
+                <button
+                  type="button"
+                  onClick={() => setUseRealGPS(prev => !prev)}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold border-2 transition-all cursor-pointer ${
+                    useRealGPS
+                      ? 'bg-emerald-500 text-black border-black shadow-[2px_2px_0px_0px_#000]'
+                      : 'bg-cyan-500 text-black border-black shadow-[2px_2px_0px_0px_#000]'
+                  }`}
+                  title={useRealGPS ? "Usando GPS Real do dispositivo" : "Modo Simulação interativa"}
+                >
+                  {useRealGPS ? <Satellite className="w-3 h-3 text-black animate-pulse" /> : <Car className="w-3 h-3 text-black" />}
+                  <span>{useRealGPS ? 'GPS Real' : 'Simulação'}</span>
+                </button>
 
-            {/* Simulated progress percentage */}
-            <div className="flex flex-col items-end shrink-0 pl-2.5 border-l border-slate-800">
-              <span className="text-base font-bold font-mono text-tech leading-none">{simProgress}%</span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">concluído</span>
+                {/* Simulation speed cycle */}
+                {!useRealGPS && (
+                  <button
+                    type="button"
+                    onClick={() => setSimSpeedFactor(prev => prev === 1 ? 2 : prev === 2 ? 4 : 1)}
+                    className="neo-btn bg-slate-900 border-2 border-slate-700 text-slate-200 hover:text-white px-2.5 py-1 rounded-lg font-mono font-black"
+                    title="Velocidade da simulação (1x, 2x, 4x)"
+                  >
+                    {simSpeedFactor}x
+                  </button>
+                )}
+              </div>
+
+              {/* Perspective toggle (3D / 2D Track / 2D North) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (is3DMode) {
+                    setIs3DMode(false);
+                    setMapOrientation('track');
+                  } else if (mapOrientation === 'track') {
+                    setIs3DMode(false);
+                    setMapOrientation('north');
+                  } else {
+                    setIs3DMode(true);
+                    setMapOrientation('track');
+                  }
+                }}
+                className="neo-btn flex items-center gap-1 bg-slate-900 border-2 border-slate-700 text-slate-200 hover:text-white px-3 py-1 rounded-lg font-bold"
+                title="Alternar perspectiva: 3D com rotação, 2D seguindo ou 2D norte"
+              >
+                <Eye className="w-3 h-3 text-amber-400" />
+                <span>{is3DMode ? '3D Seguir' : mapOrientation === 'track' ? '2D Seguir' : '2D Norte'}</span>
+              </button>
             </div>
 
             {/* Real-time progress strip */}
-            <div className="absolute bottom-0 left-4 right-4 h-1 bg-slate-900 overflow-hidden rounded-full">
+            <div className="absolute bottom-0 left-4 right-4 h-1.5 bg-slate-900 overflow-hidden rounded-full border border-slate-800">
               <div 
-                className="h-full bg-tech transition-all duration-300 ease-out" 
+                className="h-full bg-amber-400 transition-all duration-300 ease-out" 
                 style={{ width: `${simProgress}%` }}
               ></div>
             </div>
@@ -1774,12 +1947,12 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           {/* Speed Limit & Current Speed Bubble (Bottom Left HUD) */}
           <div className="absolute bottom-28 md:bottom-24 left-4 z-[1001] flex flex-col items-center gap-2 select-none">
             {/* Speed Limit Sign */}
-            <div className="w-12 h-12 bg-white rounded-full border-[4px] border-red-600 shadow-md flex flex-col items-center justify-center text-slate-950 border-solid" title="Limite de Velocidade Permitida (60 km/h)">
+            <div className="w-12 h-12 bg-white rounded-full border-[4px] border-red-600 shadow-[3px_3px_0px_0px_#000000] flex flex-col items-center justify-center text-slate-950 border-solid" title="Limite de Velocidade Permitida (60 km/h)">
               <span className="text-[6px] font-black uppercase text-red-600 tracking-tight -mb-0.5">MÁX</span>
               <span className="font-extrabold text-base tracking-tight leading-none text-black">60</span>
             </div>
             {/* Real-time Current Speed Meter Bubble */}
-            <div className={`w-13 h-13 rounded-full border-2 flex flex-col items-center justify-center shadow-lg transition-all duration-200 ${speedHUD > 60 ? 'bg-red-600 text-white border-white' : 'bg-slate-950/95 border-tech/80 text-tech'}`} title="Sua Velocidade Atual">
+            <div className={`w-13 h-13 rounded-full border-2 flex flex-col items-center justify-center shadow-[3px_3px_0px_0px_#000000] transition-all duration-200 ${speedHUD > 60 ? 'bg-red-600 text-white border-black' : 'bg-slate-950 border-2 border-slate-700 text-amber-400'}`} title="Sua Velocidade Atual">
               <span className="font-mono text-lg font-bold leading-none tracking-tight -mb-0.5">{speedHUD}</span>
               <span className="text-[7px] uppercase font-bold tracking-wider opacity-80">km/h</span>
             </div>
@@ -1787,12 +1960,12 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
           {/* CINEMATIC REROUTING LOADING OVERLAY */}
           {isRerouting && (
-            <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md z-[2500] flex flex-col items-center justify-center text-center p-6 transition-all duration-300">
+            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-[2500] flex flex-col items-center justify-center text-center p-6 transition-all duration-300">
               <div className="relative mb-4">
-                <div className="w-16 h-16 rounded-full border-4 border-slate-800 border-t-tech animate-spin" />
-                <Compass className="w-8 h-8 text-tech absolute top-4 left-4" />
+                <div className="w-16 h-16 rounded-full border-4 border-slate-800 border-t-amber-400 animate-spin" />
+                <Compass className="w-8 h-8 text-amber-400 absolute top-4 left-4" />
               </div>
-              <h3 className="text-lg font-bold text-white tracking-tight">Recalculando Rota</h3>
+              <h3 className="text-lg font-black text-white tracking-tight">Recalculando Rota</h3>
               <p className="text-xs text-slate-400 mt-1 max-w-sm leading-relaxed">
                 Analisando trânsito em tempo real e buscando alternativa para as paradas restantes...
               </p>
@@ -1801,10 +1974,10 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
           {/* FLOATING SUCCESS OR WARNING BANNER FOR ROUTE RECALCULATION */}
           {reroutingAlert && (
-            <div className="absolute top-24 left-4 right-4 z-[1002] bg-slate-950/95 backdrop-blur-md border border-emerald-500/30 text-emerald-300 rounded-2xl px-4 py-3.5 shadow-[0_12px_40px_rgba(16,185,129,0.25)] text-xs font-semibold flex items-center gap-3 max-w-lg mx-auto animate-pulse">
+            <div className="absolute top-24 left-4 right-4 z-[1002] bg-slate-950 border-2 border-emerald-500 text-emerald-300 rounded-xl px-4 py-3.5 shadow-[4px_4px_0px_0px_#000000] text-xs font-semibold flex items-center gap-3 max-w-lg mx-auto">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
               <div className="flex-1">
-                <span className="text-slate-400 text-[10px] font-extrabold uppercase tracking-widest block mb-0.5">Assistente de Voz</span>
+                <span className="text-slate-400 text-[10px] font-mono font-extrabold uppercase tracking-widest block mb-0.5">Assistente de Rota</span>
                 <span className="text-xs leading-normal font-black">{reroutingAlert}</span>
               </div>
             </div>
@@ -1812,19 +1985,19 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
           {/* ROUTE DETOUR RECOMMENDATION PROMPT (User Accept/Decline Modal) */}
           {detourProposal && (
-            <div className="absolute top-28 left-4 right-4 z-[2000] bg-slate-950/98 backdrop-blur-2xl border border-amber-500/40 rounded-3xl p-5 shadow-[0_20px_60px_rgba(0,0,0,0.9)] max-w-md mx-auto text-white animate-in zoom-in-95 duration-200">
-              <div className="flex items-start justify-between gap-3 mb-3 border-b border-white/10 pb-3">
+            <div className="absolute top-28 left-4 right-4 z-[2000] bg-slate-950 border-2 border-amber-500 rounded-2xl p-5 shadow-[8px_8px_0px_0px_#000000] max-w-md mx-auto text-white">
+              <div className="flex items-start justify-between gap-3 mb-3 border-b-2 border-slate-800 pb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border-2 border-amber-500 flex items-center justify-center shrink-0 shadow-[2px_2px_0px_0px_#000]">
                     <Navigation className="w-5 h-5 text-amber-400 animate-pulse" />
                   </div>
                   <div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 block">Recomendação do Sistema</span>
+                    <span className="text-[10px] font-mono font-black uppercase tracking-widest text-amber-400 block">Recomendação do Sistema</span>
                     <h4 className="text-sm font-black text-white">Desvio de Rota Sugerido</h4>
                   </div>
                 </div>
-                <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[11px] font-black px-2.5 py-1 rounded-full shrink-0 flex items-center gap-1">
-                  ⚡ ~{detourProposal.timeSavedMinutes} min economizados
+                <span className="neo-badge-emerald px-2.5 py-1 rounded text-[11px] shrink-0 flex items-center gap-1">
+                  ⚡ ~{detourProposal.timeSavedMinutes} min
                 </span>
               </div>
 
@@ -1843,9 +2016,9 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                     setSecondsStuck(0);
                     setInstructionHUD("Mantendo rota original conforme opção do condutor.");
                   }}
-                  className="py-2.5 px-3 rounded-2xl bg-slate-900 border border-slate-700/80 text-slate-300 hover:text-white font-black text-[11px] uppercase tracking-wider transition-all cursor-pointer"
+                  className="neo-btn py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-slate-300 hover:text-white font-black text-[11px] uppercase tracking-wider"
                 >
-                  Manter Rota Atual
+                  Manter Rota
                 </button>
                 <button
                   onClick={async () => {
@@ -1853,7 +2026,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                     setSecondsStuck(0);
                     await triggerWazeReroute();
                   }}
-                  className="py-2.5 px-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 hover:brightness-110 font-black text-[11px] uppercase tracking-wider shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="neo-btn-primary py-2.5 px-3 rounded-xl font-black text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   Aceitar Desvio
@@ -1866,14 +2039,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
       {/* PERSISTENT MAP SYSTEM CONTROLS (Compact Floating Dock - Stacked Vertically - Thumb-Reach Zone) */}
       {true && (
-        <div className="absolute bottom-[220px] md:bottom-[240px] right-3 sm:right-4 z-[1001] flex flex-col items-center gap-2.5 p-2.5 bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.85)] border-tech/20 animate-in fade-in slide-in-from-right-4 duration-300">
+        <div className="absolute bottom-[220px] md:bottom-[240px] right-3 sm:right-4 z-[1001] flex flex-col items-center gap-2 p-2 bg-slate-950 border-2 border-slate-700 rounded-2xl shadow-[4px_4px_0px_0px_#000000] animate-in fade-in slide-in-from-right-4 duration-300">
           {/* Toggle Live Weather Layer */}
           <button
             onClick={() => setShowWeatherLayer(!showWeatherLayer)}
             className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               showWeatherLayer 
-                ? 'bg-teal-500/25 text-teal-300 border border-teal-500/50 shadow-[0_0_12px_rgba(20,184,166,0.3)]' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
+                ? 'bg-teal-500 text-black border-2 border-black shadow-[2px_2px_0px_0px_#000]' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border-2 border-transparent'
             }`}
             title="Alternar Clima"
           >
@@ -1885,15 +2058,15 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             onClick={() => setShowTrafficLayer(!showTrafficLayer)}
             className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
               showTrafficLayer 
-                ? 'bg-amber-500/25 text-amber-300 border border-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
+                ? 'bg-amber-500 text-black border-2 border-black shadow-[2px_2px_0px_0px_#000]' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border-2 border-transparent'
             }`}
             title="Alternar Trânsito"
           >
             <Car className="w-5 h-5" />
           </button>
 
-          <div className="h-px w-5 bg-slate-800/80 mx-auto" />
+          <div className="h-0.5 w-6 bg-slate-800 mx-auto" />
 
           {/* Camadas do Mapa */}
           <div className="relative">
@@ -2012,6 +2185,24 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             <Compass className="w-5 h-5" style={{ transform: `rotate(${-smoothHeading}deg)` }} />
           </button>
 
+          {/* Quick Stop Button (Postos, Lanche, Borracharia) */}
+          <button
+            onClick={() => setIsQuickStopModalOpen(true)}
+            className="p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500 hover:text-slate-950 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
+            title="Adicionar Parada Rápida (Posto, Lanche, Borracharia)"
+          >
+            <PlusCircle className="w-5 h-5" />
+          </button>
+
+          {/* Waze Community Incident Report Button */}
+          <button
+            onClick={() => setIsReportModalOpen(true)}
+            className="p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.25)]"
+            title="Reportar Ocorrência (Polícia, Acidente, Radar, Perigo)"
+          >
+            <AlertTriangle className="w-5 h-5" />
+          </button>
+
           {/* Piloto / Simulação */}
           {polyline.length >= 2 && (
             <button
@@ -2035,6 +2226,47 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           )}
         </div>
       )}
+
+      {/* WAZE REPORT MODAL */}
+      <WazeReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        currentCoords={carCoords || (stops.length > 0 ? [stops[navIndex]?.lat || stops[0].lat, stops[navIndex]?.lon || stops[0].lon] : null)}
+        onReportSaved={(newOcc) => {
+          setLocalOccurrences(prev => [newOcc, ...prev]);
+          voiceNav.speak("Ocorrência registrada e compartilhada com a comunidade.");
+        }}
+      />
+
+      {/* QUICK STOP MODAL (POSTO, LANCHE, BORRACHARIA, OFICINA) */}
+      <QuickStopModal
+        isOpen={isQuickStopModalOpen}
+        onClose={() => setIsQuickStopModalOpen(false)}
+        currentCoords={carCoords || (stops.length > 0 ? [stops[navIndex]?.lat || stops[0].lat, stops[navIndex]?.lon || stops[0].lon] : null)}
+        onAddQuickStop={async (quickStop) => {
+          voiceNav.speak(`Parada rápida adicionada: ${quickStop.name}. Recalculando rota...`);
+          playRecalculateSound();
+          if (onRouteRecalculated) {
+            const insertIdx = Math.min(stops.length, navIndex + 1);
+            const updatedStops = [
+              ...stops.slice(0, insertIdx),
+              {
+                id: Date.now(),
+                name: quickStop.name,
+                address: quickStop.address,
+                lat: quickStop.lat,
+                lon: quickStop.lon,
+                stopType: quickStop.stopType,
+                riskScore: 10,
+                completed: false
+              },
+              ...stops.slice(insertIdx)
+            ];
+            // Trigger recalculation with updated stops sequence
+            triggerWazeReroute(carCoords || undefined, updatedStops);
+          }
+        }}
+      />
 
       {/* FLUXO AO VIVO STATUS OVERLAY */}
       <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">

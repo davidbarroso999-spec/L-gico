@@ -26,11 +26,17 @@ export async function getGeminiContextAdjustments(input: {
   };
 
   try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 7000) : null;
+
     const res = await fetch('/api/route/gemini-context', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input)
+      body: JSON.stringify(input),
+      signal: controller?.signal
     });
+
+    if (timeoutId) clearTimeout(timeoutId);
 
     if (res.ok) {
       const data = await res.json();
@@ -38,7 +44,7 @@ export async function getGeminiContextAdjustments(input: {
     }
     return defaultAdjustments;
   } catch (err) {
-    console.warn("Falha ao consultar ajustes contextuais do Gemini:", err);
+    console.warn("Falha ao consultar ajustes contextuais do Gemini (utilizando matriz calibrada):", err);
     return defaultAdjustments;
   }
 }
@@ -124,13 +130,19 @@ export async function getGeminiAnalysis(input: any) {
       `;
     }
 
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 7500) : null;
+
     const response = await fetch('/api/ai', {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt }),
+      signal: controller?.signal
     });
+
+    if (timeoutId) clearTimeout(timeoutId);
 
     if (!response.ok) {
       return "Sequência otimizada matematicamente pelo solver VRP com base na matriz de distância e janelas de entrega.";
@@ -146,11 +158,18 @@ export async function getGeminiAnalysis(input: any) {
 
 export async function fetchLiveBulletin(locations: string[], task?: string, currentRouteSummary?: string) {
   try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 7500) : null;
+
     const res = await fetch('/api/ai/live-bulletin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locations, task, currentRouteSummary })
+      body: JSON.stringify({ locations, task, currentRouteSummary }),
+      signal: controller?.signal
     });
+
+    if (timeoutId) clearTimeout(timeoutId);
+
     if (res.ok) {
       return await res.json();
     }

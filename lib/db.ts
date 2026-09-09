@@ -1,5 +1,80 @@
 import Dexie, { Table } from 'dexie';
 
+export interface RouteIncident {
+  id?: string | number;
+  type: 'accident' | 'road_closed' | 'construction' | 'congestion' | 'flood' | 'sandbank' | 'repiquete' | 'pothole' | 'other';
+  description: string;
+  lat?: number;
+  lon?: number;
+  lng?: number;
+  reportedAt: Date | string;
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  stopIndex?: number;
+}
+
+export interface RouteWaypoint {
+  address: string;
+  lat: number;
+  lng: number;
+  stopIndex: number;
+  stopType?: 'delivery' | 'pickup';
+  status?: 'pending' | 'completed' | 'failed';
+  failureReason?: string;
+  deliveryPhoto?: string;
+  deliveryNotes?: string;
+  plannedArrivalTime?: string;
+  actualArrivalTime?: string;
+  serviceDurationMinutes?: number;
+  distanceFromPrevMeters?: number;
+  fluvialPort?: string;
+  neighborhood?: string;
+  cep?: string;
+}
+
+export interface RouteOriginalParameters {
+  addresses: string[];
+  priority: 'balanced' | 'speed' | 'distance' | 'economy' | 'safety';
+  vehicleType: 'van' | 'motorcycle' | 'truck' | 'heavy_truck' | 'boat';
+  vehicleName?: string;
+  vesselType?: string;
+  timeWindows?: Record<number, { start?: string; end?: string }>;
+  stopTypes?: Record<number, 'delivery' | 'pickup'>;
+  customPrompt?: string;
+  optionsSnapshot?: Record<string, any>;
+}
+
+export interface RouteCalculatedData {
+  waypoints: RouteWaypoint[];
+  distanceMeters: number;
+  distanceKm: number;
+  durationSeconds: number;
+  durationMinutes: number;
+  estimatedFuelLiters?: number;
+  estimatedFuelCost?: number;
+  polyline?: [number, number][];
+  isFluvial?: boolean;
+  summary?: any;
+}
+
+export interface RouteExecutionMetrics {
+  startedAt?: Date | string;
+  completedAt?: Date | string;
+  totalElapsedMs?: number;
+  actualDurationMinutes?: number;
+  actualDistanceKm?: number;
+  completedStopsCount: number;
+  failedStopsCount: number;
+  totalStopsCount: number;
+  completionRatePercent: number;
+  onTimeDeliveriesCount?: number;
+  delayedDeliveriesCount?: number;
+  punctualityRatePercent?: number;
+  timeDeviationMinutes?: number; // actual - planned
+  distanceDeviationKm?: number;
+  fuelConsumedLiters?: number;
+  fuelCostTotal?: number;
+}
+
 export interface Route {
   id?: number;
   date: Date;
@@ -16,11 +91,24 @@ export interface Route {
   scheduledDate?: string;
   scheduledTime?: string;
   isFutureRoute?: boolean;
+
+  // Rich route history properties (backward compatible):
+  originalParameters?: RouteOriginalParameters;
+  calculatedRoute?: RouteCalculatedData;
+  executionMetrics?: RouteExecutionMetrics;
+  reportedIncidents?: RouteIncident[];
+  vehicleType?: 'van' | 'motorcycle' | 'truck' | 'heavy_truck' | 'boat';
+  priority?: 'balanced' | 'speed' | 'distance' | 'economy' | 'safety';
+  totalDistanceKm?: number;
+  totalDurationMinutes?: number;
+  finalScore?: number;
 }
 
 export interface Occurrence {
   id?: number;
-  type: 'accident' | 'road_closed' | 'construction' | 'congestion' | 'flood' | 'pothole' | 'other';
+  type: 'accident' | 'road_closed' | 'construction' | 'congestion' | 'flood' | 'pothole' | 'police' | 'speed_camera' | 'sandbank' | 'repiquete' | 'other';
+  subType?: string;
+  direction?: 'my_side' | 'opposite' | 'both';
   lat: number;
   lon: number;
   description: string;

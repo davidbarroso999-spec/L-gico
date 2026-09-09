@@ -7,7 +7,7 @@ export interface GeocodeResult {
   name: string;
   context: string;
   confidenceScore: number;
-  source: 'ors' | 'nominatim' | 'photon' | 'cache' | 'google' | 'mapbox' | 'viacep';
+  source: 'ors' | 'nominatim' | 'photon' | 'cache' | 'google' | 'mapbox' | 'viacep' | 'open-meteo';
   type?: 'address' | 'poi' | 'landmark';
   cep?: string;
 }
@@ -19,6 +19,136 @@ function formatCep(cep: any): string | undefined {
     return `${str.slice(0, 5)}-${str.slice(5)}`;
   }
   return String(cep);
+}
+
+/**
+ * Calculates Levenshtein distance between two strings for fuzzy matching.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const row: number[] = [];
+  for (let i = 0; i <= a.length; i++) {
+    row[i] = i;
+  }
+
+  for (let i = 1; i <= b.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= a.length; j++) {
+      let val: number;
+      if (b[i - 1] === a[j - 1]) {
+        val = row[j - 1];
+      } else {
+        val = Math.min(row[j - 1] + 1, prev + 1, row[j] + 1);
+      }
+      row[j - 1] = prev;
+      prev = val;
+    }
+    row[a.length] = prev;
+  }
+  return row[a.length];
+}
+
+/**
+ * Returns a normalized string similarity ratio between 0.0 and 1.0 using Levenshtein distance & substring checks.
+ */
+export function stringSimilarity(str1: string, str2: string): number {
+  const s1 = str1.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const s2 = str2.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1.0;
+
+  if (s1.includes(s2) || s2.includes(s1)) {
+    const minLen = Math.min(s1.length, s2.length);
+    const maxLen = Math.max(s1.length, s2.length);
+    return 0.85 + (0.15 * (minLen / maxLen));
+  }
+
+  const maxLen = Math.max(s1.length, s2.length);
+  const dist = levenshteinDistance(s1, s2);
+  return Math.max(0, 1 - dist / maxLen);
+}
+
+/**
+ * Performs token-level fuzzy matching between query words and candidate text.
+ */
+export function fuzzyTokenMatch(queryTokens: string[], candidateText: string): { totalScore: number; matchCount: number; ratio: number } {
+  if (queryTokens.length === 0 || !candidateText) return { totalScore: 0, matchCount: 0, ratio: 0 };
+  const candidateNorm = candidateText.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\s]/g, ' ');
+  const candidateWords = candidateNorm.split(/\s+/).filter(w => w.length > 0);
+
+  let matchCount = 0;
+  let totalScore = 0;
+
+  for (const qToken of queryTokens) {
+    if (qToken.length <= 1) continue;
+    let bestTokenScore = 0;
+
+    if (candidateNorm.includes(qToken)) {
+      bestTokenScore = 1.0;
+    } else {
+      for (const cWord of candidateWords) {
+        if (cWord.length <= 1) continue;
+        if (qToken.length >= 3 && cWord.startsWith(qToken)) {
+          const score = 0.85 + 0.15 * (qToken.length / cWord.length);
+          if (score > bestTokenScore) bestTokenScore = score;
+        } else if (cWord.length >= 3 && qToken.startsWith(cWord)) {
+          const score = 0.85 + 0.15 * (cWord.length / qToken.length);
+          if (score > bestTokenScore) bestTokenScore = score;
+        } else if (Math.abs(qToken.length - cWord.length) <= 2) {
+          const sim = stringSimilarity(qToken, cWord);
+          if (sim >= 0.70 && sim > bestTokenScore) {
+            bestTokenScore = sim;
+          }
+        }
+      }
+    }
+
+    if (bestTokenScore >= 0.65) {
+      matchCount++;
+      totalScore += bestTokenScore;
+    }
+  }
+
+  const ratio = queryTokens.length > 0 ? matchCount / queryTokens.length : 0;
+  return { totalScore, matchCount, ratio };
+}
+
+/**
+ * Calculates geolocation proximity bonus or penalty based on distance to focus/user coordinates.
+ */
+export function calculateGeolocationBonus(
+  candLat: number,
+  candLon: number,
+  userLat?: number,
+  userLon?: number,
+  explicitLocationInQuery: boolean = false
+): number {
+  if (candLat === 0 || candLon === 0 || userLat == null || userLon == null) return 0;
+
+  const distMeters = geoDistanceMeters(candLat, candLon, userLat, userLon);
+  const distKm = distMeters / 1000;
+
+  if (distKm <= 1) return 35;
+  if (distKm <= 5) return 25;
+  if (distKm <= 15) return 15;
+  if (distKm <= 50) return 5;
+
+  if (explicitLocationInQuery) {
+    return 0;
+  }
+
+  if (distKm > 500) {
+    return -45;
+  } else if (distKm > 100) {
+    return -25;
+  } else if (distKm > 50) {
+    return -10;
+  }
+
+  return 0;
 }
 
 const geoCache = new Map<string, GeocodeResult[]>();
@@ -111,11 +241,25 @@ const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
     aliases: ['amazonas shopping', 'shopping amazonas', 'djalma batista']
   },
   {
-    lat: -3.0411,
-    lon: -60.0494,
-    name: 'Aeroporto Internacional Eduardo Gomes',
+    lat: -3.0392,
+    lon: -60.0489,
+    name: 'Aeroporto Internacional Eduardo Gomes (Terminal 1)',
+    context: 'Av. Santos Dumont, 1350, Tarumã, Manaus - AM',
+    aliases: ['aeroporto', 'aeroporto de manaus', 'aeroporto internacional eduardo gomes', 'eduardo gomes', 'santos dumont', 'aero', 'aeroporto eduardo gomes', 'mao', 'sbeg', 'aeroporto passageiros', 'terminal aeroporto', 'terminal 1 aeroporto', 'taruma aeroporto', 'aeroporto manaus']
+  },
+  {
+    lat: -3.0388,
+    lon: -60.0452,
+    name: 'Aeroporto Eduardo Gomes - Terminal de Cargas (TECA)',
     context: 'Av. Santos Dumont, Tarumã, Manaus - AM',
-    aliases: ['aeroporto', 'aeroporto de manaus', 'eduardo gomes', 'santos dumont', 'aero', 'aeroporto eduardo gomes']
+    aliases: ['teca', 'teca aeroporto', 'terminal de cargas aeroporto', 'aeroporto teca', 'cargas aeroporto']
+  },
+  {
+    lat: -3.0425,
+    lon: -60.0545,
+    name: 'Aeroporto Eduardo Gomes - Terminal 2 (Eduardinho)',
+    context: 'Av. Santos Dumont, Tarumã, Manaus - AM',
+    aliases: ['eduardinho', 'terminal 2 aeroporto', 'aeroporto terminal 2', 'hangar aeroporto']
   },
   {
     lat: -3.1410,
@@ -179,6 +323,90 @@ const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
     name: 'Parque Dez de Novembro',
     context: 'Manaus, AM, Brasil',
     aliases: ['parque dez', 'parque 10', 'bairro parque dez', 'parque dez de novembro', 'eldorado']
+  },
+  {
+    lat: -3.0784,
+    lon: -60.0248,
+    name: 'Av. Constantino Nery',
+    context: 'São Geraldo / Flores, Manaus - AM',
+    aliases: ['constantino nery', 'av constantino nery', 'avenida constantino nery', 't1', 'terminal 1']
+  },
+  {
+    lat: -3.0910,
+    lon: -60.0245,
+    name: 'Av. Djalma Batista',
+    context: 'Nossa Sra. das Graças / Flores, Manaus - AM',
+    aliases: ['djalma batista', 'av djalma batista', 'avenida djalma batista', 'plaza shopping']
+  },
+  {
+    lat: -3.0645,
+    lon: -59.9928,
+    name: 'Av. das Torres (Av. Gov. José Lindoso)',
+    context: 'Aleixo / Cidade Nova, Manaus - AM',
+    aliases: ['av das torres', 'avenida das torres', 'gov jose lindoso', 'jose lindoso', 'torres manaus']
+  },
+  {
+    lat: -3.0850,
+    lon: -59.9480,
+    name: 'Av. Autaz Mirim (Grande Circular)',
+    context: 'São José Operário / Jorge Teixeira, Manaus - AM',
+    aliases: ['autaz mirim', 'av autaz mirim', 'grande circular', 'zona leste manaus', 't4', 't5']
+  },
+  {
+    lat: -3.1090,
+    lon: -60.0620,
+    name: 'Av. Brasil',
+    context: 'Compensa, Manaus - AM',
+    aliases: ['av brasil', 'avenida brasil', 'brasil compensa', 'prefeitura manaus']
+  },
+  {
+    lat: -3.1165,
+    lon: -60.0150,
+    name: 'Hospital e Pronto-Socorro 28 de Agosto',
+    context: 'Av. Mário Ypiranga, Adrianópolis, Manaus - AM',
+    aliases: ['28 de agosto', 'hps 28 de agosto', 'hospital 28 de agosto', 'pronto socorro 28']
+  },
+  {
+    lat: -3.0815,
+    lon: -59.9472,
+    name: 'Hospital e Pronto-Socorro Dr. João Lúcio',
+    context: 'Alameda Cosme Ferreira, Coroado, Manaus - AM',
+    aliases: ['joao lucio', 'hospital joao lucio', 'hps joao lucio', 'pronto socorro joao lucio']
+  },
+  {
+    lat: -3.1285,
+    lon: -59.9912,
+    name: 'Distrito Industrial I',
+    context: 'Av. Rodrigo Otávio, Manaus - AM',
+    aliases: ['distrito industrial', 'distrito industrial 1', 'polo industrial de manaus', 'pim']
+  },
+  {
+    lat: -3.1415,
+    lon: -59.9120,
+    name: 'Distrito Industrial II',
+    context: 'Av. dos Oitis, Manaus - AM',
+    aliases: ['distrito industrial 2', 'distrito industrial ii', 'av dos oitis', 'polo duas rodas']
+  },
+  {
+    lat: -3.0862,
+    lon: -59.9610,
+    name: 'Studio 5 Shopping & Centro de Convenções',
+    context: 'Av. Rodrigo Otávio, Japiim, Manaus - AM',
+    aliases: ['studio 5', 'studio 5 shopping', 'shopping studio 5', 'centro de convencoes studio 5']
+  },
+  {
+    lat: -3.0210,
+    lon: -59.9720,
+    name: 'Shopping Grande Circular',
+    context: 'Av. Autaz Mirim, São José, Manaus - AM',
+    aliases: ['shopping grande circular', 'grande circular shopping']
+  },
+  {
+    lat: -3.0970,
+    lon: -60.0760,
+    name: 'Shopping Ponta Negra',
+    context: 'Av. Coronel Teixeira, Ponta Negra, Manaus - AM',
+    aliases: ['shopping ponta negra', 'ponta negra shopping']
   }
 ];
 
@@ -212,6 +440,74 @@ function geoDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
+/**
+ * Snaps coordinates of known POIs (such as airports, parks, ports) that might otherwise resolve 
+ * into unpaved forest centroids, airstrips, or rivers into valid, drivable vehicle access roads.
+ */
+export function sanitizeDrivableCoordinates(lat: number, lon: number, addressOrName?: string): { lat: number, lon: number } {
+  if (lat === 0 || lon === 0) return { lat, lon };
+
+  const norm = (addressOrName || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  // 1. Eduardo Gomes Airport Airfield / Forest avoidance
+  // Airfield perimeter: lat approx -3.0500 to -3.0300, lon -60.0650 to -60.0380
+  const isAirportKeyword = /aeroporto|eduardo gomes|sbeg|\bmao\b|santos dumont|taruma.*aeroporto/.test(norm);
+  const isInsideAirfieldZone = (lat <= -3.0300 && lat >= -3.0500 && lon <= -60.0380 && lon >= -60.0650);
+
+  if (isAirportKeyword || isInsideAirfieldZone) {
+    if (/teca|cargas|galpao/.test(norm)) {
+      return { lat: -3.0388, lon: -60.0452 }; // TECA Cargo entrance (Av. Santos Dumont)
+    }
+    if (/eduardinho|terminal 2/.test(norm)) {
+      return { lat: -3.0425, lon: -60.0545 }; // Terminal 2 (Av. Santos Dumont)
+    }
+    // Main Passenger Terminal 1 / Dropoff Loop on Av. Santos Dumont (paved access, avoids forest trail behind runway)
+    return { lat: -3.0392, lon: -60.0489 };
+  }
+
+  // 2. Ponta Negra beach / river centroid snapping
+  if (/ponta negra|orla ponta negra|praia ponta negra/.test(norm) && lon < -60.1030) {
+    return { lat: -3.0933, lon: -60.1018 }; // Av. Coronel Teixeira
+  }
+
+  // 3. Porto de Manaus / Rio Negro centroid snapping
+  if (/porto de manaus|porto centro|roadway/.test(norm) && lat < -3.1420) {
+    return { lat: -3.1410, lon: -60.0260 }; // Av. Lourenço da Silva Braga
+  }
+
+  // 4. UFAM Campus deep forest snapping (Adolfo Ducke reserve border)
+  if (/ufam|campus universitario|floresta ufam/.test(norm) && (lat < -3.1020 || lon > -59.9700)) {
+    return { lat: -3.0991, lon: -59.9723 }; // Portaria Av. General Rodrigo Otávio
+  }
+
+  // 5. Aeroclube do Amazonas (prevent landing on grass runway)
+  if (/aeroclube/.test(norm) || (lat <= -3.0690 && lat >= -3.0760 && lon <= -60.0120 && lon >= -60.0210)) {
+    return { lat: -3.0725, lon: -60.0160 }; // Av. Prof. Nilton Lins / Flores entrance
+  }
+
+  // 6. MUSA / Reserva Ducke (prevent routing into deep jungle trails)
+  if (/musa|museu da amazonia|reserva ducke|adolfo ducke/.test(norm) || (lat <= -2.9800 && lat >= -3.0200 && lon <= -59.9200 && lon >= -59.9550)) {
+    return { lat: -3.0044, lon: -59.9405 }; // Av. Margarita entrance, Santa Etelvina
+  }
+
+  // 7. Parque do Mindú (prevent inner forest snapping)
+  if (/mindu|parque do mindu/.test(norm)) {
+    return { lat: -3.0772, lon: -60.0035 }; // Rua Perimetral, Parque 10 de Novembro
+  }
+
+  // 8. Bosque da Ciência / INPA
+  if (/bosque da ciencia|inpa/.test(norm)) {
+    return { lat: -3.0975, lon: -59.9875 }; // Av. André Araújo entrance, Petrópolis
+  }
+
+  // 9. Porto da Ceasa / Encontro das Águas ferry
+  if (/ceasa|porto ceasa|porto da ceasa/.test(norm)) {
+    return { lat: -3.1360, lon: -59.9235 }; // BR-319, Mauazinho / Ceasa
+  }
+
+  return { lat, lon };
+}
+
 export interface ParsedAddressQuery {
   raw: string;
   typedNumber?: string;
@@ -226,9 +522,9 @@ export interface ParsedAddressQuery {
 export function parseQueryTokens(text: string): ParsedAddressQuery {
   const raw = text.trim();
   
-  // 1. CEP Extraction (8 digits with optional hyphen or space)
-  const cepMatch = raw.match(/\b\d{5}[- ]?\d{3}\b/) || raw.match(/\b\d{8}\b/);
-  const typedCep = cepMatch ? formatCep(cepMatch[0].replace(/\s+/g, '')) : undefined;
+  // 1. CEP Extraction (8 digits with optional dots, hyphens, or spaces)
+  const cepMatch = raw.match(/\b\d{2}\.?\d{3}[- ]?\d{3}\b/) || raw.match(/\b\d{5}[- ]?\d{3}\b/) || raw.match(/\b\d{8}\b/);
+  const typedCep = cepMatch ? formatCep(cepMatch[0].replace(/\D/g, '')) : undefined;
 
   let textWithoutCep = raw;
   if (cepMatch) {
@@ -323,29 +619,39 @@ export async function enhancedAutocomplete(
   const normalizedText = text.trim().toLowerCase();
   const parsedQueryInfo = parseQueryTokens(text);
   
-  // 1. Check offline registry matches by searching our rich aliases or names
+  // 1. Check offline registry matches by searching our rich aliases, names, and contexts fuzzily
   const normalizedSearch = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   const offlineMatches: GeocodeResult[] = [];
   
   if (normalizedSearch.length >= 2) {
     for (const entry of RICH_OFFLINE_REGISTRY) {
-      const matchFound = entry.aliases.some(alias => {
+      let bestAliasSim = 0;
+      for (const alias of entry.aliases) {
         const normAlias = alias.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        return normAlias === normalizedSearch || normAlias.includes(normalizedSearch) || normalizedSearch.includes(normAlias);
-      }) || entry.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(normalizedSearch);
+        const sim = stringSimilarity(normAlias, normalizedSearch);
+        if (sim > bestAliasSim) bestAliasSim = sim;
+      }
 
-      if (matchFound) {
+      const nameSim = stringSimilarity(entry.name, normalizedSearch);
+      const tokenResult = fuzzyTokenMatch(parsedQueryInfo.typedWords, `${entry.name} ${entry.context} ${entry.aliases.join(' ')}`);
+
+      const maxSim = Math.max(bestAliasSim, nameSim);
+      if (maxSim >= 0.65 || tokenResult.ratio >= 0.5) {
         let entryName = entry.name;
         if (parsedQueryInfo.typedNumber && !entryName.includes(parsedQueryInfo.typedNumber)) {
           entryName = `${entry.name}, ${parsedQueryInfo.typedNumber}`;
         }
+
+        const geoBonus = (lat != null && lon != null) ? calculateGeolocationBonus(entry.lat, entry.lon, lat, lon) : 0;
+        const confidenceScore = Math.min(100, Math.max(10, Math.round(75 + (maxSim * 15) + (tokenResult.ratio * 10) + geoBonus)));
+
         offlineMatches.push({
           lat: entry.lat,
           lon: entry.lon,
           name: entryName,
           context: entry.context,
           label: `${entryName} - ${entry.context}`,
-          confidenceScore: 98,
+          confidenceScore,
           source: 'cache',
           type: 'address'
         });
@@ -529,6 +835,11 @@ export async function enhancedAutocomplete(
         }
       }
 
+      // Sanitize coordinates to prevent routing into forests / unpaved runways
+      const sanitized = sanitizeDrivableCoordinates(res.lat, res.lon, `${res.name} ${res.label} ${res.context || ''}`);
+      res.lat = sanitized.lat;
+      res.lon = sanitized.lon;
+
       const normLabel = normalizeForDedup(res.label);
       const normName = normalizeForDedup(res.name);
       
@@ -605,10 +916,13 @@ export async function enhancedAutocomplete(
       fetchWithTimeout(`/api/places/osm?type=nominatim&q=${cleanText}${viewboxStr}`),
 
       // 4. Photon (Fast fuzzy search)
-      fetchWithTimeout(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`)
+      fetchWithTimeout(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`),
+
+      // 5. Open-Meteo Geocoding API (Fast global & Brazil admin/city/postcode lookup)
+      fetchWithTimeout(`/api/places/open-meteo?q=${encodeURIComponent(text)}${hasProximity ? `&lat=${lat}&lon=${lon}` : ''}`)
     ];
 
-    const [googleRes, mapboxRes, orsRes, nomRes, phoRes] = await Promise.all(providers);
+    const [googleRes, mapboxRes, orsRes, nomRes, phoRes, openMeteoRes] = await Promise.all(providers);
 
     // Parse Google Places & Autocomplete API results
     if (googleRes && Array.isArray(googleRes.places)) {
@@ -891,28 +1205,63 @@ export async function enhancedAutocomplete(
       });
     }
 
-    // Dynamic Multi-Factor Scorer and Ranking Algorithm
-    // Cross-references ALL typed tokens against each candidate result
+    // Parse Open-Meteo Geocoding results
+    if (openMeteoRes?.results && Array.isArray(openMeteoRes.results)) {
+      openMeteoRes.results.forEach((item: any) => {
+        let name = item.name || '';
+        if (parsedQueryInfo.typedNumber && !name.includes(parsedQueryInfo.typedNumber)) {
+          name = `${name}, ${parsedQueryInfo.typedNumber}`;
+        }
+        if (parsedQueryInfo.typedComplement && !name.includes(parsedQueryInfo.typedComplement)) {
+          name += ` (${parsedQueryInfo.typedComplement})`;
+        }
+
+        const details = [item.city && item.city !== item.name ? item.city : null, item.state, item.country].filter(Boolean).join(' - ');
+        const postCode = (Array.isArray(item.postcodes) && item.postcodes.length > 0) ? item.postcodes[0] : parsedQueryInfo.typedCep;
+        const formattedLabel = `${name} - ${details}${postCode ? ` - CEP ${formatCep(postCode)}` : ''}`;
+
+        let score = 75;
+        if (item.population && item.population > 100000) score += 10;
+        if (hasProximity && lat && lon) {
+          const distKm = geoDistanceMeters(item.latitude, item.longitude, lat, lon) / 1000;
+          if (distKm <= 50) score += 15;
+        }
+
+        addResult({
+          lat: item.latitude,
+          lon: item.longitude,
+          name: name,
+          context: details,
+          label: formattedLabel,
+          confidenceScore: score,
+          source: 'open-meteo',
+          type: 'address',
+          cep: postCode
+        });
+      });
+    }
+
+    // Dynamic Multi-Factor Scorer and Ranking Algorithm with Fuzzy Search & Geolocation Prioritization
+    const queryNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const isExplicitLocationInQuery = /\b(sp|sao paulo|rj|rio de janeiro|mg|minas gerais|pr|parana|rs|rio grande do sul|sc|santa catarina|df|distrito federal|ce|ceara|pe|pernambuco|ba|bahia|pa|para|go|goias|mt|mato grosso|ms|mato grosso do sul|es|espirito santo|ac|acre|al|alagoas|ap|amapa|ma|maranhao|pb|paraiba|pi|piaui|rn|rio grande do norte|ro|rondonia|rr|roraima|se|sergipe|to|tocantins|curitiba|recife|fortaleza|salvador|brasilia|goiania|belem|rio branco|macapa|maceio|vitoria|sao luis|joao pessoa|teresina|natal|aracaju|palmas)\b/.test(queryNorm);
+
     results.forEach(r => {
       let boost = 0;
       const rLabelNorm = r.label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const rNameNorm = r.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-      // 1. Check matching typed words (street, neighborhood, POI)
+      // 1. Token-level fuzzy search matching
       if (parsedQueryInfo.typedWords.length > 0) {
-        let matched = 0;
-        parsedQueryInfo.typedWords.forEach(w => {
-          if (rLabelNorm.includes(w) || rNameNorm.includes(w)) {
-            matched++;
-          }
-        });
-        const ratio = matched / parsedQueryInfo.typedWords.length;
-        boost += ratio * 35; // Up to 35 points for matching typed words
+        const tokenMatch = fuzzyTokenMatch(parsedQueryInfo.typedWords, `${r.name} ${r.label} ${r.context}`);
+        boost += tokenMatch.ratio * 35; // Up to 35 points for token coverage
+        if (tokenMatch.totalScore > 0) {
+          boost += (tokenMatch.totalScore / parsedQueryInfo.typedWords.length) * 10;
+        }
       }
 
       // 2. House number matching boost
       if (parsedQueryInfo.typedNumber) {
-        if (rLabelNorm.includes(parsedQueryInfo.typedNumber.toLowerCase())) {
+        if (rLabelNorm.includes(parsedQueryInfo.typedNumber.toLowerCase()) || rNameNorm.includes(parsedQueryInfo.typedNumber.toLowerCase())) {
           boost += 20;
         }
       }
@@ -920,58 +1269,60 @@ export async function enhancedAutocomplete(
       // 3. CEP matching boost
       if (parsedQueryInfo.typedCep) {
         const cleanCep = parsedQueryInfo.typedCep.replace('-', '');
-        if (rLabelNorm.replace('-', '').includes(cleanCep)) {
-          boost += 30;
+        if (rLabelNorm.replace('-', '').includes(cleanCep) || (r.cep && r.cep.replace('-', '') === cleanCep)) {
+          boost += 35;
         }
       }
 
-      // 4. POI query matching boost
-      if (parsedQueryInfo.typedWords.some(w => /hospital|shopping|posto|parque|restaurante|clube|escola|colêgio|hotel|praça|teatro|museu|estação|terminal|aeroporto|loja|supermercado|condomínio|edifício|bemol/i.test(w)) && r.type === 'poi') {
-        boost += 15;
-      }
-
-      // 5. Demote administrative or coarse results unless input was short
-      const isCoarse = /state|country|region|administrative|municipality|state_district/i.test(r.type || '');
-      if (parsedQueryInfo.typedWords.length > 2 && isCoarse) {
-        boost -= 40;
-      }
-
-      // 6. Proximity penalty (biases local options, but soft capped)
+      // 4. Geolocation Proximity Bonus / Penalty
       if (hasProximity && lat && lon) {
-        const dist = Math.sqrt(Math.pow(r.lat - lat, 2) + Math.pow(r.lon - lon, 2));
-        if (dist > 0.05) {
-          boost -= Math.min(15, (dist - 0.05) * 4);
-        }
+        const geoBonus = calculateGeolocationBonus(r.lat, r.lon, lat, lon, isExplicitLocationInQuery);
+        boost += geoBonus;
       }
 
-      // 7. ViaCEP accuracy matching boost
+      // 5. ViaCEP Logradouro & Bairro accuracy matching boost
       if (viaCepResolved && resolvedViaCepData) {
         if (resolvedViaCepData.bairro) {
           const normBairro = resolvedViaCepData.bairro.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          if (rLabelNorm.includes(normBairro)) {
+          const bairroSim = stringSimilarity(normBairro, rLabelNorm);
+          if (bairroSim >= 0.70 || rLabelNorm.includes(normBairro)) {
             boost += 25;
           }
         }
         if (resolvedViaCepData.logradouro) {
           const normLogradouro = resolvedViaCepData.logradouro.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          if (rLabelNorm.includes(normLogradouro)) {
+          const logSim = stringSimilarity(normLogradouro, rLabelNorm);
+          if (logSim >= 0.70 || rLabelNorm.includes(normLogradouro)) {
             boost += 30;
           }
         }
       }
 
+      // 6. POI query matching boost
+      if (parsedQueryInfo.typedWords.some(w => /hospital|shopping|posto|parque|restaurante|clube|escola|colêgio|hotel|praça|teatro|museu|estação|terminal|aeroporto|loja|supermercado|condomínio|edifício|bemol/i.test(w)) && r.type === 'poi') {
+        boost += 15;
+      }
+
+      // 7. Demote administrative or coarse results unless query was short
+      const isCoarse = /state|country|region|administrative|municipality|state_district/i.test(r.type || '');
+      if (parsedQueryInfo.typedWords.length > 2 && isCoarse) {
+        boost -= 40;
+      }
+
       r.confidenceScore = Math.max(0, Math.min(100, Math.round(r.confidenceScore + boost)));
     });
 
-    // If ViaCEP successfully resolved this Brazilian CEP, let's inject a perfect, high-confidence prediction at the very top of results
+    // If ViaCEP / BrasilAPI successfully resolved this Brazilian CEP, let's inject a perfect, high-confidence prediction at the very top of results
     if (viaCepResolved && resolvedViaCepData) {
-      let bestLat = 0;
-      let bestLon = 0;
+      let bestLat = (resolvedViaCepData.lat && resolvedViaCepData.lon) ? resolvedViaCepData.lat : 0;
+      let bestLon = (resolvedViaCepData.lat && resolvedViaCepData.lon) ? resolvedViaCepData.lon : 0;
       
-      const geoResult = results.find(r => r.lat !== 0 && r.lon !== 0);
-      if (geoResult) {
-        bestLat = geoResult.lat;
-        bestLon = geoResult.lon;
+      if (bestLat === 0 || bestLon === 0) {
+        const geoResult = results.find(r => r.lat !== 0 && r.lon !== 0);
+        if (geoResult) {
+          bestLat = geoResult.lat;
+          bestLon = geoResult.lon;
+        }
       }
       
       // If no provider returned valid coordinates yet, perform a direct geocode attempt
@@ -1160,9 +1511,10 @@ export async function preciseGeocode(address: string): Promise<GeocodeResult> {
         const item = data.places[0];
         const location = item.location;
         const isPOI = item.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital'].includes(t));
+        const sanitized = sanitizeDrivableCoordinates(location.latitude, location.longitude, `${item.displayName?.text || ''} ${item.formattedAddress || ''} ${address}`);
         return {
-          lat: location.latitude,
-          lon: location.longitude,
+          lat: sanitized.lat,
+          lon: sanitized.lon,
           name: item.displayName?.text || address.split(',')[0],
           context: item.formattedAddress || address,
           label: address,

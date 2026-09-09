@@ -1,3 +1,5 @@
+import { sanitizeDrivableCoordinates } from './geocode-engine';
+
 /**
  * API Services for Harpia
  * Includes fallbacks for all main integrations.
@@ -370,9 +372,16 @@ export async function snapToRoad(points: [number, number][]): Promise<[number, n
 
 export async function getDirections(points: [number, number][], profile: string = 'driving-car', preference: string = 'fastest', engine?: string) {
   const orsPreference = (preference === 'shortest' || preference === 'fastest') ? preference : 'fastest';
+  
+  // Guarantee each coordinate is snapped to official paved drivable roads (e.g. airport avenue, not runway/forest)
+  const sanitizedInputPoints: [number, number][] = points.map(p => {
+    const s = sanitizeDrivableCoordinates(p[0], p[1]);
+    return [s.lat, s.lon];
+  });
+
   // Deduplicate consecutive identical/near-identical coordinates (under ~10 meters)
   const cleanPoints: [number, number][] = [];
-  points.forEach(p => {
+  sanitizedInputPoints.forEach(p => {
     if (cleanPoints.length === 0) {
       cleanPoints.push(p);
     } else {
@@ -519,10 +528,67 @@ export async function getDirections(points: [number, number][], profile: string 
           primaryEngine: 'OpenRouteService Engine (OpenSource)',
           description: '🍀 Roteirização Ecológica: OpenRouteService forneceu o traçado com foco em restrições de via e dados topográficos ambientais integrados.'
         };
+        return orsResult;
       }
-      return orsResult;
     } catch (orsError) {
-      console.error('All directions providers failed:', orsError);
+      console.warn('ORS fallback failed, attempting OSRM Router proxy...', orsError);
+    }
+
+    // High-performance OSRM Router Proxy fallback with full turn-by-turn steps
+    try {
+      const coordsParam = cleanPoints.map(p => `${p[1]},${p[0]}`).join(';');
+      const osrmRes = await fetch(`/api/osrm?type=route&coords=${encodeURIComponent(coordsParam)}&extra=steps=true&annotations=true`);
+      if (osrmRes.ok) {
+        const osrmData = await osrmRes.json();
+        if (osrmData?.routes?.[0]) {
+          const r = osrmData.routes[0];
+          const allSegments = (r.legs || []).map((leg: any) => ({
+            distance: leg.distance,
+            duration: leg.duration,
+            steps: (leg.steps || []).map((st: any) => {
+              let instruction = 'Siga em frente';
+              if (st.maneuver) {
+                const mod = st.maneuver.modifier;
+                const typ = st.maneuver.type;
+                if (mod === 'right' || mod === 'slight right') instruction = `Vire à direita na ${st.name || 'via indicada'}`;
+                else if (mod === 'left' || mod === 'slight left') instruction = `Vire à esquerda na ${st.name || 'via indicada'}`;
+                else if (mod === 'sharp right') instruction = `Curva acentuada à direita na ${st.name || 'via indicada'}`;
+                else if (mod === 'sharp left') instruction = `Curva acentuada à esquerda na ${st.name || 'via indicada'}`;
+                else if (typ === 'roundabout') instruction = `Na rotatória, pegue a saída para ${st.name || 'a via'}`;
+                else if (typ === 'arrive') instruction = `Você chegou ao seu destino`;
+                else instruction = `Siga na ${st.name || 'via indicada'}`;
+              }
+              return {
+                instruction,
+                distance: st.distance,
+                duration: st.duration,
+                way_points: [0, 1],
+                name: st.name || '',
+                type: st.maneuver?.type || 'straight'
+              };
+            })
+          }));
+
+          return {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              geometry: r.geometry,
+              properties: {
+                summary: { distance: r.distance, duration: r.duration },
+                segments: allSegments,
+                hybridAnalysis: {
+                  active: true,
+                  primaryEngine: 'OSRM Dynamic Routing Engine',
+                  description: '⚡ Roteirização Instantânea: Traçado de alta precisão com malha viária e instruções completas de curva a curva.'
+                }
+              }
+            }]
+          };
+        }
+      }
+    } catch (osrmErr) {
+      console.error('All directions providers failed (including OSRM):', osrmErr);
     }
     return null;
   }
