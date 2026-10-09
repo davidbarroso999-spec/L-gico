@@ -148,7 +148,7 @@ export default function ActiveStopBottomSheet({
             className="px-5 pb-3 flex items-center justify-between gap-3 cursor-pointer select-none"
           >
             <div className="flex flex-col min-w-0 flex-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 {isOrigin ? (
                   <span className="neo-badge-tech px-2 py-0.5 rounded text-[10px]">
                     Partida
@@ -220,7 +220,7 @@ export default function ActiveStopBottomSheet({
             </div>
 
             {/* Nível 2: Metadados da Parada */}
-            <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-300 bg-slate-900 p-2.5 rounded-xl border-2 border-slate-800 shadow-[2px_2px_0px_0px_#000000]">
+            <div className="flex items-center gap-2 flex-wrap text-xs font-mono font-bold text-slate-300 bg-slate-900 p-2.5 rounded-xl border-2 border-slate-800 shadow-[2px_2px_0px_0px_#000000]">
               {isOrigin ? (
                 <span className="neo-badge-tech px-2 py-0.5 rounded text-[10px]">
                   Partida

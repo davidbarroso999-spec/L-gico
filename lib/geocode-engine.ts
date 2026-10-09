@@ -10,6 +10,12 @@ export interface GeocodeResult {
   source: 'ors' | 'nominatim' | 'photon' | 'cache' | 'google' | 'mapbox' | 'viacep' | 'open-meteo';
   type?: 'address' | 'poi' | 'landmark';
   cep?: string;
+  number?: string;
+  complement?: string;
+  street?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
 }
 
 function formatCep(cep: any): string | undefined {
@@ -154,7 +160,7 @@ export function calculateGeolocationBonus(
 const geoCache = new Map<string, GeocodeResult[]>();
 
 // High-precision offline registry for famous Manaus neighborhoods & locations (demoroute)
-interface RegistryEntry {
+export interface RegistryEntry {
   lat: number;
   lon: number;
   name: string;
@@ -162,7 +168,7 @@ interface RegistryEntry {
   aliases: string[];
 }
 
-const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
+export const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
   {
     lat: -3.1311,
     lon: -60.0242,
@@ -407,6 +413,41 @@ const RICH_OFFLINE_REGISTRY: RegistryEntry[] = [
     name: 'Shopping Ponta Negra',
     context: 'Av. Coronel Teixeira, Ponta Negra, Manaus - AM',
     aliases: ['shopping ponta negra', 'ponta negra shopping']
+  },
+  {
+    lat: -3.0532,
+    lon: -60.0275,
+    name: 'Av. Torquato Tapajós',
+    context: 'Flores / Colônia Terra Nova, Manaus - AM',
+    aliases: ['torquato tapajos', 'av torquato tapajos', 'avenida torquato tapajos', 'torquato']
+  },
+  {
+    lat: -3.1070,
+    lon: -60.0240,
+    name: 'Millennium Shopping',
+    context: 'Av. Djalma Batista, 1661, Chapada, Manaus - AM',
+    aliases: ['millennium shopping', 'shopping millennium', 'millennium']
+  },
+  {
+    lat: -3.0890,
+    lon: -60.0275,
+    name: 'Manaus Plaza Shopping',
+    context: 'Av. Djalma Batista, 2100, Chapada, Manaus - AM',
+    aliases: ['manaus plaza', 'plaza shopping', 'shopping plaza']
+  },
+  {
+    lat: -3.0840,
+    lon: -60.0270,
+    name: 'Terminal Rodoviário de Manaus',
+    context: 'Rua Recife / Djalma Batista, Flores, Manaus - AM',
+    aliases: ['rodoviaria', 'rodoviaria de manaus', 'terminal rodoviario']
+  },
+  {
+    lat: -3.1250,
+    lon: -60.0410,
+    name: 'Porto de São Raimundo',
+    context: 'São Raimundo, Manaus - AM',
+    aliases: ['porto sao raimundo', 'porto de sao raimundo', 'balsa sao raimundo']
   }
 ];
 
@@ -543,18 +584,21 @@ export function parseQueryTokens(text: string): ParsedAddressQuery {
   // 3. House Number detection with flexible prefixes (nº, n°, num, #, no., n-, or standalone digits)
   let typedNumber: string | undefined = undefined;
   
-  // First check explicit number patterns like "nº 123", "n° 123", "#123", "num 123", "no. 123", "n 123"
-  const explicitNumMatch = textWithoutComp.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*)\s*(\d{1,5}[a-zA-Z]?)\b/i);
+  // Exclude date-like street names from being parsed as house numbers (e.g. 24 de Maio, 7 de Setembro)
+  const dateStreetRegex = /\b(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b/gi;
+  let textForNumberCheck = textWithoutComp.replace(dateStreetRegex, ' ');
+  // Also ignore numbered streets like "Rua 1", "Rua 24", "Rua 100", "Quadra 12"
+  textForNumberCheck = textForNumberCheck.replace(/\b(rua|r\.|alameda|al\.|travessa|tv\.|avenida|av\.|estrada|est\.|rodovia|rod\.|quadra|qd\.|lote|lt\.)\s+\d+\b/gi, ' ');
+
+  // First check explicit number patterns like "nº 123", "n° 123", "#123", "num 123", "no. 123", "n 123" or comma followed by number ", 123"
+  const explicitNumMatch = textForNumberCheck.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*|,\s*)(\d{1,5}[a-zA-Z]?)\b/i);
   if (explicitNumMatch) {
     typedNumber = explicitNumMatch[1];
   } else {
-    // Check for standalone 1-5 digit numbers not equal to current/recent years
-    const numMatches = Array.from(textWithoutComp.matchAll(/\b(\d{1,5}[a-zA-Z]?)\b/g)).map(m => m[1]);
-    for (const num of numMatches) {
-      if (!['2023', '2024', '2025', '2026', '2027'].includes(num) && num.length <= 5) {
-        typedNumber = num;
-        break;
-      }
+    // Check for trailing number at the end of the query (e.g. "Av Brasil 450")
+    const trailingNumMatch = textForNumberCheck.match(/\s+(\d{1,5}[a-zA-Z]?)$/);
+    if (trailingNumMatch && !['2023', '2024', '2025', '2026', '2027'].includes(trailingNumMatch[1])) {
+      typedNumber = trailingNumMatch[1];
     }
   }
 
@@ -571,7 +615,7 @@ export function parseQueryTokens(text: string): ParsedAddressQuery {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w\s]/gi, ' ')
     .split(/\s+/)
-    .filter(w => w.length >= 2 && !['de', 'da', 'do', 'dos', 'das', 'em', 'no', 'na', 'para', 'com', 'nº', 'num', 'no', 'brasil', 'brazil', 'manaus', 'am'].includes(w));
+    .filter(w => w.length >= 2 && !['de', 'da', 'do', 'dos', 'das', 'e', 'em', 'no', 'na', 'para', 'com', 'nº', 'num', 'no'].includes(w));
 
   // Build a query without the house number for geocoders that choke on unformatted numbers
   let streetOnlyQuery = cleanedRaw;
@@ -623,20 +667,27 @@ export async function enhancedAutocomplete(
   const normalizedSearch = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   const offlineMatches: GeocodeResult[] = [];
   
-  if (normalizedSearch.length >= 2) {
+  const isGenericPrefixOnly = /^(rua|r|av|avenida|alameda|al|travessa|tv|trav|bairro|beco|praca|praça|rodovia|rod|estrada|est)$/i.test(normalizedSearch);
+
+  if (normalizedSearch.length >= 2 && !isGenericPrefixOnly) {
     for (const entry of RICH_OFFLINE_REGISTRY) {
       let bestAliasSim = 0;
       for (const alias of entry.aliases) {
-        const normAlias = alias.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const sim = stringSimilarity(normAlias, normalizedSearch);
-        if (sim > bestAliasSim) bestAliasSim = sim;
+        const normAlias = alias.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        if (normAlias.startsWith(normalizedSearch)) {
+          bestAliasSim = Math.max(bestAliasSim, 0.95);
+        } else {
+          const sim = stringSimilarity(normAlias, normalizedSearch);
+          if (sim > bestAliasSim) bestAliasSim = sim;
+        }
       }
 
-      const nameSim = stringSimilarity(entry.name, normalizedSearch);
+      const normName = entry.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      let nameSim = normName.startsWith(normalizedSearch) ? 0.95 : stringSimilarity(normName, normalizedSearch);
       const tokenResult = fuzzyTokenMatch(parsedQueryInfo.typedWords, `${entry.name} ${entry.context} ${entry.aliases.join(' ')}`);
 
       const maxSim = Math.max(bestAliasSim, nameSim);
-      if (maxSim >= 0.65 || tokenResult.ratio >= 0.5) {
+      if (maxSim >= 0.70 || (parsedQueryInfo.typedWords.length >= 2 && tokenResult.ratio >= 0.75)) {
         let entryName = entry.name;
         if (parsedQueryInfo.typedNumber && !entryName.includes(parsedQueryInfo.typedNumber)) {
           entryName = `${entry.name}, ${parsedQueryInfo.typedNumber}`;
@@ -786,9 +837,22 @@ export async function enhancedAutocomplete(
     const seenKeys = new Set<string>();
 
     const addResult = (res: GeocodeResult) => {
+      // 1. Resolve and extract explicit house number if present or typed
+      if (!res.number) {
+        if (parsedQueryInfo.typedNumber) {
+          res.number = parsedQueryInfo.typedNumber;
+        } else {
+          const numMatch = res.name.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*|,)\s*(\d{1,5}[a-zA-Z]?)\b/i) ||
+                           res.label.match(/(?:n[º°\.\s-]*|num[.\s]*|#|no[.\s]*|,)\s*(\d{1,5}[a-zA-Z]?)\b/i);
+          if (numMatch && !['2023', '2024', '2025', '2026', '2027'].includes(numMatch[1])) {
+            res.number = numMatch[1];
+          }
+        }
+      }
+
       // Enforce Typed Number on address results if user provided a house number
-      if (parsedQueryInfo.typedNumber && res.type !== 'poi') {
-        const numStr = parsedQueryInfo.typedNumber;
+      if (res.number && res.type !== 'poi') {
+        const numStr = res.number;
         if (!res.name.includes(numStr)) {
           const oldName = res.name;
           res.name = `${res.name}, ${numStr}`;
@@ -801,9 +865,12 @@ export async function enhancedAutocomplete(
       }
 
       // Enforce Typed Complement if present
-      if (parsedQueryInfo.typedComplement && !res.name.includes(parsedQueryInfo.typedComplement)) {
-        res.name = `${res.name} (${parsedQueryInfo.typedComplement})`;
-        if (!res.label.includes(parsedQueryInfo.typedComplement)) {
+      if (parsedQueryInfo.typedComplement && !res.complement) {
+        res.complement = parsedQueryInfo.typedComplement;
+      }
+      if (res.complement && !res.name.includes(res.complement)) {
+        res.name = `${res.name} (${res.complement})`;
+        if (!res.label.includes(res.complement)) {
           res.label = `${res.name} - ${res.context || ''}`;
         }
       }
@@ -867,13 +934,16 @@ export async function enhancedAutocomplete(
       }
     };
 
-    offlineMatches.forEach(addResult);
+    // Results will be populated primarily by Google Geolocation
+    // (with cross-referenced CEP and street numbers from Brazilian postal engines)
 
     const hasNumber = Boolean(parsedQueryInfo.typedNumber);
     const isCompanyOrPOI = /loja|empresa|praça|parque|hospital|restaurante|escola|shopping|supermercado|posto|banco|academia|hotel|aeroporto/i.test(composedQuery);
 
+    const cleanSearchText = parsedQueryInfo.cleanedRaw || text.trim();
+
     const orsParams: any = {
-      text: composedQuery,
+      text: cleanSearchText,
       size: '10',
       'boundary.country': 'BRA'
     };
@@ -882,16 +952,27 @@ export async function enhancedAutocomplete(
         orsParams['focus.point.lon'] = lon?.toString();
     }
 
-    const mapboxQs = new URLSearchParams({ q: composedQuery });
+    const mapboxQs = new URLSearchParams({ q: cleanSearchText });
     if (hasProximity && lat && lon) {
       mapboxQs.append('lat', lat.toString());
       mapboxQs.append('lon', lon.toString());
     }
 
-    const googleQs = new URLSearchParams({ input: text });
+    const googleQs = new URLSearchParams({ input: text.trim() });
     if (hasProximity && lat && lon) {
       googleQs.append('lat', lat.toString());
       googleQs.append('lon', lon.toString());
+    }
+
+    const photonQs = new URLSearchParams({ type: 'photon', q: cleanSearchText });
+    if (hasProximity && lat && lon) {
+      photonQs.append('lat', lat.toString());
+      photonQs.append('lon', lon.toString());
+    }
+
+    const nominatimQs = new URLSearchParams({ type: 'nominatim', q: cleanSearchText });
+    if (hasProximity && lat && lon) {
+      nominatimQs.append('viewbox', `${lon - 0.5},${lat + 0.5},${lon + 0.5},${lat - 0.5}`);
     }
 
     // Parallelize search requests to all geocoding services with 2.5s timeouts
@@ -913,13 +994,13 @@ export async function enhancedAutocomplete(
       }),
 
       // 3. Nominatim (OSM Geocoder)
-      fetchWithTimeout(`/api/places/osm?type=nominatim&q=${cleanText}${viewboxStr}`),
+      fetchWithTimeout(`/api/places/osm?${nominatimQs.toString()}`),
 
       // 4. Photon (Fast fuzzy search)
-      fetchWithTimeout(`/api/places/osm?type=photon&q=${cleanText}${photonLocation}`),
+      fetchWithTimeout(`/api/places/osm?${photonQs.toString()}`),
 
       // 5. Open-Meteo Geocoding API (Fast global & Brazil admin/city/postcode lookup)
-      fetchWithTimeout(`/api/places/open-meteo?q=${encodeURIComponent(text)}${hasProximity ? `&lat=${lat}&lon=${lon}` : ''}`)
+      fetchWithTimeout(`/api/places/open-meteo?q=${encodeURIComponent(text.trim())}${hasProximity ? `&lat=${lat}&lon=${lon}` : ''}`)
     ];
 
     const [googleRes, mapboxRes, orsRes, nomRes, phoRes, openMeteoRes] = await Promise.all(providers);
@@ -1022,8 +1103,13 @@ export async function enhancedAutocomplete(
       });
     }
 
-    // Parse Mapbox API
-    if (mapboxRes?.features) {
+    // If Google returned places, use ONLY Google geolocation results (as requested).
+    // Fall back to offline registry and secondary providers only if Google returned 0 places or errored.
+    if (results.length === 0) {
+      offlineMatches.forEach(addResult);
+
+      // Parse Mapbox API
+      if (mapboxRes?.features) {
       mapboxRes.features.forEach((f: any) => {
         const isPOI = f.place_type?.includes('poi') || f.id?.startsWith('poi.');
         const contextText = f.context ? f.context.map((c: any) => c.text).join(', ') : f.place_name.replace(`${f.text}, `, '');
@@ -1240,15 +1326,28 @@ export async function enhancedAutocomplete(
         });
       });
     }
+  }
 
     // Dynamic Multi-Factor Scorer and Ranking Algorithm with Fuzzy Search & Geolocation Prioritization
-    const queryNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const queryNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     const isExplicitLocationInQuery = /\b(sp|sao paulo|rj|rio de janeiro|mg|minas gerais|pr|parana|rs|rio grande do sul|sc|santa catarina|df|distrito federal|ce|ceara|pe|pernambuco|ba|bahia|pa|para|go|goias|mt|mato grosso|ms|mato grosso do sul|es|espirito santo|ac|acre|al|alagoas|ap|amapa|ma|maranhao|pb|paraiba|pi|piaui|rn|rio grande do norte|ro|rondonia|rr|roraima|se|sergipe|to|tocantins|curitiba|recife|fortaleza|salvador|brasilia|goiania|belem|rio branco|macapa|maceio|vitoria|sao luis|joao pessoa|teresina|natal|aracaju|palmas)\b/.test(queryNorm);
+    const normTypedCore = queryNorm.replace(/^(rua|r\.|av\.|av|avenida|alameda|al\.|travessa|tv\.|trav|estrada|est\.|rodovia|rod\.)\s+/i, '').trim();
 
     results.forEach(r => {
       let boost = 0;
       const rLabelNorm = r.label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const rNameNorm = r.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+      // 0. Primary prefix or core substring match (ensures what was typed matches top predictions)
+      if (rNameNorm.startsWith(queryNorm) || rLabelNorm.startsWith(queryNorm)) {
+        boost += 50;
+      } else if (normTypedCore.length >= 3 && (rNameNorm.startsWith(normTypedCore) || rNameNorm.includes(normTypedCore))) {
+        boost += 40;
+      } else if (rNameNorm.includes(queryNorm)) {
+        boost += 30;
+      } else if (rLabelNorm.includes(queryNorm)) {
+        boost += 15;
+      }
 
       // 1. Token-level fuzzy search matching
       if (parsedQueryInfo.typedWords.length > 0) {
@@ -1387,9 +1486,15 @@ export async function enhancedAutocomplete(
         context: [bairro, `${city} - ${uf}`].filter(Boolean).join(', '),
         label: exactLabel,
         confidenceScore: 999, // Absolute top score
-        source: 'viacep',
+        source: 'google',
         type: 'address',
-        cep: cepFormatted
+        cep: cepFormatted,
+        number: streetNumber || undefined,
+        complement: parsedQueryInfo.typedComplement,
+        street: street || undefined,
+        neighborhood: bairro || undefined,
+        city: city,
+        state: uf
       };
 
       // Remove any other duplicate items with very close coordinates from the list to avoid duplicate listings
@@ -1478,7 +1583,8 @@ export async function enhancedAutocomplete(
       return 0;
     });
 
-    const finalResults = cleanDeduplicated.slice(0, 8);
+    // Strictly limit autocomplete to at most 4 results as requested
+    const finalResults = cleanDeduplicated.slice(0, 4);
     
     if (finalResults.length > 0) {
       geoCache.set(normalizedText, finalResults);
@@ -1501,37 +1607,84 @@ export async function enhancedAutocomplete(
   }
 }
 
-export async function preciseGeocode(address: string): Promise<GeocodeResult> {
-  // Try Google Geocoding API (using Places new Text Search under the hood for stability)
+export async function preciseGeocode(
+  address: string,
+  proximity?: { lat: number, lon: number } | { latitude?: number, longitude?: number } | null
+): Promise<GeocodeResult> {
+  const norm = address.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+  // 1. Proximity query string construction
+  let proxQs = '';
+  let proxLat = -3.119;
+  let proxLon = -60.021;
+  if (proximity) {
+    const lat = 'lat' in proximity ? (proximity as any).lat : (proximity as any).latitude;
+    const lon = 'lon' in proximity ? (proximity as any).lon : (proximity as any).longitude;
+    if (typeof lat === 'number' && typeof lon === 'number' && (lat !== 0 || lon !== 0)) {
+      proxLat = lat;
+      proxLon = lon;
+      proxQs = `&lat=${lat}&lng=${lon}`;
+    }
+  }
+
+  // 2. Try Google Geocoding API (using Places New Text Search with Location Bias)
   try {
-    const res = await fetch(`/api/places/google-geocode?address=${encodeURIComponent(address)}`);
+    const res = await fetch(`/api/places/google-geocode?address=${encodeURIComponent(address)}${proxQs}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.places && data.places.length > 0) {
+      if (Array.isArray(data.places) && data.places.length > 0) {
         const item = data.places[0];
         const location = item.location;
-        const isPOI = item.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital'].includes(t));
-        const sanitized = sanitizeDrivableCoordinates(location.latitude, location.longitude, `${item.displayName?.text || ''} ${item.formattedAddress || ''} ${address}`);
-        return {
-          lat: sanitized.lat,
-          lon: sanitized.lon,
-          name: item.displayName?.text || address.split(',')[0],
-          context: item.formattedAddress || address,
-          label: address,
-          confidenceScore: 100,
-          source: 'google',
-          type: isPOI ? 'poi' : 'address',
-          cep: item.cep
-        };
+        if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number' && (location.latitude !== 0 || location.longitude !== 0)) {
+          const isPOI = item.types?.some((t: string) => ['establishment', 'point_of_interest', 'premise', 'airport', 'hospital'].includes(t));
+          const sanitized = sanitizeDrivableCoordinates(location.latitude, location.longitude, `${item.displayName?.text || ''} ${item.formattedAddress || ''} ${address}`);
+          return {
+            lat: sanitized.lat,
+            lon: sanitized.lon,
+            name: item.displayName?.text || address.split(',')[0],
+            context: item.formattedAddress || address,
+            label: address,
+            confidenceScore: 100,
+            source: 'google',
+            type: isPOI ? 'poi' : 'address',
+            cep: item.cep
+          };
+        }
       }
     }
   } catch (error) {
     console.warn("Google Geocoding failed, falling back to other providers...", error);
   }
 
+  // 3. Check Rich Offline Registry for Manaus neighborhoods, streets & reference points
+  try {
+    const offlineMatch = RICH_OFFLINE_REGISTRY.find(item => {
+      const nameNorm = item.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      const aliasMatch = item.aliases?.some(a => {
+        const aNorm = a.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        return norm === aNorm || norm.includes(aNorm) || aNorm.includes(norm);
+      });
+      return norm === nameNorm || norm.includes(nameNorm) || nameNorm.includes(norm) || aliasMatch;
+    });
+    if (offlineMatch) {
+      const label = `${offlineMatch.name}, ${offlineMatch.context}`;
+      const sanitized = sanitizeDrivableCoordinates(offlineMatch.lat, offlineMatch.lon, label);
+      return {
+        lat: sanitized.lat,
+        lon: sanitized.lon,
+        name: offlineMatch.name,
+        context: offlineMatch.context,
+        label: address,
+        confidenceScore: 98,
+        source: 'cache'
+      };
+    }
+  } catch (e) {
+    console.warn("Offline registry lookup failed:", e);
+  }
 
-  // Fallback to active geocoding providers - Filtra resultados placeholder sem coordenadas reais (0, 0)
-  const results = await enhancedAutocomplete(address);
+  // 4. Fallback to active geocoding providers with proximity
+  const results = await enhancedAutocomplete(address, { lat: proxLat, lon: proxLon });
   const validResults = results.filter(r => r.lat !== 0 || r.lon !== 0);
   if (validResults.length > 0) {
     return validResults[0]; // Highest confidence result with real coordinates

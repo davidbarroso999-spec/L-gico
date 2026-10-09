@@ -393,18 +393,58 @@ export async function getDirections(points: [number, number][], profile: string 
     }
   });
 
+  // If deduplication leaves fewer than 2 distinct points (e.g. user input same coordinate for stops)
   if (cleanPoints.length < 2) {
-    return {
-      geometry: { type: 'LineString', coordinates: points.map(p => [p[1], p[0]]) },
-      distance: 0,
-      duration: 0
-    };
-  }
+    if (points.length >= 2) {
+      // Check if start and end are identical coordinates
+      const p1 = points[0];
+      const p2 = points[points.length - 1];
+      const isIdentical = Math.abs(p1[0] - p2[0]) < 0.0001 && Math.abs(p1[1] - p2[1]) < 0.0001;
+      
+      if (isIdentical) {
+        // Return valid GeoJSON FeatureCollection with 0 distance for identical points
+        return {
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: points.map(p => [p[1], p[0]])
+            },
+            properties: {
+              summary: { distance: 0, duration: 0 },
+              segments: []
+            }
+          }]
+        };
+      }
+    }
 
-  // Ensure we have at least 2 distinct points to compute a valid route, otherwise repeat the point slightly offset
-  if (cleanPoints.length < 2 && points.length > 0) {
-    const single = points[0];
-    cleanPoints.push([single[0] + 0.0001, single[1] + 0.0001]);
+    // If only 1 point, offset slightly to allow routing engines to compute
+    if (cleanPoints.length === 1) {
+      const single = cleanPoints[0];
+      cleanPoints.push([single[0] + 0.0004, single[1] + 0.0004]);
+    } else if (points.length >= 1) {
+      const single = points[0];
+      cleanPoints.push(single);
+      cleanPoints.push([single[0] + 0.0004, single[1] + 0.0004]);
+    } else {
+      // Completely empty points fallback
+      return {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [[-60.025, -3.10194], [-60.024, -3.10094]]
+          },
+          properties: {
+            summary: { distance: 0, duration: 0 },
+            segments: []
+          }
+        }]
+      };
+    }
   }
 
   // AI-Powered Hybrid Directions Solver

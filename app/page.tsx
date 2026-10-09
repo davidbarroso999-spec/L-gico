@@ -786,6 +786,8 @@ export default function HarpiaApp() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [activeSuggestionIdx, setActiveSuggestionIdx] = useState<number | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const latestQueryRef = React.useRef<string>('');
   const [resolvedCoords, setResolvedCoords] = useState<Record<string, { lat: number, lon: number }>>({
     'Centro, Manaus, AM': { lat: -3.1311, lon: -60.0242 },
     'Adrianópolis, Manaus, AM': { lat: -3.1116, lon: -60.0121 },
@@ -1015,19 +1017,31 @@ export default function HarpiaApp() {
     if (currentActiveText.length < 2) {
       const t = setTimeout(() => {
         setSuggestions([]);
+        setIsLoadingSuggestions(false);
       }, 0);
       return () => clearTimeout(t);
     }
 
+    latestQueryRef.current = currentActiveText;
+
     const timer = setTimeout(async () => {
+      setIsLoadingSuggestions(true);
+      const queryAtCall = currentActiveText;
       try {
-        const res = await enhancedAutocomplete(currentActiveText, userLocation || undefined);
-        setSuggestions(res);
-        setShowSuggestions(true);
+        const res = await enhancedAutocomplete(queryAtCall, userLocation || undefined);
+        // Only commit results if user has not typed a newer string in the meantime
+        if (latestQueryRef.current === queryAtCall) {
+          setSuggestions(res);
+          setShowSuggestions(true);
+          setIsLoadingSuggestions(false);
+        }
       } catch (error) {
         console.error("Autocomplete error:", error);
+        if (latestQueryRef.current === queryAtCall) {
+          setIsLoadingSuggestions(false);
+        }
       }
-    }, 180);
+    }, 120);
 
     return () => clearTimeout(timer);
   }, [currentActiveText, activeSuggestionIdx, userLocation]);
@@ -1044,6 +1058,73 @@ export default function HarpiaApp() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Proactively auto-resolve any typed address to coordinates
+  const resolveAddressCoordinates = useCallback(async (addressStr: string) => {
+    if (!addressStr || addressStr.trim().length < 3) return;
+    const trimmed = addressStr.trim();
+    if (resolvedCoords[trimmed]) return;
+
+    try {
+      const geo = await preciseGeocode(trimmed, userLocation || undefined);
+      if (geo && (geo.lat !== 0 || geo.lon !== 0)) {
+        setResolvedCoords(prev => {
+          const next: Record<string, { lat: number, lon: number }> = { ...prev, [trimmed]: { lat: geo.lat, lon: geo.lon } };
+          if (geo.name) next[geo.name] = { lat: geo.lat, lon: geo.lon };
+          if (geo.context) next[geo.context] = { lat: geo.lat, lon: geo.lon };
+          return next;
+        });
+      }
+    } catch (err) {
+      console.warn("Background auto-resolve error for:", trimmed, err);
+    }
+  }, [resolvedCoords, userLocation]);
+
+  // Debounced auto-resolution for addresses being typed
+  useEffect(() => {
+    const unresolved = addresses
+      .map(a => a?.trim())
+      .filter((a): a is string => Boolean(a && a.length >= 3 && !resolvedCoords[a]));
+
+    if (unresolved.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      for (const addr of unresolved) {
+        try {
+          const geo = await preciseGeocode(addr, userLocation || undefined);
+          if (geo && (geo.lat !== 0 || geo.lon !== 0)) {
+            setResolvedCoords(prev => {
+              const next: Record<string, { lat: number, lon: number }> = { ...prev, [addr]: { lat: geo.lat, lon: geo.lon } };
+              if (geo.name) next[geo.name] = { lat: geo.lat, lon: geo.lon };
+              if (geo.context) next[geo.context] = { lat: geo.lat, lon: geo.lon };
+              return next;
+            });
+          }
+        } catch (e) {
+          // Silently ignore during active typing
+        }
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [addresses, resolvedCoords, userLocation]);
+
+  // Helper to check if an address has resolved coordinates (including fuzzy match)
+  const getResolvedCoordForAddress = (addr: string) => {
+    if (!addr || !addr.trim()) return null;
+    const trimmed = addr.trim();
+    if (resolvedCoords[trimmed]) return resolvedCoords[trimmed];
+    const norm = trimmed.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    for (const [key, coords] of Object.entries(resolvedCoords)) {
+      const keyNorm = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (keyNorm === norm || keyNorm.startsWith(norm) || norm.startsWith(keyNorm) || keyNorm.includes(norm) || norm.includes(keyNorm)) {
+        if (coords && (coords.lat !== 0 || coords.lon !== 0)) {
+          return coords;
+        }
+      }
+    }
+    return null;
+  };
 
   const handleAddStop = useCallback((targetIndex?: number) => {
     setAddresses(prev => {
@@ -1228,7 +1309,29 @@ export default function HarpiaApp() {
         customPrompt: aiCustomPrompt
       };
 
-      const result = await optimizeRoute(validAddresses, effectiveOptions, resolvedCoords, validWithWindows, validWithInvoices, validStopTypes);
+      // Ensure all valid addresses have their coordinates resolved beforehand
+      const updatedCoords = { ...resolvedCoords };
+      let hasNewResolved = false;
+      for (const addr of validAddresses) {
+        if (!updatedCoords[addr]) {
+          try {
+            const geo = await preciseGeocode(addr, userLocation || undefined);
+            if (geo && (geo.lat !== 0 || geo.lon !== 0)) {
+              updatedCoords[addr] = { lat: geo.lat, lon: geo.lon };
+              if (geo.name) updatedCoords[geo.name] = { lat: geo.lat, lon: geo.lon };
+              if (geo.context) updatedCoords[geo.context] = { lat: geo.lat, lon: geo.lon };
+              hasNewResolved = true;
+            }
+          } catch (e) {
+            console.warn("Pre-route geocode failed for:", addr, e);
+          }
+        }
+      }
+      if (hasNewResolved) {
+        setResolvedCoords(updatedCoords);
+      }
+
+      const result = await optimizeRoute(validAddresses, effectiveOptions, updatedCoords, validWithWindows, validWithInvoices, validStopTypes);
       setRouteResult(result);
       
       const startTime = new Date().getTime();
@@ -1450,30 +1553,10 @@ export default function HarpiaApp() {
     }
   };
 
-  const getProviderBadge = (source?: string) => {
-    switch (source) {
-      case 'google':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30 shrink-0">Google</span>;
-      case 'mapbox':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 shrink-0">Mapbox</span>;
-      case 'viacep':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">Correios / CEP</span>;
-      case 'open-meteo':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 shrink-0">Open-Meteo</span>;
-      case 'ors':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30 shrink-0">ORS</span>;
-      case 'nominatim':
-      case 'photon':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-400 border border-teal-500/30 shrink-0">OSM</span>;
-      case 'cache':
-        return <span className="text-[8px] font-mono font-black uppercase px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 shrink-0">Hub AM</span>;
-      default:
-        return null;
-    }
-  };
 
   const renderSuggestionsDropdown = (idx: number) => {
-    if (!showSuggestions || activeSuggestionIdx !== idx || suggestions.length === 0) return null;
+    if (!showSuggestions || activeSuggestionIdx !== idx) return null;
+    if (suggestions.length === 0 && !isLoadingSuggestions) return null;
     
     // Safety deduplication by normalized label
     const uniqueSuggestions: any[] = [];
@@ -1483,6 +1566,7 @@ export default function HarpiaApp() {
       if (!seen.has(key)) {
         seen.add(key);
         uniqueSuggestions.push(item);
+        if (uniqueSuggestions.length >= 4) break; // Maximum 4 results in autocomplete
       }
     }
 
@@ -1492,13 +1576,21 @@ export default function HarpiaApp() {
       >
         <div className="px-3.5 py-2 bg-slate-950/80 border-b border-black dark:border-slate-800 flex items-center justify-between">
           <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1.5">
-            <Search className="w-3 h-3 text-tech" />
-            Sugestões Multi-API ({uniqueSuggestions.length})
+            {isLoadingSuggestions ? (
+              <span className="w-3 h-3 border-2 border-slate-600 border-t-tech rounded-full animate-spin inline-block shrink-0" />
+            ) : (
+              <Search className="w-3 h-3 text-tech shrink-0" />
+            )}
+            Sugestões de Endereço ({uniqueSuggestions.length})
           </span>
-          <span className="text-[9px] font-mono text-slate-500">Google • Mapbox • CEP • Open-Meteo</span>
         </div>
         <div className="overflow-y-auto custom-scrollbar flex-1 divide-y divide-slate-800/80">
-          {uniqueSuggestions.length > 0 ? (
+          {isLoadingSuggestions && uniqueSuggestions.length === 0 ? (
+            <div className="p-4 flex items-center justify-center gap-2 text-slate-400">
+              <span className="w-4 h-4 border-2 border-slate-700 border-t-tech rounded-full animate-spin shrink-0" />
+              <span className="text-xs font-mono text-slate-300">Localizando endereços e vias...</span>
+            </div>
+          ) : uniqueSuggestions.length > 0 ? (
             uniqueSuggestions.map((s, sIdx) => (
               <button
                 key={sIdx}
@@ -1528,18 +1620,22 @@ export default function HarpiaApp() {
                     setActiveSuggestionIdx(null);
                     
                     if (s.lat && s.lon) {
-                      setResolvedCoords(prev => ({
-                        ...prev,
-                        [s.label]: { lat: s.lat, lon: s.lon }
-                      }));
+                      setResolvedCoords(prev => {
+                        const next: Record<string, { lat: number, lon: number }> = { ...prev, [s.label]: { lat: s.lat, lon: s.lon } };
+                        if (s.name) next[s.name] = { lat: s.lat, lon: s.lon };
+                        if (s.context) next[s.context] = { lat: s.lat, lon: s.lon };
+                        return next;
+                      });
                     } else {
                       try {
-                        const geo = await preciseGeocode(s.label);
-                        if (geo && geo.lat && geo.lon) {
-                          setResolvedCoords(prev => ({
-                            ...prev,
-                            [s.label]: { lat: geo.lat, lon: geo.lon }
-                          }));
+                        const geo = await preciseGeocode(s.label, userLocation || undefined);
+                        if (geo && (geo.lat !== 0 || geo.lon !== 0)) {
+                          setResolvedCoords(prev => {
+                            const next: Record<string, { lat: number, lon: number }> = { ...prev, [s.label]: { lat: geo.lat, lon: geo.lon } };
+                            if (geo.name) next[geo.name] = { lat: geo.lat, lon: geo.lon };
+                            if (geo.context) next[geo.context] = { lat: geo.lat, lon: geo.lon };
+                            return next;
+                          });
                         }
                       } catch(e) {}
                     }
@@ -1584,9 +1680,8 @@ export default function HarpiaApp() {
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                      {getProviderBadge(s.source)}
                       {s.cep && (
-                        <span className="text-[8px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
+                        <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
                           CEP {s.cep}
                         </span>
                       )}
@@ -2326,8 +2421,16 @@ export default function HarpiaApp() {
                             }}
                             onFocus={() => {
                               setActiveSuggestionIdx(0);
-                              if ((addresses[0] || '').trim().length >= 2) {
+                              const current = (addresses[0] || '').trim();
+                              if (current.length >= 2) {
                                 setShowSuggestions(true);
+                                if (suggestions.length === 0) {
+                                  setIsLoadingSuggestions(true);
+                                  enhancedAutocomplete(current, userLocation || undefined).then(res => {
+                                    setSuggestions(res);
+                                    setIsLoadingSuggestions(false);
+                                  }).catch(() => setIsLoadingSuggestions(false));
+                                }
                               }
                             }}
                             onKeyDown={(e) => {
@@ -2338,6 +2441,16 @@ export default function HarpiaApp() {
                                   const updated = [...addresses];
                                   updated[0] = top.label;
                                   setAddresses(updated);
+                                  if (top.lat && top.lon) {
+                                    setResolvedCoords(prev => {
+                                      const next: Record<string, { lat: number, lon: number }> = { ...prev, [top.label]: { lat: top.lat, lon: top.lon } };
+                                      if (top.name) next[top.name] = { lat: top.lat, lon: top.lon };
+                                      if (top.context) next[top.context] = { lat: top.lat, lon: top.lon };
+                                      return next;
+                                    });
+                                  }
+                                } else if (addresses[0]) {
+                                  resolveAddressCoordinates(addresses[0]);
                                 }
                                 setShowSuggestions(false);
                                 setSuggestions([]);
@@ -2354,6 +2467,9 @@ export default function HarpiaApp() {
                                 setShowSuggestions(false);
                                 setSuggestions([]);
                                 setActiveSuggestionIdx(null);
+                                if (addresses[0]) {
+                                  resolveAddressCoordinates(addresses[0]);
+                                }
                               }
                             }}
                             placeholder="De onde você está saindo? (Empresa, Rua...)"
@@ -2377,6 +2493,23 @@ export default function HarpiaApp() {
                           </button>
                           {renderSuggestionsDropdown(0)}
                         </div>
+
+                        {/* Location status badge */}
+                        {addresses[0] && addresses[0].trim().length >= 3 && (
+                          <div className="flex items-center gap-1.5 pt-0.5">
+                            {getResolvedCoordForAddress(addresses[0]) ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                Localizado no mapa
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/80">
+                                <RefreshCw className="w-3 h-3 animate-spin text-amber-400 shrink-0" />
+                                Buscando coordenadas...
+                              </span>
+                            )}
+                          </div>
+                        )}
 
                         {/* Quick Action Toolbar for Departure Point */}
                         <div className="flex items-center gap-2 flex-wrap pt-1">
@@ -2620,8 +2753,16 @@ export default function HarpiaApp() {
                                       }}
                                       onFocus={() => {
                                         setActiveSuggestionIdx(realIdx);
-                                        if ((addr || '').trim().length >= 2) {
+                                        const current = (addr || '').trim();
+                                        if (current.length >= 2) {
                                           setShowSuggestions(true);
+                                          if (suggestions.length === 0) {
+                                            setIsLoadingSuggestions(true);
+                                            enhancedAutocomplete(current, userLocation || undefined).then(res => {
+                                              setSuggestions(res);
+                                              setIsLoadingSuggestions(false);
+                                            }).catch(() => setIsLoadingSuggestions(false));
+                                          }
                                         }
                                       }}
                                       onKeyDown={(e) => {
@@ -2632,6 +2773,16 @@ export default function HarpiaApp() {
                                             const updated = [...addresses];
                                             updated[realIdx] = top.label;
                                             setAddresses(updated);
+                                            if (top.lat && top.lon) {
+                                              setResolvedCoords(prev => {
+                                                const next: Record<string, { lat: number, lon: number }> = { ...prev, [top.label]: { lat: top.lat, lon: top.lon } };
+                                                if (top.name) next[top.name] = { lat: top.lat, lon: top.lon };
+                                                if (top.context) next[top.context] = { lat: top.lat, lon: top.lon };
+                                                return next;
+                                              });
+                                            }
+                                          } else if (addr) {
+                                            resolveAddressCoordinates(addr);
                                           }
                                           setShowSuggestions(false);
                                           setSuggestions([]);
@@ -2648,6 +2799,9 @@ export default function HarpiaApp() {
                                           setShowSuggestions(false);
                                           setSuggestions([]);
                                           setActiveSuggestionIdx(null);
+                                          if (addr) {
+                                            resolveAddressCoordinates(addr);
+                                          }
                                         }
                                       }}
                                       placeholder="Empresa, rua ou ponto de referência..."
@@ -2679,6 +2833,23 @@ export default function HarpiaApp() {
                                     <Trash2 className="w-4 h-4" />
                                   </button>
                                 </div>
+
+                                {/* Location status badge */}
+                                {addr && addr.trim().length >= 3 && (
+                                  <div className="flex items-center gap-1.5 pt-0.5">
+                                    {getResolvedCoordForAddress(addr) ? (
+                                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                        Localizado no mapa
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/80">
+                                        <RefreshCw className="w-3 h-3 animate-spin text-amber-400 shrink-0" />
+                                        Buscando coordenadas...
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                                 {activeNFeSearchIdx === realIdx && (
                                   <div className="mt-2.5 animate-fadeIn">
                                     <NFeSearch 
@@ -2839,8 +3010,16 @@ export default function HarpiaApp() {
                               onFocus={() => {
                                 const lastIdx = addresses.length - 1;
                                 setActiveSuggestionIdx(lastIdx);
-                                if ((addresses[lastIdx] || '').trim().length >= 2) {
+                                const current = (addresses[lastIdx] || '').trim();
+                                if (current.length >= 2) {
                                   setShowSuggestions(true);
+                                  if (suggestions.length === 0) {
+                                    setIsLoadingSuggestions(true);
+                                    enhancedAutocomplete(current, userLocation || undefined).then(res => {
+                                      setSuggestions(res);
+                                      setIsLoadingSuggestions(false);
+                                    }).catch(() => setIsLoadingSuggestions(false));
+                                  }
                                 }
                               }}
                               onKeyDown={(e) => {
@@ -2852,6 +3031,16 @@ export default function HarpiaApp() {
                                     const updated = [...addresses];
                                     updated[lastIdx] = top.label;
                                     setAddresses(updated);
+                                    if (top.lat && top.lon) {
+                                      setResolvedCoords(prev => {
+                                        const next: Record<string, { lat: number, lon: number }> = { ...prev, [top.label]: { lat: top.lat, lon: top.lon } };
+                                        if (top.name) next[top.name] = { lat: top.lat, lon: top.lon };
+                                        if (top.context) next[top.context] = { lat: top.lat, lon: top.lon };
+                                        return next;
+                                      });
+                                    }
+                                  } else if (addresses[lastIdx]) {
+                                    resolveAddressCoordinates(addresses[lastIdx]);
                                   }
                                   setShowSuggestions(false);
                                   setSuggestions([]);
@@ -2868,6 +3057,9 @@ export default function HarpiaApp() {
                                   setShowSuggestions(false);
                                   setSuggestions([]);
                                   setActiveSuggestionIdx(null);
+                                  if (addresses[lastIdx]) {
+                                    resolveAddressCoordinates(addresses[lastIdx]);
+                                  }
                                 }
                               }}
                               placeholder="Aonde você quer chegar? (Ex: Aeroporto, Shopping, Rua...)"
@@ -2892,6 +3084,23 @@ export default function HarpiaApp() {
                             </button>
                             {renderSuggestionsDropdown(addresses.length - 1)}
                           </div>
+
+                          {/* Location status badge */}
+                          {addresses[addresses.length - 1] && addresses[addresses.length - 1].trim().length >= 3 && (
+                            <div className="flex items-center gap-1.5 pt-0.5">
+                              {getResolvedCoordForAddress(addresses[addresses.length - 1]) ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                  Localizado no mapa
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/80">
+                                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400 shrink-0" />
+                                  Buscando coordenadas...
+                                </span>
+                              )}
+                            </div>
+                          )}
                           {activeNFeSearchIdx === addresses.length - 1 && (
                             <div className="mt-2.5 animate-fadeIn">
                               <NFeSearch 

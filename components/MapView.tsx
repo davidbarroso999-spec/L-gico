@@ -29,7 +29,7 @@ interface MapProps {
   onRouteRecalculated?: (newResult: any) => void;
 }
 
-// Function to calculate exact heading/bearing between two coordinates
+// Function to calculate exact heading/bearing between two coordinates with distance threshold
 function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const lat1Rad = lat1 * Math.PI / 180;
@@ -52,7 +52,7 @@ function calculateDistanceInKm(lat1: number, lon1: number, lat2: number, lon2: n
   return R * c;
 }
 
-// Highly optimized continuous rotation tracking with mathematical damping (low-pass filter) to prevent structural wrapping-spin bugs
+// Optimized continuous rotation tracking with mathematical damping to prevent sudden spinning
 function calculateSmoothAngle(currentSmooth: number, target: number) {
   let diff = (target - currentSmooth) % 360;
   if (diff < -180) {
@@ -60,40 +60,39 @@ function calculateSmoothAngle(currentSmooth: number, target: number) {
   } else if (diff > 180) {
     diff -= 360;
   }
-  // Low-pass filter damping coefficient (0.12) to create smooth, cinematic rotation over time
-  const nextAngle = currentSmooth + diff * 0.12;
+  // Low-pass filter damping coefficient (0.18) for smooth transitions
+  const nextAngle = currentSmooth + diff * 0.18;
   return (nextAngle + 360) % 360;
 }
 
-// Recenter mechanism that adapts to general view or simulation view with unlocked map interaction
+// High-performance Recenter mechanism with fluid panTo and unlocked map interaction
 function MapController({ 
   stops, 
   geometry, 
   carCoords, 
   isDriving, 
-  is3DMode,
-  mapOrientation,
   isNavigationScreen,
-  isAutoFollowing,
-  onUserPan
+  cameraMode,
+  setCameraMode
 }: { 
   stops: any[]; 
   geometry?: any; 
   carCoords: [number, number] | null; 
   isDriving: boolean;
-  is3DMode: boolean;
-  mapOrientation: 'north' | 'track';
   isNavigationScreen: boolean;
-  isAutoFollowing: boolean;
-  onUserPan: () => void;
+  cameraMode: 'overview' | 'track_up_2d' | 'track_up_3d';
+  setCameraMode: (mode: 'overview' | 'track_up_2d' | 'track_up_3d') => void;
 }) {
   const map = useMap();
+  const lastPanRef = useRef<number>(0);
 
   // Listen for physical user gestures on Leaflet map to release lock and allow free pan/zoom/rotate
   useEffect(() => {
     if (!map) return;
     const handleUserGesture = () => {
-      onUserPan();
+      if (cameraMode !== 'overview') {
+        setCameraMode('overview');
+      }
     };
 
     map.on('dragstart', handleUserGesture);
@@ -102,7 +101,8 @@ function MapController({
 
     const handleRecenter = () => {
       if (carCoords) {
-        map.setView(carCoords, 19.5, { animate: true, duration: 0.4 });
+        const zoomLevel = isNavigationScreen ? 18 : 17;
+        map.setView(carCoords, zoomLevel, { animate: true, duration: 0.4 });
       }
     };
     window.addEventListener('recenter-map', handleRecenter);
@@ -113,17 +113,30 @@ function MapController({
       map.off('touchstart', handleUserGesture);
       window.removeEventListener('recenter-map', handleRecenter);
     };
-  }, [map, onUserPan, carCoords]);
+  }, [map, cameraMode, setCameraMode, carCoords, isNavigationScreen]);
 
   useEffect(() => {
-    if (!isAutoFollowing) return; // User is manually panning/exploring map, do not override position
+    if (cameraMode === 'overview' || !map) return;
 
     if (isNavigationScreen && carCoords) {
-      const zoomLevel = 19.5;
-      map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
+      const now = Date.now();
+      if (now - lastPanRef.current > 250) {
+        lastPanRef.current = now;
+        const currentZoom = map.getZoom();
+        const targetZoom = cameraMode === 'track_up_3d' ? 18 : 17;
+        
+        if (currentZoom < 15) {
+          map.setView(carCoords, targetZoom, { animate: true, duration: 0.4 });
+        } else {
+          map.panTo(carCoords, { animate: true, duration: 0.35, easeLinearity: 0.6 });
+        }
+      }
     } else if (isDriving && carCoords) {
-      const zoomLevel = is3DMode ? 19.5 : 18.2;
-      map.setView(carCoords, zoomLevel, { animate: true, duration: 0.5, easeLinearity: 1 });
+      const now = Date.now();
+      if (now - lastPanRef.current > 250) {
+        lastPanRef.current = now;
+        map.panTo(carCoords, { animate: true, duration: 0.35, easeLinearity: 0.6 });
+      }
     } else {
       if (geometry?.coordinates?.length > 0) {
         const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
@@ -133,7 +146,7 @@ function MapController({
         map.fitBounds(bounds, { padding: [55, 55], animate: false });
       }
     }
-  }, [stops, map, geometry, carCoords, isDriving, is3DMode, isNavigationScreen, isAutoFollowing]);
+  }, [stops, map, geometry, carCoords, isDriving, isNavigationScreen, cameraMode]);
 
   useEffect(() => {
     const invalidate = () => {
@@ -168,9 +181,9 @@ function MapController({
         observer.disconnect();
       }
     };
-  }, [map, is3DMode, stops, geometry]);
+  }, [map, stops, geometry]);
 
-  // Keep interaction ALWAYS enabled so user can pan, zoom, and rotate like Google Maps
+  // Keep interaction ALWAYS enabled so user can pan, zoom, and rotate smoothly
   useEffect(() => {
     if (!map) return;
     map.dragging.enable();
@@ -180,27 +193,6 @@ function MapController({
     map.boxZoom.enable();
     map.keyboard.enable();
   }, [map]);
-
-  // Recenter Event Listener
-  useEffect(() => {
-    const handleRecenter = () => {
-      if (!map) return;
-      if (carCoords) {
-        const zoomLevel = isNavigationScreen ? 19.5 : (is3DMode ? 19.5 : 18.2);
-        map.setView(carCoords, zoomLevel, { animate: true, duration: 0.8 });
-      } else {
-        if (geometry?.coordinates?.length > 0) {
-          const bounds = L.latLngBounds(geometry.coordinates.map((c: any) => [c[1], c[0]]));
-          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 0.8 });
-        } else if (stops.length > 0) {
-          const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
-          map.fitBounds(bounds, { padding: [55, 55], animate: true, duration: 0.8 });
-        }
-      }
-    };
-    window.addEventListener('recenter-map', handleRecenter);
-    return () => window.removeEventListener('recenter-map', handleRecenter);
-  }, [map, carCoords, geometry, stops, is3DMode, isNavigationScreen]);
 
   return null;
 }
@@ -264,30 +256,15 @@ function getRouteArrows(polyline: [number, number][], count = 18) {
   return arrows;
 }
 
-// Custom icon creator for numbered tour markers (des-tilted to remain vertical and perpendicular)
+// Custom icon creator for numbered tour markers (stable, vertical and crystal clear)
 const createNumberedIcon = (
   number: number, 
   isLast: boolean, 
   isFirst: boolean, 
-  smoothHeading: number, 
-  is3D: boolean, 
-  isDriving: boolean,
-  mapOrientation: 'north' | 'track',
   weather?: any,
   showWeatherLayer?: boolean
 ) => {
   const color = isFirst ? '#D1A054' : isLast ? '#F43F5E' : '#D1A054';
-  
-  // No modo estável 'north', o pin de parada compensa apenas a inclinação 3D vertical (rotateX).
-  // No modo 'track', se estiver dirigindo, compensamos também a rotação Z do mapa inteiro.
-  let rotationAdjustment = '';
-  if (is3D) {
-    if (mapOrientation === 'track' && isDriving) {
-      rotationAdjustment = `rotateZ(${smoothHeading}deg) rotateX(-50deg) translateZ(8px)`;
-    } else {
-      rotationAdjustment = 'rotateZ(0deg) rotateX(-45deg) translateZ(8px)';
-    }
-  }
 
   const tempLabel = showWeatherLayer && weather?.main?.temp != null
     ? `<div style="
@@ -319,9 +296,6 @@ const createNumberedIcon = (
       <div style="position: relative;" class="animated-marker">
         ${tempLabel}
         <div class="custom-marker-wrapper" style="
-          transform: ${rotationAdjustment};
-          transform-origin: bottom center;
-          transition: transform 1s linear;
           background-color: ${color};
           color: #2D2C2A;
           width: 32px;
@@ -341,87 +315,77 @@ const createNumberedIcon = (
     `,
     className: '',
     iconSize: [32, 32],
-    iconAnchor: [16, 32], // Anchor bottom-center for perfect accuracy
+    iconAnchor: [16, 32],
   });
 };
 
-// Custom car vehicle icon (Waze 3D chevron with highway headlight projection & radar halo)
+// Custom car vehicle icon with smooth heading direction tracking and radar halo
 const createCarIcon = (
-  heading: number, 
   smoothHeading: number, 
-  is3D: boolean, 
-  isDriving: boolean,
-  mapOrientation: 'north' | 'track',
   isNavigationScreen = false
 ) => {
-  // In track mode, the map rotates underneath, so the vehicle chevron always points forward (0deg).
-  // In north mode, the map is static, so the chevron rotates with the vehicle heading.
-  const angle = mapOrientation === 'track' ? 0 : smoothHeading;
-  const tilt = is3D ? 'rotateX(-45deg)' : '';
-
   return L.divIcon({
     html: `
       <div style="
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 64px;
-        height: 64px;
+        width: 60px;
+        height: 60px;
         position: relative;
-        transform: ${tilt} rotate(${angle}deg);
+        transform: rotate(${smoothHeading}deg);
         transform-origin: 50% 50%;
-        transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: transform 0.25s linear;
         pointer-events: none;
       ">
-        <!-- Forward Headlight Projector Beam (Waze Highway Illumination) -->
+        <!-- Forward Headlight Projector Beam -->
         <div style="
           position: absolute;
-          top: -36px;
+          top: -30px;
           left: 50%;
           transform: translateX(-50%);
           width: 0;
           height: 0;
-          border-left: 20px solid transparent;
-          border-right: 20px solid transparent;
-          border-top: 48px solid rgba(56, 189, 248, 0.25);
-          filter: blur(4px);
+          border-left: 16px solid transparent;
+          border-right: 16px solid transparent;
+          border-top: 38px solid rgba(209, 160, 84, 0.28);
+          filter: blur(3px);
           pointer-events: none;
         "></div>
 
         <!-- Pulsing Ground Radar Halo -->
         <div style="
           position: absolute;
-          width: 44px;
-          height: 44px;
+          width: 42px;
+          height: 42px;
           border-radius: 50%;
-          background: radial-gradient(circle, rgba(14, 165, 233, 0.35) 0%, rgba(14, 165, 233, 0) 70%);
-          border: 1.5px solid rgba(56, 189, 248, 0.6);
-          box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
+          background: radial-gradient(circle, rgba(209, 160, 84, 0.25) 0%, rgba(209, 160, 84, 0) 70%);
+          border: 1.5px solid rgba(209, 160, 84, 0.5);
           animation: pulseMarker 1.4s infinite alternate ease-in-out;
         "></div>
 
-        <!-- Waze-style 3D Navigation Vehicle Body -->
+        <!-- High-Contrast Navigation Puck Vehicle Body -->
         <div style="
           position: relative;
-          width: 38px;
-          height: 38px;
+          width: 36px;
+          height: 36px;
           border-radius: 50%;
-          background: linear-gradient(135deg, #0284c7, #0369a1);
-          border: 2.5px solid #ffffff;
-          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 14px rgba(14, 165, 233, 0.8);
+          background: linear-gradient(135deg, #D1A054, #B3833B);
+          border: 2.5px solid #2D2C2A;
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 14px rgba(209, 160, 84, 0.7);
           display: flex;
           align-items: center;
           justify-content: center;
         ">
-          <svg viewBox="0 0 24 24" fill="currentColor" style="width: 24px; height: 24px; color: #ffffff; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transform: translateY(-1px);">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width: 22px; height: 22px; color: #2D2C2A; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5)); transform: translateY(-1px);">
             <path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" />
           </svg>
         </div>
       </div>
     `,
     className: '',
-    iconSize: [64, 64],
-    iconAnchor: [32, 32],
+    iconSize: [60, 60],
+    iconAnchor: [30, 30],
   });
 };
 
@@ -489,16 +453,16 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   const [gyroActive, setGyroActive] = useState(false);
 
   // 3D Navigation Simulation States
-  const [is3DMode, setIs3DMode] = useState(isNavigationScreen ? false : false);
+  const [cameraMode, setCameraMode] = useState<'overview' | 'track_up_2d' | 'track_up_3d'>(
+    isNavigationScreen ? 'track_up_3d' : 'overview'
+  );
   const [isDriving, setIsDriving] = useState(false);
-  const [isAutoFollowing, setIsAutoFollowing] = useState(true);
   const [carCoords, setCarCoords] = useState<[number, number] | null>(null);
   const [heading, setHeading] = useState(0);
   const [smoothHeading, setSmoothHeading] = useState(0); // Multi-turn mathematical state
   const [simulatedIndex, setSimulatedIndex] = useState(0);
   const [simStartIdx, setSimStartIdx] = useState(0);
   const [simEndIdx, setSimEndIdx] = useState(0);
-  const [mapOrientation, setMapOrientation] = useState<'north' | 'track'>(isNavigationScreen ? 'track' : 'track'); // Default track mode keeping cursor pointing UP to device antenna
   
   // Real-time HUD stats
   const [speedHUD, setSpeedHUD] = useState(0);
@@ -572,27 +536,25 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           const permissionState = await (DeviceOrientationEvent as any).requestPermission();
           if (permissionState === 'granted') {
             setUseGyroscope(true);
-            setIs3DMode(true);
-            setMapOrientation('track');
+            setCameraMode('track_up_3d');
             setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
           } else {
             alert('Permissão para sensor de giroscópio e bússola foi recusada.');
           }
         } catch (err) {
           setUseGyroscope(true);
-          setIs3DMode(true);
-          setMapOrientation('track');
+          setCameraMode('track_up_3d');
           setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
         }
       } else {
         setUseGyroscope(true);
-        setIs3DMode(true);
-        setMapOrientation('track');
+        setCameraMode('track_up_3d');
         setInstructionHUD("Giroscópio ativado! O mapa gira conforme a orientação do dispositivo.");
       }
     } else {
       setUseGyroscope(false);
       setGyroActive(false);
+      setCameraMode('overview');
       setInstructionHUD("Bússola/Giroscópio desativado. Modo de orientação normal.");
     }
   };
@@ -814,22 +776,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
   if (isNavigationScreen !== prevIsNavScreen) {
     setPrevIsNavScreen(isNavigationScreen);
     if (isNavigationScreen) {
-      setIs3DMode(true); // Waze 3D perspective mode!
-      setMapOrientation('track'); // Waze Track-Up rotation (car points forward, road turns)!
+      setCameraMode('track_up_3d');
       setIsDriving(true);
-      setIsAutoFollowing(true);
     } else {
       setIsDriving(false);
-      setIs3DMode(false);
-      setMapOrientation('north');
+      setCameraMode('overview');
       setSmoothHeading(0);
       setHeading(0);
     }
-  }
-
-  const [prevIs3DMode, setPrevIs3DMode] = useState(is3DMode);
-  if (is3DMode !== prevIs3DMode) {
-    setPrevIs3DMode(is3DMode);
   }
 
   // Build high-resolution color-graded segments based on stops risk interpolation and Dexie reported occurrences
@@ -1236,9 +1190,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         setCarCoords(polyline[startIdx]);
       }
       setIsDriving(true);
-      setIs3DMode(true);
-      setMapOrientation('track');
-      setIsAutoFollowing(true);
+      setCameraMode('track_up_3d');
       setInstructionHUD("Navegação ativa estilo Waze. Siga a rota até o destino.");
       
       // Set initial bearing orientation
@@ -1341,9 +1293,13 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         if (nextCoords) {
           setCarCoords(nextCoords);
           if (prevIdx < nextIdx) {
-            const bearing = getBearing(polyline[prevIdx][0], polyline[prevIdx][1], nextCoords[0], nextCoords[1]);
-            setHeading(bearing);
-            setSmoothHeading(prev => calculateSmoothAngle(prev, bearing));
+            const dist = calculateDistanceInKm(polyline[prevIdx][0], polyline[prevIdx][1], nextCoords[0], nextCoords[1]);
+            // Only update vehicle heading if distance traveled > 2 meters to avoid micro-jitter spinning
+            if (dist > 0.002) {
+              const bearing = getBearing(polyline[prevIdx][0], polyline[prevIdx][1], nextCoords[0], nextCoords[1]);
+              setHeading(bearing);
+              setSmoothHeading(prev => calculateSmoothAngle(prev, bearing));
+            }
           }
         }
 
@@ -1356,52 +1312,61 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
 
   const criticalPoints = stops.filter(s => s.riskScore > 40);
 
-  // Active rotation angle (uses physical device gyroscope/compass orientation when active, or route bearing when navigating)
-  const activeRotation = (mapOrientation === 'track' && (isDriving || isNavigationScreen))
-    ? (useGyroscope && gyroActive ? smoothGyroHeading : smoothHeading)
+  const isTracking = cameraMode !== 'overview';
+  const activeRotation = isTracking 
+    ? (useGyroscope && gyroActive ? smoothGyroHeading : smoothHeading) 
     : 0;
+    
+  const is3D = cameraMode === 'track_up_3d';
 
-  // Waze 3D Perspective and Continuous Track-Up Rotation Transform
-  const mapTransformStyles: React.CSSProperties = is3DMode
+  const mapTransformStyles: React.CSSProperties = is3D
     ? {
         position: 'absolute',
-        width: '160%',
-        height: '160%',
-        left: '-30%',
-        top: '-30%',
-        transform: `rotateX(48deg) rotateZ(${-activeRotation}deg)`,
-        transformOrigin: '50% 65%',
-        transition: isAutoFollowing ? 'transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)' : 'none',
-        willChange: 'transform',
-        background: '#18181b'
+        width: '180%',
+        height: '180%',
+        left: '-40%',
+        top: '-40%',
+        transform: `perspective(1200px) translateY(15%) rotateX(55deg) rotateZ(${-activeRotation}deg)`,
+        transformOrigin: '50% 50%',
+        transition: 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), width 0.4s, height 0.4s, top 0.4s, left 0.4s',
+        willChange: 'transform'
       }
-    : (mapOrientation === 'track' && activeRotation !== 0)
+    : cameraMode === 'track_up_2d' 
     ? {
         position: 'absolute',
         width: '150%',
         height: '150%',
         left: '-25%',
         top: '-25%',
-        transform: `rotateZ(${-activeRotation}deg)`,
+        transform: `perspective(1200px) translateY(15%) rotateX(0deg) rotateZ(${-activeRotation}deg)`,
         transformOrigin: '50% 50%',
-        transition: isAutoFollowing ? 'transform 0.28s cubic-bezier(0.25, 1, 0.5, 1)' : 'none',
-        willChange: 'transform',
-        background: '#18181b'
+        transition: 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), width 0.4s, height 0.4s, top 0.4s, left 0.4s',
+        willChange: 'transform'
       }
     : {
         position: 'relative',
         width: '100%',
         height: '100%',
-        transform: 'none',
-        background: '#2D2C2A',
-        transition: 'transform 0.3s ease-out'
+        transform: 'perspective(1200px) translateY(0%) rotateX(0deg) rotateZ(0deg)',
+        transition: 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), width 0.4s, height 0.4s, top 0.4s, left 0.4s'
       };
 
   return (
     <div 
-      className="h-full w-full relative overflow-hidden bg-[#18181b] select-none"
-      style={{ perspective: is3DMode ? '850px' : 'none' }}
+      className="h-full w-full relative overflow-hidden bg-[#18181b] select-none font-sans isometric-map-wrapper"
+      style={{
+        '--active-heading': `${activeRotation}deg`,
+        '--active-pitch': is3D ? '55deg' : '0deg'
+      } as any}
     >
+      
+      {/* 3D/Track-Up Touch Interceptor Overlay */}
+      {cameraMode !== 'overview' && (
+        <div 
+          className="absolute inset-0 z-[900] cursor-pointer"
+          onPointerDown={() => setCameraMode('overview')}
+        />
+      )}
       
       {/* Empty State Overlay when no stops added */}
       {stops.length === 0 && !isNavigationScreen && (
@@ -1478,8 +1443,8 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
         </div>
       )}
 
-      {/* Primary Leaflet Container with inline structural CSS Transforms */}
-      <div style={mapTransformStyles} className="leaflet-3d-renderer-inner font-sans">
+      {/* Primary Leaflet Container (Hardware-Accelerated 3D/2D Projection) */}
+      <div style={mapTransformStyles} className="leaflet-3d-renderer-inner font-sans z-0">
         <MapContainer
           center={[-3.119, -60.021]}
           zoom={12}
@@ -1499,13 +1464,14 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 : tileStyle === 'carto-voyager'
                 ? "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
                 : tileStyle === 'dark'
-                ? "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2" // Using Google Maps with CSS filters for high-contrast B&W
+                ? "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png"
                 : "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&scale=2"
             }
-            maxNativeZoom={22}
-            maxZoom={22}
-            detectRetina={true}
-            className={tileStyle === 'dark' ? "dark-map-tiles" : ""}
+            tileSize={256}
+            zoomOffset={0}
+            maxNativeZoom={20}
+            maxZoom={20}
+            className="crisp-map-tiles"
           />
           
           {/* Stops Markers */}
@@ -1513,7 +1479,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             <Marker 
               key={stop.id || `stop-${idx}`}
               position={[stop.lat, stop.lon]} 
-              icon={createNumberedIcon(idx + 1, idx === stops.length - 1, idx === 0, smoothHeading, is3DMode, isDriving, mapOrientation, stop.weather, showWeatherLayer)}
+              icon={createNumberedIcon(idx + 1, idx === stops.length - 1, idx === 0, stop.weather, showWeatherLayer)}
             >
               <Popup className="custom-popup">
                 <div className="p-2 min-w-[140px]">
@@ -1546,11 +1512,11 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             </Marker>
           ))}
 
-          {/* Active Navigation Driving Vehicle Marker (Carrinho do Waze) */}
+          {/* Active Navigation Driving Vehicle Marker */}
           {carCoords && (
             <Marker
               position={carCoords}
-              icon={createCarIcon(heading, smoothHeading, is3DMode, isDriving, mapOrientation, isNavigationScreen)}
+              icon={createCarIcon(smoothHeading, isNavigationScreen)}
               zIndexOffset={1000}
             />
           )}
@@ -1576,7 +1542,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                 html: `
                   <div class="relative flex items-center justify-center">
                     <div class="absolute inset-0 bg-alert animate-ping rounded-full opacity-30" style="animation-duration: 2s;"></div>
-                    <div class="w-8 h-8 bg-slate-900 border-2 border-alert rounded-xl flex items-center justify-center shadow-[0_5px_15px_rgba(239,68,68,0.3)] transform transition-transform" style="transform: ${is3DMode ? `rotateX(40deg) rotateZ(${isDriving && mapOrientation === 'track' ? smoothHeading : 0}deg)` : 'rotate(0deg)'}">
+                    <div class="w-8 h-8 bg-slate-900 border-2 border-alert rounded-xl flex items-center justify-center shadow-[0_5px_15px_rgba(239,68,68,0.3)]">
                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
                     </div>
                   </div>
@@ -1753,21 +1719,19 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             geometry={geometry} 
             carCoords={carCoords} 
             isDriving={isDriving} 
-            is3DMode={is3DMode} 
-            mapOrientation={mapOrientation}
             isNavigationScreen={isNavigationScreen}
-            isAutoFollowing={isAutoFollowing}
-            onUserPan={() => setIsAutoFollowing(false)}
+            cameraMode={cameraMode}
+            setCameraMode={setCameraMode}
           />
         </MapContainer>
       </div>
 
       {/* Floating Recenter Map Button when map is manually moved (Waze style centered) */}
-      {!isAutoFollowing && (
+      {cameraMode === 'overview' && (isDriving || isNavigationScreen) && (
         <button
           type="button"
           onClick={() => {
-            setIsAutoFollowing(true);
+            setCameraMode('track_up_3d');
             window.dispatchEvent(new CustomEvent('recenter-map'));
           }}
           className="neo-btn-emerald fixed bottom-36 md:bottom-28 left-1/2 -translate-x-1/2 z-[1600] text-black font-black text-xs uppercase tracking-wider px-5 py-3 rounded-xl flex items-center gap-2"
@@ -1916,22 +1880,19 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
               <button
                 type="button"
                 onClick={() => {
-                  if (is3DMode) {
-                    setIs3DMode(false);
-                    setMapOrientation('track');
-                  } else if (mapOrientation === 'track') {
-                    setIs3DMode(false);
-                    setMapOrientation('north');
+                  if (cameraMode === 'track_up_3d') {
+                    setCameraMode('track_up_2d');
+                  } else if (cameraMode === 'track_up_2d') {
+                    setCameraMode('overview');
                   } else {
-                    setIs3DMode(true);
-                    setMapOrientation('track');
+                    setCameraMode('track_up_3d');
                   }
                 }}
                 className="neo-btn flex items-center gap-1 bg-slate-900 border-2 border-slate-700 text-slate-200 hover:text-white px-3 py-1 rounded-lg font-bold"
                 title="Alternar perspectiva: 3D com rotação, 2D seguindo ou 2D norte"
               >
                 <Eye className="w-3 h-3 text-amber-400" />
-                <span>{is3DMode ? '3D Seguir' : mapOrientation === 'track' ? '2D Seguir' : '2D Norte'}</span>
+                <span>{cameraMode === 'track_up_3d' ? '3D Seguir' : cameraMode === 'track_up_2d' ? '2D Seguir' : '2D Norte'}</span>
               </button>
             </div>
 
@@ -2145,42 +2106,44 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
             <Smartphone className="w-5 h-5" />
           </button>
 
-          {/* Orientação */}
+          {/* Recentralizar / Orientação */}
           <button
             onClick={() => {
-              if (!isAutoFollowing) {
-                setIsAutoFollowing(true);
+              if (cameraMode === 'overview') {
+                setCameraMode('track_up_3d');
                 window.dispatchEvent(new CustomEvent('recenter-map'));
               } else {
-                setMapOrientation(prev => prev === 'north' ? 'track' : 'north');
+                setCameraMode('overview');
               }
             }}
             className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
-              !isAutoFollowing
+              cameraMode === 'overview' && (isDriving || isNavigationScreen)
                 ? 'bg-tech text-slate-950 font-bold shadow-[0_0_15px_rgba(209,160,84,0.4)] animate-pulse'
-                : mapOrientation === 'track'
+                : cameraMode !== 'overview'
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
-            title={!isAutoFollowing ? "Recentralizar Rota" : "Orientação"}
+            title={cameraMode === 'overview' ? "Recentralizar Rota" : "Modo Livre"}
           >
-            <Navigation className="w-5 h-5" style={{ transform: mapOrientation === 'track' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.3s' }} />
+            <Navigation className="w-5 h-5" style={{ transform: cameraMode !== 'overview' ? `rotate(${heading}deg)` : 'rotate(0deg)', transition: 'transform 0.3s' }} />
           </button>
 
-          {/* Modo 3D */}
+          {/* Modo 3D / 2D / Overview */}
           <button
             onClick={() => {
-              setIs3DMode(!is3DMode);
-              if (!is3DMode && !carCoords && polyline.length > 0) {
-                setCarCoords(polyline[0]);
+              if (cameraMode === 'track_up_3d') setCameraMode('track_up_2d');
+              else if (cameraMode === 'track_up_2d') setCameraMode('overview');
+              else {
+                setCameraMode('track_up_3d');
+                if (!carCoords && polyline.length > 0) setCarCoords(polyline[0]);
               }
             }}
             className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
-              is3DMode 
+              cameraMode !== 'overview'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-[0_0_12px_rgba(209,160,84,0.3)]' 
                 : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
-            title="Modo 3D"
+            title="Alternar Modo de Câmera"
           >
             <Compass className="w-5 h-5" style={{ transform: `rotate(${-smoothHeading}deg)` }} />
           </button>
@@ -2211,7 +2174,7 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
                   setIsDriving(false);
                 } else {
                   setIsDriving(true);
-                  setIs3DMode(true);
+                  setCameraMode('track_up_3d');
                 }
               }}
               className={`p-3 rounded-xl transition-all active:scale-90 flex items-center justify-center shrink-0 cursor-pointer ${
@@ -2339,20 +2302,36 @@ export default function MapView({ stops, geometry, routeSegments = [], alternati
           }
         }
 
-        /* Essential Leaflet 3D Tilt Overrides for Mapbox/Leaflet tilts */
-        .isometric-map-wrapper {
-          perspective: 800px;
+        /* Isometric Map Transformations */
+        .isometric-map-wrapper .animated-marker .custom-marker-wrapper {
+          transform: rotateZ(var(--active-heading, 0deg)) rotateX(calc(var(--active-pitch, 0deg) * -1)) !important;
+          transform-origin: bottom center;
+          transition: transform 0.25s linear;
         }
-        .isometric-map-wrapper .leaflet-container {
-          overflow: visible !important;
+
+        .isometric-map-wrapper .leaflet-popup {
+          transform: rotateZ(var(--active-heading, 0deg)) rotateX(calc(var(--active-pitch, 0deg) * -1)) !important;
+          transform-origin: bottom center;
+          transition: transform 0.25s linear;
         }
-        .isometric-map-wrapper .leaflet-map-pane {
-          overflow: visible !important;
+
+        .isometric-map-wrapper .leaflet-control-container {
+          transform: rotateZ(var(--active-heading, 0deg)) rotateX(calc(var(--active-pitch, 0deg) * -1)) !important;
+          transform-origin: center center;
+          transition: transform 0.25s linear;
+          pointer-events: none;
         }
-        
-        /* Des-tilt popup wrapper so they remain perpendicular and vertical */
-        .isometric-map-wrapper .leaflet-marker-icon .custom-marker-wrapper {
-          transform-origin: bottom center !important;
+
+        /* Crystal-Clear High-DPI HD Tile Rendering */
+        .crisp-map-tiles img {
+          image-rendering: -webkit-optimize-contrast;
+          image-rendering: crisp-edges;
+          -webkit-backface-visibility: hidden;
+          backface-visibility: hidden;
+        }
+
+        .dark-map-tiles img {
+          filter: brightness(0.7) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
         }
 
         .leaflet-popup-content-wrapper {

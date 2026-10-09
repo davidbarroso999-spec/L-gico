@@ -1,5 +1,5 @@
 import { getMatrix, getWeather, getElevation, getTrafficIncidents, getDirections, getInmetForecast } from './api-services';
-import { preciseGeocode, sanitizeDrivableCoordinates } from './geocode-engine';
+import { preciseGeocode, sanitizeDrivableCoordinates, RICH_OFFLINE_REGISTRY } from './geocode-engine';
 import { getGeminiAnalysis, getGeminiContextAdjustments, fetchLiveBulletin } from './ai-engine';
 import { OfflineManager } from './offline-manager';
 import { db } from './db';
@@ -255,21 +255,52 @@ export async function optimizeRoute(
   // 1. Geocode
   let locations = await Promise.all(addresses.map(async (addr, i) => {
     try {
-      if (knownCoords && knownCoords[addr]) {
-        const sanitized = sanitizeDrivableCoordinates(knownCoords[addr].lat, knownCoords[addr].lon, addr);
-        return {
-          lat: sanitized.lat,
-          lon: sanitized.lon,
-          id: i.toString(),
-          address: addr,
-          label: addr,
-          confidenceScore: 100,
-          source: 'cache' as const,
-          type: 'address' as const,
-          fluvialPort: undefined as string | undefined
-        };
+      // 1. Check knownCoords with exact and normalized matching
+      if (knownCoords) {
+        // Direct key match
+        if (knownCoords[addr]) {
+          const sanitized = sanitizeDrivableCoordinates(knownCoords[addr].lat, knownCoords[addr].lon, addr);
+          return {
+            lat: sanitized.lat,
+            lon: sanitized.lon,
+            id: i.toString(),
+            address: addr,
+            label: addr,
+            confidenceScore: 100,
+            source: 'cache' as const,
+            type: 'address' as const,
+            fluvialPort: undefined as string | undefined
+          };
+        }
+
+        // Normalized key match (handles case, accents, punctuation differences)
+        const normAddr = addr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        for (const [key, coords] of Object.entries(knownCoords)) {
+          const normKey = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+          if (normKey === normAddr || normKey.startsWith(normAddr) || normAddr.startsWith(normKey) || normKey.includes(normAddr) || normAddr.includes(normKey)) {
+            if (coords && (coords.lat !== 0 || coords.lon !== 0)) {
+              const sanitized = sanitizeDrivableCoordinates(coords.lat, coords.lon, addr);
+              return {
+                lat: sanitized.lat,
+                lon: sanitized.lon,
+                id: i.toString(),
+                address: addr,
+                label: addr,
+                confidenceScore: 100,
+                source: 'cache' as const,
+                type: 'address' as const,
+                fluvialPort: undefined as string | undefined
+              };
+            }
+          }
+        }
       }
-      const geo = await preciseGeocode(addr);
+
+      // Proximity reference point from already known coordinates
+      const firstKnown = knownCoords ? Object.values(knownCoords).find(c => c && (c.lat !== 0 || c.lon !== 0)) : null;
+      const proximity = firstKnown || { lat: -3.119, lon: -60.021 };
+
+      const geo = await preciseGeocode(addr, proximity);
       const sanitized = sanitizeDrivableCoordinates(geo.lat, geo.lon, `${geo.name || ''} ${addr}`);
       return { 
         ...geo, 
@@ -280,11 +311,30 @@ export async function optimizeRoute(
         fluvialPort: undefined as string | undefined 
       };
     } catch (error) {
-      console.warn('Geocoding failed, falling back to approximation.', error);
-      // Rough emergency approximation for fallback (Manaus center)
-      const approxLat = -3.119 + (Math.random() - 0.5) * 0.02;
-      const approxLon = -60.021 + (Math.random() - 0.5) * 0.02;
-      const sanitized = sanitizeDrivableCoordinates(approxLat, approxLon, addr);
+      console.warn(`Geocoding failed for "${addr}", attempting offline registry before fallback...`, error);
+      
+      // Try offline registry fuzzy match before emergency fallback
+      let fallbackLat = -3.119;
+      let fallbackLon = -60.021;
+      try {
+        const normAddr = addr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const offlineHit = RICH_OFFLINE_REGISTRY.find(item => {
+          const itemNorm = item.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return normAddr.includes(itemNorm) || itemNorm.includes(normAddr);
+        });
+        if (offlineHit) {
+          fallbackLat = offlineHit.lat;
+          fallbackLon = offlineHit.lon;
+        } else {
+          fallbackLat = -3.119 + (Math.random() - 0.5) * 0.01;
+          fallbackLon = -60.021 + (Math.random() - 0.5) * 0.01;
+        }
+      } catch (e) {
+        fallbackLat = -3.119 + (Math.random() - 0.5) * 0.01;
+        fallbackLon = -60.021 + (Math.random() - 0.5) * 0.01;
+      }
+
+      const sanitized = sanitizeDrivableCoordinates(fallbackLat, fallbackLon, addr);
       return {
         lat: sanitized.lat,
         lon: sanitized.lon,
@@ -600,16 +650,16 @@ export async function optimizeRoute(
       const fluvialStats = calculateFluvialPath(portOri.nodeId, portDes.nodeId, options.priority as any, options.vesselType as any, options.travelMonth);
       const leg3 = await getDirections([[p2.lat, p2.lon], [dest.lat, dest.lon]], profile, preference, options.engine);
       
-      const c1 = leg1?.features?.[0]?.geometry?.coordinates || [[origin.lon, origin.lat], [p1.lon, p1.lat]];
+      const c1 = leg1?.features?.[0]?.geometry?.coordinates || ((leg1 as any)?.geometry?.coordinates) || [[origin.lon, origin.lat], [p1.lon, p1.lat]];
       const c2 = fluvialStats.path.map(p => [p[1], p[0]]); // [lon, lat] high-resolution river curve
-      const c3 = leg3?.features?.[0]?.geometry?.coordinates || [[p2.lon, p2.lat], [dest.lon, dest.lat]];
+      const c3 = leg3?.features?.[0]?.geometry?.coordinates || ((leg3 as any)?.geometry?.coordinates) || [[p2.lon, p2.lat], [dest.lon, dest.lat]];
       
-      const dist1 = leg1?.features?.[0]?.properties?.summary?.distance || 0;
-      const dur1 = leg1?.features?.[0]?.properties?.summary?.duration || 0;
+      const dist1 = leg1?.features?.[0]?.properties?.summary?.distance || (leg1 as any)?.distance || 0;
+      const dur1 = leg1?.features?.[0]?.properties?.summary?.duration || (leg1 as any)?.duration || 0;
       const dist2 = fluvialStats.distanceKm * 1000;
       const dur2 = fluvialStats.durationMinutes * 60;
-      const dist3 = leg3?.features?.[0]?.properties?.summary?.distance || 0;
-      const dur3 = leg3?.features?.[0]?.properties?.summary?.duration || 0;
+      const dist3 = leg3?.features?.[0]?.properties?.summary?.distance || (leg3 as any)?.distance || 0;
+      const dur3 = leg3?.features?.[0]?.properties?.summary?.duration || (leg3 as any)?.duration || 0;
       
       directions = {
         type: 'FeatureCollection',
@@ -717,11 +767,37 @@ export async function optimizeRoute(
     directions = await getDirections(sequence.map(s => [s.lat, s.lon]), profile, preference, options.engine);
   }
 
+  // Check if directions was returned with direct geometry (e.g. from fast fallback)
+  if ((directions as any)?.geometry && !(directions as any)?.features) {
+    const directGeom = (directions as any).geometry;
+    const directDist = (directions as any).distance || 0;
+    const directDur = (directions as any).duration || 0;
+    directions = {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        geometry: directGeom,
+        properties: {
+          summary: {
+            distance: directDist,
+            duration: directDur
+          },
+          segments: []
+        }
+      }]
+    };
+  }
+
   if (!directions?.features?.[0]?.geometry) {
-    console.error("Critical: Cannot find directions. Features array might be empty or directions is null.", directions);
+    console.warn("Notice: Directions geometry missing or empty, generating fallback path...", directions);
     
-    // Auto-generate a straight line fallback if all else fails
+    // Auto-generate a safe fallback line
     const distanceFallback = sequence.length > 1 ? 5000 * (sequence.length - 1) : 0; // 5km per leg
+    const fallbackCoords = sequence.length >= 2 
+      ? sequence.map(s => [s.lon, s.lat])
+      : (sequence.length === 1 
+          ? [[sequence[0].lon, sequence[0].lat], [sequence[0].lon + 0.001, sequence[0].lat + 0.001]]
+          : [[-60.025, -3.10194], [-60.024, -3.10094]]);
 
     directions = {
       type: 'FeatureCollection',
@@ -729,7 +805,7 @@ export async function optimizeRoute(
         type: 'Feature',
         geometry: {
           type: 'LineString',
-          coordinates: sequence.map(s => [s.lon, s.lat])
+          coordinates: fallbackCoords
         },
         properties: {
           summary: {
